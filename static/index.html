@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenINTJ — Agent IDE</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/remixicon/4.2.0/remixicon.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-[#1e1e2e] text-gray-200 h-screen flex flex-col overflow-hidden">
+
+    <!-- ===== 顶部标题栏 ===== -->
+    <header id="titlebar" class="flex items-center justify-between px-4 h-10 flex-shrink-0 border-b border-[#313244] bg-[#181825] select-none">
+        <div class="flex items-center gap-2">
+            <div class="w-6 h-6 rounded-md bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center">
+                <i class="ri-brain-line text-white text-xs"></i>
+            </div>
+            <span class="text-sm font-semibold bg-gradient-to-r from-violet-400 to-indigo-400 bg-clip-text text-transparent">OpenINTJ</span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 border border-violet-500/30">v1.0</span>
+        </div>
+        <div class="flex items-center gap-4 text-[11px] text-gray-500">
+            <span id="hdr-status" class="flex items-center gap-1.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                就绪
+            </span>
+            <span id="hdr-memory" class="flex items-center gap-1">
+                <i class="ri-database-2-line"></i> <span>0</span> 记忆
+            </span>
+            <span id="hdr-token" class="flex items-center gap-1">
+                <i class="ri-coin-line"></i> <span>0%</span>
+            </span>
+            <span id="hdr-vision" class="flex items-center gap-1" title="Vision 能力状态" style="display:none;">
+                <i class="ri-image-line"></i>
+                <span>Vision</span>
+            </span>
+            <span id="hdr-llm" class="flex items-center gap-1.5 cursor-pointer" title="LLM 连接状态">
+                <span class="w-1.5 h-1.5 rounded-full bg-gray-500"></span>
+                <span>LLM</span>
+            </span>
+        </div>
+    </header>
+
+    <!-- ===== 主工作区 ===== -->
+    <div id="main-area" class="flex-1 flex overflow-hidden">
+
+        <!-- ===== 左侧：对话面板 ===== -->
+        <section id="panel-chat" class="panel flex flex-col border-r border-[#313244]" style="width:36%;min-width:300px;">
+            <div class="panel-tab flex items-center justify-between px-3 h-8 border-b border-[#313244] bg-[#181825]/60 flex-shrink-0">
+                <div class="flex items-center gap-2 text-xs text-gray-400">
+                    <i class="ri-chat-3-line text-violet-400"></i> 对话
+                </div>
+                <div class="flex items-center gap-1.5">
+                    <select id="shader-select" class="bg-[#313244] text-gray-400 text-[10px] border border-[#45475a] rounded px-1.5 py-0.5 outline-none cursor-pointer">
+                        <option value="">自适应</option>
+                        <option value="high_fidelity">高保真</option>
+                        <option value="low_fidelity">低保真</option>
+                        <option value="hybrid">混合</option>
+                    </select>
+                    <button id="btn-clear-chat" class="icon-btn" title="清空对话"><i class="ri-delete-bin-7-line text-xs"></i></button>
+                </div>
+            </div>
+            <!-- 消息列表 -->
+            <div id="chat-messages" class="flex-1 overflow-y-auto px-3 py-3 space-y-3 scroll-smooth">
+                <!-- 欢迎消息 -->
+                <div class="msg msg-assistant animate-msg-in">
+                    <div class="msg-avatar bg-gradient-to-br from-violet-500 to-indigo-600">
+                        <i class="ri-brain-line text-white text-[10px]"></i>
+                    </div>
+                    <div class="msg-body">
+                        <span class="msg-name">OpenINTJ</span>
+                        <div class="msg-bubble msg-bubble-ai">
+                            你好！我是 <strong class="text-violet-400">OpenINTJ</strong>，一个融合记忆着色器机制的 Agent。<br>
+                            我基于<strong class="text-cyan-400">四平面分层架构</strong>运行，支持动态上下文管理。有什么可以帮你的？
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- 快捷命令 -->
+            <div id="quick-cmds" class="px-3 py-1.5 border-t border-[#313244] flex-shrink-0">
+                <div class="flex flex-wrap gap-1.5" id="quick-cmds-list"></div>
+            </div>
+            <div id="image-preview-area" class="px-3 pt-2 flex-shrink-0" style="display:none;">
+                <div class="flex items-center gap-3 rounded-lg border border-[#313244] bg-[#181825] p-2">
+                    <img id="image-preview-img" alt="待发送图片" class="w-12 h-12 rounded-md border border-[#313244]">
+                    <div class="flex-1 min-w-0">
+                        <div id="image-preview-name" class="text-xs text-gray-200 truncate"></div>
+                        <div id="image-preview-size" class="text-[10px] text-gray-500"></div>
+                    </div>
+                    <button id="btn-remove-image" type="button" class="icon-btn" title="移除图片">
+                        <i class="ri-close-line text-xs"></i>
+                    </button>
+                </div>
+            </div>
+            <!-- 输入区 -->
+            <div class="px-3 py-2 border-t border-[#313244] flex-shrink-0">
+                <input id="image-file-input" type="file" accept="image/jpeg,image/png,image/gif,image/webp" class="hidden">
+                <div id="chat-input-wrapper" class="flex items-center gap-2 bg-[#313244] rounded-lg px-3 py-2 focus-within:ring-1 focus-within:ring-violet-500/40 transition-all">
+                    <button id="btn-attach-image" type="button" class="icon-btn" title="上传图片 (支持拖拽/粘贴)">
+                        <i class="ri-image-add-line text-sm"></i>
+                    </button>
+                    <input id="chat-input" type="text" placeholder="输入消息或上传图片... (Enter 发送)"
+                        class="flex-1 bg-transparent border-none outline-none text-sm text-gray-200 placeholder-gray-600" autocomplete="off">
+                    <button id="btn-send" class="btn-primary text-xs px-3 py-1.5 flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed" disabled>
+                        <i class="ri-send-plane-fill text-[10px]"></i> 发送
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== 垂直分割线 ===== -->
+        <div class="resizer resizer-v" data-dir="v" data-target="panel-chat"></div>
+
+        <!-- ===== 右侧（上下两部分） ===== -->
+        <div class="flex-1 flex flex-col overflow-hidden">
+
+            <!-- 右上：文件工作区 + 推理调试 -->
+            <div id="right-top" class="flex flex-1 overflow-hidden">
+
+                <!-- 文件工作区 -->
+                <section id="panel-workspace" class="panel flex flex-col border-r border-[#313244]" style="width:50%;min-width:220px;">
+                    <div class="panel-tab flex items-center justify-between px-3 h-8 border-b border-[#313244] bg-[#181825]/60 flex-shrink-0">
+                        <div class="flex items-center gap-2 text-xs text-gray-400">
+                            <i class="ri-folder-3-line text-amber-400"></i> 文件工作区
+                        </div>
+                        <button id="btn-refresh-ws" class="icon-btn" title="刷新"><i class="ri-refresh-line text-xs"></i></button>
+                    </div>
+                    <div id="workspace-tree" class="flex-1 overflow-y-auto p-2 text-[12px] font-mono"></div>
+                </section>
+
+                <!-- 垂直分割线 -->
+                <div class="resizer resizer-v" data-dir="v" data-target="panel-workspace"></div>
+
+                <!-- 推理/调试区 -->
+                <section id="panel-reasoning" class="panel flex flex-col flex-1 min-w-[220px]">
+                    <div class="panel-tab flex items-center justify-between px-3 h-8 border-b border-[#313244] bg-[#181825]/60 flex-shrink-0">
+                        <div class="flex items-center gap-2 text-xs text-gray-400">
+                            <i class="ri-bug-line text-cyan-400"></i> 推理 · 调试
+                        </div>
+                        <div class="flex items-center gap-0.5" id="reasoning-tabs">
+                            <button class="sub-tab active" data-sub="chain">推理链</button>
+                            <button class="sub-tab" data-sub="events">事件</button>
+                            <button class="sub-tab" data-sub="memory">记忆</button>
+                            <button class="sub-tab" data-sub="govern">治理</button>
+                        </div>
+                    </div>
+                    <div id="reasoning-body" class="flex-1 overflow-y-auto p-3 text-[12px] font-mono"></div>
+                </section>
+            </div>
+
+            <!-- 水平分割线 -->
+            <div class="resizer resizer-h" data-dir="h" data-target="right-top"></div>
+
+            <!-- 输出预览区 -->
+            <section id="panel-preview" class="panel flex flex-col" style="height:35%;min-height:100px;">
+                <div class="panel-tab flex items-center justify-between px-3 h-8 border-b border-[#313244] bg-[#181825]/60 flex-shrink-0">
+                    <div class="flex items-center gap-2 text-xs text-gray-400">
+                        <i class="ri-eye-line text-emerald-400"></i> 输出预览
+                    </div>
+                    <div class="flex items-center gap-0.5" id="preview-tabs">
+                        <button class="sub-tab active" data-sub="output">输出</button>
+                        <button class="sub-tab" data-sub="plan">计划</button>
+                        <button class="sub-tab" data-sub="metrics">指标</button>
+                    </div>
+                </div>
+                <div id="preview-body" class="flex-1 overflow-y-auto p-3 text-[12px]"></div>
+            </section>
+        </div>
+    </div>
+
+    <!-- ===== 底部状态栏 ===== -->
+    <footer class="flex items-center justify-between px-4 h-6 flex-shrink-0 border-t border-[#313244] bg-[#181825] text-[10px] text-gray-500 select-none">
+        <div class="flex items-center gap-4">
+            <span>OpenINTJ Agent IDE</span>
+            <span id="foot-shader"><i class="ri-brush-line"></i> 自适应</span>
+            <span id="foot-runs"><i class="ri-play-circle-line"></i> 0 次运行</span>
+            <span id="foot-llm"><i class="ri-cloud-line"></i> LLM: 检测中...</span>
+            <span id="foot-vision" style="display:none;"><i class="ri-image-line"></i> Vision: 检测中...</span>
+        </div>
+        <div class="flex items-center gap-4">
+            <span id="foot-loop">循环: idle</span>
+        </div>
+    </footer>
+
+    <script src="main.js"></script>
+</body>
+</html>
