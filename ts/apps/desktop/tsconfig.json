@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./out",
+    "composite": true,
+    "tsBuildInfoFile": "./out/.tsbuildinfo",
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["electron-vite/node"]
+  },
+  "include": ["src/**/*", "electron-vite.config.ts"],
+  "references": [
+    { "path": "../../packages/concurrency" },
+    { "path": "../../packages/core" },
+    { "path": "../../packages/dormant" },
+    { "path": "../../packages/shared" },
+    { "path": "../../packages/planes/control" },
+    { "path": "../../packages/planes/execution" },
+    { "path": "../../packages/planes/memory" },
+    { "path": "../../packages/planes/governance" },
+    { "path": "../../packages/llm/ollama" },
+    { "path": "../../packages/llm/hunyuan" },
+    { "path": "../../packages/storage/lance" },
+    { "path": "../../packages/storage/sqlite" },
+    { "path": "../../packages/taskpool" }
+  ]
+}

@@ -1,0 +1,47 @@
+appId: ai.openintj.desktop
+productName: OpenINTJ
+copyright: Copyright (c) 2026 OpenINTJ
+asar: true
+directories:
+  buildResources: resources
+  output: release
+files:
+  - "out/**/*"
+  - "package.json"
+  - "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md,readme}"
+extraMetadata:
+  main: out/main/index.js
+publish:
+  provider: github
+  releaseType: release
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: OpenINTJ-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: resources/icon.ico
+  uninstallerIcon: resources/icon.ico
+  shortcutName: OpenINTJ
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  gatekeeperAssess: false
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+  category: Development

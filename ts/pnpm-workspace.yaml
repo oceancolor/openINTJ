@@ -1,0 +1,11 @@
+packages:
+  - "packages/core"
+  - "packages/planes/*"
+  - "packages/llm/*"
+  - "packages/embed/*"
+  - "packages/storage/*"
+  - "packages/concurrency"
+  - "packages/taskpool"
+  - "packages/dormant"
+  - "packages/shared"
+  - "apps/*"

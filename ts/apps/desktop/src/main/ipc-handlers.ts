@@ -1,0 +1,219 @@
+import { type IpcMain, type WebContents, ipcMain } from "electron";
+import {
+  ChatRequestSchema,
+  DormantListRequestSchema,
+  DormantProposalDecisionSchema,
+  IPC,
+  MemoryQueryRequestSchema,
+} from "../shared/ipc-protocol.js";
+import type { DesktopAgent } from "./agent.js";
+
+const DORMANT_NOT_ENABLED = {
+  error: "dormant_not_enabled",
+  hint: "Pass { enableDormant: true } to assembleDesktopAgent or set OPENINTJ_DORMANT=1",
+};
+
+export interface IpcRegistration {
+  unregister(): void;
+}
+
+/** 注册所有 IPC channel handler，并把 hook 事件转发为 webContents.send。 */
+export const registerIpcHandlers = (
+  agent: DesktopAgent,
+  webContents?: WebContents,
+  api: IpcMain = ipcMain,
+): IpcRegistration => {
+  const offs: Array<() => void> = [];
+
+  api.handle(IPC.PING, async () => ({ ok: true, ts: Date.now() }));
+
+  api.handle(IPC.STATUS, async () => agent.status());
+
+  api.handle(IPC.CHAT, async (_evt, raw: unknown) => {
+    const parsed = ChatRequestSchema.safeParse(raw);
+    if (!parsed.success) {
+      return { error: "invalid_request", issues: parsed.error.issues };
+    }
+    const result = await agent.run(parsed.data.query);
+    return {
+      finalAnswer: result.finalAnswer,
+      iterations: result.iterations,
+      status: result.status,
+      traceId: result.traceId,
+    };
+  });
+
+  api.handle(IPC.MEMORY_QUERY, async (_evt, raw: unknown) => {
+    const parsed = MemoryQueryRequestSchema.safeParse(raw);
+    if (!parsed.success) {
+      return { error: "invalid_request", issues: parsed.error.issues };
+    }
+    const { query, topK, mode: modeOverride, rrf } = parsed.data;
+    const mode = modeOverride ?? agent.retrievalMode;
+    if (typeof query === "string" && query.length > 0) {
+      if (mode === "hybrid") {
+        const hits = await agent.retrieveHybrid(query, {
+          topK,
+          ...(rrf !== undefined ? { config: { useRRF: rrf } } : {}),
+        });
+        return hits.map((h) => ({
+          fragmentId: h.doc.id,
+          content: h.doc.text,
+          score: h.score,
+          memoryType: h.doc.metadata.memoryType,
+          taskTags: h.doc.metadata.taskTags,
+        }));
+      }
+      const ranked = await agent.memory.retrieve(query, { topK });
+      return ranked.map((r) => ({
+        fragmentId: r.fragment.fragmentId,
+        content: r.fragment.content,
+        score: r.score,
+        memoryType: r.fragment.memoryType,
+        taskTags: r.fragment.taskTags,
+      }));
+    }
+    const list = await agent.persistentStore.metadataStore.listFragmentMeta({
+      limit: topK,
+    });
+    return list.map((m) => ({
+      fragmentId: m.fragmentId,
+      content: "",
+      memoryType: m.memoryType,
+      taskTags: m.taskTagsCsv ? m.taskTagsCsv.split(",") : [],
+    }));
+  });
+
+  api.handle(IPC.AUDIT_RECENT, async (_evt, rawLimit: unknown) => {
+    const limit =
+      typeof rawLimit === "number" && Number.isFinite(rawLimit)
+        ? Math.min(500, Math.max(1, Math.floor(rawLimit)))
+        : 100;
+    return {
+      stats: agent.governance.auditTrail.getStats(),
+      recent: agent.governance.auditTrail.query({ limit }),
+    };
+  });
+
+  // RFC-003 方向 3：Dormant Memory Learning IPC。
+  api.handle(IPC.DORMANT_MINE, async () => {
+    if (!agent.dormant) return DORMANT_NOT_ENABLED;
+    const r = await agent.dormant.mine();
+    return {
+      scannedEvents: r.scannedEvents,
+      patterns: r.patterns.map((p) => ({
+        patternId: p.patternId,
+        description: p.description,
+        category: p.category,
+        frequency: p.frequency,
+        confidence: p.confidence,
+      })),
+      proposals: r.proposals.map((p) => ({
+        proposalId: p.proposalId,
+        targetField: p.targetField,
+        value: p.value,
+        status: p.status,
+        patternDescription: p.pattern.description,
+      })),
+    };
+  });
+
+  api.handle(IPC.DORMANT_LIST, async (_evt, raw: unknown) => {
+    if (!agent.dormant) return DORMANT_NOT_ENABLED;
+    const parsed = DormantListRequestSchema.safeParse(raw ?? {});
+    if (!parsed.success) {
+      return { error: "invalid_request", issues: parsed.error.issues };
+    }
+    const list = agent.dormant.listProposals(parsed.data.status);
+    return {
+      total: list.length,
+      proposals: list.map((p) => ({
+        proposalId: p.proposalId,
+        targetField: p.targetField,
+        value: p.value,
+        status: p.status,
+        ts: p.ts,
+        decidedAt: p.decidedAt,
+        patternDescription: p.pattern.description,
+        confidence: p.pattern.confidence,
+        frequency: p.pattern.frequency,
+      })),
+    };
+  });
+
+  api.handle(IPC.DORMANT_APPROVE, async (_evt, raw: unknown) => {
+    if (!agent.dormant) return DORMANT_NOT_ENABLED;
+    const parsed = DormantProposalDecisionSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    const out = agent.dormant.approve(parsed.data.proposalId);
+    if (!out) return { error: "not_found_or_already_decided" };
+    return { proposalId: out.proposalId, status: out.status, decidedAt: out.decidedAt };
+  });
+
+  api.handle(IPC.DORMANT_REJECT, async (_evt, raw: unknown) => {
+    if (!agent.dormant) return DORMANT_NOT_ENABLED;
+    const parsed = DormantProposalDecisionSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    const out = agent.dormant.reject(parsed.data.proposalId);
+    if (!out) return { error: "not_found_or_already_decided" };
+    return { proposalId: out.proposalId, status: out.status, decidedAt: out.decidedAt };
+  });
+
+  api.handle(IPC.DORMANT_PERSONA, async () => {
+    if (!agent.dormant) return DORMANT_NOT_ENABLED;
+    return agent.dormant.snapshot();
+  });
+
+  // 把核心 hooks 推送给 renderer
+  if (webContents) {
+    const send = (channel: string, payload: unknown): void => {
+      try {
+        webContents.send(channel, payload);
+      } catch {
+        // renderer 已销毁；忽略
+      }
+    };
+    offs.push(
+      agent.hooks.on("tao.beforeThink", (ctx) =>
+        send(IPC.EVT_TAO, { kind: "beforeThink", ...ctx.payload }),
+      ),
+    );
+    offs.push(
+      agent.hooks.on("tao.afterAct", (ctx) =>
+        send(IPC.EVT_TAO, { kind: "afterAct", ...ctx.payload }),
+      ),
+    );
+    offs.push(
+      agent.hooks.on("react.afterThought", (ctx) =>
+        send(IPC.EVT_REACT, { kind: "thought", ...ctx.payload }),
+      ),
+    );
+    offs.push(
+      agent.hooks.on("react.beforeAction", (ctx) =>
+        send(IPC.EVT_REACT, { kind: "action", ...ctx.payload }),
+      ),
+    );
+    offs.push(
+      agent.hooks.on("react.afterAction", (ctx) =>
+        send(IPC.EVT_REACT, { kind: "observation", ...ctx.payload }),
+      ),
+    );
+    offs.push(agent.hooks.on("policy.afterCheck", (ctx) => send(IPC.EVT_AUDIT, ctx.payload)));
+  }
+
+  return {
+    unregister(): void {
+      api.removeHandler(IPC.PING);
+      api.removeHandler(IPC.STATUS);
+      api.removeHandler(IPC.CHAT);
+      api.removeHandler(IPC.MEMORY_QUERY);
+      api.removeHandler(IPC.AUDIT_RECENT);
+      api.removeHandler(IPC.DORMANT_MINE);
+      api.removeHandler(IPC.DORMANT_LIST);
+      api.removeHandler(IPC.DORMANT_APPROVE);
+      api.removeHandler(IPC.DORMANT_REJECT);
+      api.removeHandler(IPC.DORMANT_PERSONA);
+      for (const o of offs) o();
+    },
+  };
+};

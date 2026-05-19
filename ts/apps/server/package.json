@@ -1,0 +1,44 @@
+{
+  "name": "@openintj/server",
+  "version": "3.0.0-alpha.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenINTJ HTTP 服务（云端模式，可选）",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rimraf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "@lancedb/lancedb": "^0.13.0",
+    "@openintj/concurrency": "workspace:*",
+    "@openintj/core": "workspace:*",
+    "@openintj/dormant": "workspace:*",
+    "@openintj/llm-hunyuan": "workspace:*",
+    "@openintj/llm-ollama": "workspace:*",
+    "@openintj/llm-openai-compat": "workspace:*",
+    "@openintj/plane-control": "workspace:*",
+    "@openintj/plane-execution": "workspace:*",
+    "@openintj/plane-governance": "workspace:*",
+    "@openintj/plane-memory": "workspace:*",
+    "@openintj/shared": "workspace:*",
+    "@openintj/storage-lance": "workspace:*",
+    "@openintj/storage-sqlite": "workspace:*",
+    "@openintj/taskpool": "workspace:*",
+    "apache-arrow": "^17.0.0",
+    "better-sqlite3": "^11.0.0",
+    "hono": "^4.6.10",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "rimraf": "^6.0.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5"
+  }
+}

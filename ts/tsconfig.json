@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.base.json",
+  "include": [],
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./packages/shared" },
+    { "path": "./packages/planes/control" },
+    { "path": "./packages/planes/execution" },
+    { "path": "./packages/planes/memory" },
+    { "path": "./packages/planes/governance" },
+    { "path": "./packages/llm/ollama" },
+    { "path": "./packages/llm/hunyuan" },
+    { "path": "./packages/llm/openai-compat" },
+    { "path": "./packages/embed/ollama" },
+    { "path": "./packages/embed/xenova" },
+    { "path": "./packages/storage/lance" },
+    { "path": "./packages/storage/sqlite" },
+    { "path": "./packages/concurrency" },
+    { "path": "./packages/taskpool" },
+    { "path": "./packages/dormant" },
+    { "path": "./apps/desktop" },
+    { "path": "./apps/cli" },
+    { "path": "./apps/server" }
+  ]
+}

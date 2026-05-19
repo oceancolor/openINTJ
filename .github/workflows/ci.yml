@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "ts/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "ts/**"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: ts
+    shell: bash
+
+env:
+  TURBO_TELEMETRY_DISABLED: 1
+  # Some tsc projects sit close to the default 4 GB heap on Node 20.
+  NODE_OPTIONS: "--max-old-space-size=6144"
+
+# Cancel in-progress runs on the same branch when a new commit is pushed.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-typecheck:
+    name: Lint & Typecheck (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+          cache-dependency-path: ts/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint (biome)
+        run: pnpm lint
+
+      - name: Typecheck
+        # turbo --concurrency=1 keeps tsc child processes serial; without it
+        # Windows + tsc references occasionally crash with V8 OOM. Linux is fine
+        # in parallel but we keep the same flag for a single CI policy.
+        run: pnpm exec turbo run typecheck --concurrency=1
+
+  test:
+    name: Test ${{ matrix.os }} / Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    needs: [lint-and-typecheck]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: ["20"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+          cache-dependency-path: ts/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (turbo)
+        # Build first so test --inputs aren't blocked on cross-package deps.
+        run: pnpm exec turbo run build --concurrency=1
+
+      - name: Test (CI mode, persistence e2e auto-skipped)
+        run: pnpm exec turbo run test --concurrency=1
+
+  e2e-persistence:
+    name: E2E (real persistence — Linux)
+    runs-on: ubuntu-latest
+    needs: [lint-and-typecheck]
+    env:
+      OPENINTJ_E2E: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: ts/pnpm-lock.yaml
+
+      - name: Install dependencies (incl. native bindings)
+        # Force native compile + LanceDB binary download up front.
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm exec turbo run build --concurrency=1
+
+      - name: Run real-disk persistence tests
+        # Activates the gated suites in:
+        #   packages/planes/memory/__tests__/persistence-factory.spec.ts
+        #   apps/server/__tests__/persistence-e2e.spec.ts
+        #   apps/desktop/__tests__/agent-persistence.spec.ts
+        run: pnpm exec turbo run test --concurrency=1

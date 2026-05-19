@@ -1,0 +1,137 @@
+import {
+  type EmbeddingProvider,
+  type MemoryFragment,
+  type ShaderConfig,
+  ShaderConfigSchema,
+  SimpleEmbedder,
+  type TaskTypeType,
+  cosineSimilarity,
+  decayImportance,
+} from "@openintj/core";
+import type { MemoryStore } from "./store.js";
+
+export interface RetrieveOptions {
+  topK?: number;
+  taskType?: TaskTypeType;
+  minImportance?: number;
+  /** 注入 query embedding；不传则用 simpleEmbedding 生成。 */
+  queryEmbedding?: readonly number[];
+}
+
+export interface RankedMemory {
+  fragment: MemoryFragment;
+  score: number;
+  components: {
+    relevance: number;
+    keyword: number;
+    recency: number;
+  };
+}
+
+/**
+ * 朴素混合检索：vec_score × relevance_weight
+ *                 + keyword_score × recency_weight  (按 Python v2 顺序)
+ *                 + recency_score × importance_weight
+ *
+ * 关键修复（RFC-003）：使用 ShaderConfig.recencyHalfLifeHours 作为半衰期，
+ * 而非 Python 的 `max_summary_length / 10` 误用。
+ */
+export class MemoryRetriever {
+  readonly store: MemoryStore;
+  readonly shaderConfig: ShaderConfig;
+  readonly embedder: EmbeddingProvider;
+  private readonly clock: () => number;
+
+  constructor(
+    store: MemoryStore,
+    shaderConfig?: Partial<ShaderConfig>,
+    opts?: { clock?: () => number; embedder?: EmbeddingProvider },
+  ) {
+    this.store = store;
+    this.shaderConfig = ShaderConfigSchema.parse(shaderConfig ?? {});
+    this.clock = opts?.clock ?? (() => Date.now() / 1000);
+    this.embedder = opts?.embedder ?? store.embedder;
+  }
+
+  retrieve(query: string, opts: RetrieveOptions = {}): RankedMemory[] {
+    const topK = opts.topK ?? this.shaderConfig.maxFragmentsPerQuery;
+    const minImportance = opts.minImportance ?? 0;
+    let qEmb: number[];
+    if (opts.queryEmbedding !== undefined) {
+      qEmb = [...opts.queryEmbedding];
+    } else {
+      const r = this.embedder.embed(query);
+      if (r instanceof Promise) {
+        // sync API；调用方应 retrieveAsync 或预提供 queryEmbedding
+        throw new Error(
+          `MemoryRetriever.retrieve: embedder '${this.embedder.name}' is async; use retrieveAsync or pass opts.queryEmbedding`,
+        );
+      }
+      qEmb = r;
+    }
+    const qKeywords = new Set(
+      query
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((s) => s.length > 0),
+    );
+    const halfLife = this.shaderConfig.recencyHalfLifeHours;
+    const now = this.clock();
+
+    const scored: RankedMemory[] = [];
+
+    for (const fragment of this.store.all) {
+      const decayed = decayImportance(fragment, halfLife, now);
+      if (decayed < minImportance) continue;
+
+      const relevance = cosineSimilarity(qEmb, fragment.embedding);
+      const contentWords = new Set(
+        fragment.content
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((s) => s.length > 0),
+      );
+      let overlap = 0;
+      for (const w of qKeywords) if (contentWords.has(w)) overlap++;
+      const keyword = overlap / Math.max(1, qKeywords.size);
+
+      const recency = decayed; // 已应用半衰期
+
+      let score =
+        this.shaderConfig.relevanceWeight * relevance +
+        this.shaderConfig.recencyWeight * keyword +
+        this.shaderConfig.importanceWeight * recency;
+
+      // 任务标签加权（与 Python v2 一致：×1.3）
+      if (opts.taskType && fragment.taskTags.includes(opts.taskType)) {
+        score *= 1.3;
+      }
+
+      scored.push({
+        fragment,
+        score,
+        components: { relevance, keyword, recency },
+      });
+    }
+
+    scored.sort((a, b) => b.score - a.score);
+
+    const top = scored.slice(0, topK);
+    for (const r of top) {
+      r.fragment.accessCount += 1;
+      r.fragment.lastAccessed = now;
+    }
+    return top;
+  }
+
+  async retrieveAsync(query: string, opts: RetrieveOptions = {}): Promise<RankedMemory[]> {
+    if (opts.queryEmbedding !== undefined) {
+      return this.retrieve(query, opts);
+    }
+    const qEmb = await Promise.resolve(this.embedder.embed(query));
+    return this.retrieve(query, { ...opts, queryEmbedding: qEmb });
+  }
+}
+
+/** SimpleEmbedder 默认导出方便用户快速创建。 */
+export { SimpleEmbedder };

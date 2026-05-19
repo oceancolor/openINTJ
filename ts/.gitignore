@@ -1,0 +1,17 @@
+node_modules/
+dist/
+out/
+release/
+.turbo/
+coverage/
+*.log
+*.tsbuildinfo
+.env
+.env.local
+.env.*.local
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/

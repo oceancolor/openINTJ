@@ -1,0 +1,26 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "composite": true,
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
+  },
+  "include": ["src/**/*"],
+  "references": [
+    { "path": "../../packages/concurrency" },
+    { "path": "../../packages/core" },
+    { "path": "../../packages/dormant" },
+    { "path": "../../packages/shared" },
+    { "path": "../../packages/planes/control" },
+    { "path": "../../packages/planes/execution" },
+    { "path": "../../packages/planes/memory" },
+    { "path": "../../packages/planes/governance" },
+    { "path": "../../packages/llm/hunyuan" },
+    { "path": "../../packages/llm/ollama" },
+    { "path": "../../packages/llm/openai-compat" },
+    { "path": "../../packages/storage/lance" },
+    { "path": "../../packages/storage/sqlite" },
+    { "path": "../../packages/taskpool" }
+  ]
+}
