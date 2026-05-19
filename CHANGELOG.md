@@ -1,0 +1,257 @@
+# OpenINTJ Changelog
+
+本文件追踪 OpenINTJ 的对外可观察变更。
+版本号沿用 [SemVer](https://semver.org/lang/zh-CN/) 与
+[Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
+
+## [3.0.0-alpha.4] —— Phase 3.4 Dormant 持久化 (2026-05-19)
+
+> Phase 3.3 留下的最重的尾巴：PassiveStore / PersonaConfig 进程一断电就丢。
+> 这一版给 Dormant 子系统接上 SQLite 真盘适配器，
+> 把"用户审批过的偏好/习惯"留下来。详见
+> [`docs/architecture/phase3-4-dormant-persistence.md`](./docs/architecture/phase3-4-dormant-persistence.md)。
+
+### Added
+
+- **`@openintj/dormant`**
+  - 新增 `DormantPersistenceAdapter` 接口（`persistence.ts`）：`loadAll` / `recordEvent` /
+    `upsertProposal` / `savePersona` / `clearAll` / `close`，热路径同步、不抛错
+  - 新增 `InMemoryDormantStore`：参考实现 + 测试用
+  - 新增 `DormantSnapshot` 类型
+  - `DormantRuntime`：新增 `adapter` 槽 + `hydrate()` 方法；`record / mine / approve / reject /
+    reset / close` 全部写穿 adapter
+  - `PassiveStore`：新增 `recordBulk(events)` 批量回填
+  - `InternalizationManager`：新增 `restoreState(proposals, persona?)` 不触发
+    `lastUpdated` / `version` 自增
+- **`@openintj/storage-sqlite`**
+  - 新增 `SqliteDormantStore`：实现 `DormantPersistenceAdapter`，独立的 `dormant.sqlite`
+    文件，schema v1（`dormant_events` / `dormant_proposals` / `dormant_persona`）+ WAL +
+    prepared statements
+  - 新增 `createSqliteDormantStore` 工厂；输入类型为 `SqliteDormantConfigInput`（`wal` 可选）
+- **apps/server**
+  - `ServerAgentOpts` 新增 `dormantPersistence: 'auto' | 'memory' | 'real'`（默认 `auto`）+
+    `dormantDbPath`（覆盖默认 `${dataDir}/dormant.sqlite`）
+  - `ServerAgent` 新增字段 `dormantPersistenceInfo: { adapter, dbPath? }`
+  - `status().dormant.persistence` 暴露 adapter 名 / 路径
+  - `assembleServerAgent`：在 `enableDormant + dataDir` 时自动挂 SqliteDormantStore，
+    构造后 `await dormant.hydrate()`；`close()` 先 `await dormant.close()`
+- **apps/desktop**
+  - `DesktopAgent` 镜像同上：`dormantPersistence` / `dormantDbPath` / `dormantPersistenceInfo`
+    / `status().dormant.persistence`
+- **环境变量**
+  - `OPENINTJ_DORMANT_DB_PATH` 可覆盖默认 SQLite 文件路径
+
+### Changed
+
+- `@openintj/storage-sqlite/index.ts` 修复重复 `export * from "./dormant.js"`
+- biome formatter 一次性整理 4 个文件（`packages/storage/sqlite/tsconfig.json` 等）
+
+### Testing
+
+- **CI 模式**：
+  - `packages/dormant/__tests__/persistence.spec.ts`：9 个（InMemoryDormantStore CRUD +
+    hydrate + write-through）
+  - `packages/storage/sqlite/__tests__/dormant.spec.ts`：11 个（`:memory:` 路径走真
+    better-sqlite3）
+  - `apps/server/__tests__/dormant-persistence-e2e.spec.ts`：2 个 memory 模式（4 个 e2e skip）
+- **E2E 模式（`OPENINTJ_E2E=1`）**：上述 e2e 6 个全部跑通，含 `record → mine → approve →
+  close → 重装配 → hydrate → 验证状态恢复` 的完整往返
+
+### Notes
+
+- 桌面端审批 UI 仍未接（#9.B 留给下一个 phase）
+- `dormant_events` 表未做自动清理；当前 PassiveStore 仅内存层有 `maxPassiveEvents` 环形上限
+- `dormant.sqlite` 是明文；用户敏感偏好不应通过 dormant 路径学习
+
+---
+
+## [3.0.0-alpha.3] —— Phase 3.3 RFC-003 装配进主 Agent (2026-05-11)
+
+> RFC-003 的三个孤岛包（@openintj/concurrency / @openintj/dormant / @openintj/taskpool）
+> 全部接进 apps/server 与 apps/desktop 主装配点，三条线均提供环境变量 / 代码 opt-in，
+> 默认零开销，启用后能直接通过 HTTP / IPC 使用。
+
+### Added
+
+- **方向 1 — LLM 速率限制**（`@openintj/concurrency`）
+  - 新增 `RateLimitedLlmClient`：TokenBucket 装饰 `LlmClient.chat / visionChat`
+  - server / desktop opt-in：`opts.rateLimit = { qps, burst? }` 或 env `OPENINTJ_RATE_LIMIT_QPS` / `OPENINTJ_RATE_LIMIT_BURST`
+- **方向 2 — HybridRetriever 混合检索**（`@openintj/taskpool`）
+  - server: `retrieveHybrid()` 顶层函数 + 路由 `GET /api/memory?mode=hybrid[&rrf=true]`
+  - desktop: `agent.retrieveHybrid()` + IPC `MEMORY_QUERY` 支持 `{ mode: 'hybrid', rrf }`
+  - 默认检索模式 opt-in：`opts.retrievalMode = 'hybrid'` 或 env `OPENINTJ_RETRIEVAL_MODE=hybrid`
+- **方向 3 — Dormant Memory Learning**（`@openintj/dormant`）
+  - 新增 `DormantRuntime`：PassiveStore + PatternMiner + InternalizationManager 三件套门面
+  - server 路由：`POST /api/dormant/mine` / `GET /api/dormant/proposals` / `POST /api/dormant/proposals/:id/approve|reject` / `GET /api/dormant/persona`
+  - desktop IPC：`DORMANT_MINE / DORMANT_LIST / DORMANT_APPROVE / DORMANT_REJECT / DORMANT_PERSONA`
+  - `agent.run()` 自动把用户输入和 final answer 喂进 PassiveStore（启用后才生效）
+  - opt-in：`opts.enableDormant = true` 或 env `OPENINTJ_DORMANT=1`；未启用时所有 API 一律 503 / `dormant_not_enabled`
+
+### Changed
+
+- `apps/server/src/agent.ts` `ServerAgent` 新增字段：`retrievalMode` / 可选 `dormant` / `status().dormant` / `status().retrievalMode`
+- `apps/desktop/src/main/agent.ts` `DesktopAgent` 镜像 server 端字段
+- `apps/server/package.json` / `apps/desktop/package.json` 新增 workspace 依赖：`@openintj/concurrency` / `@openintj/dormant` / `@openintj/taskpool`
+- IPC 协议 `apps/desktop/src/shared/ipc-protocol.ts` 扩展：
+  - `MemoryQueryRequestSchema` 加 `mode` / `rrf`
+  - 新增 `DormantListRequestSchema` / `DormantProposalDecisionSchema`
+  - `IPC` 常量增加 5 个 Dormant channel
+
+### Testing
+
+- 新增测试（CI 模式）：
+  - `@openintj/dormant`：`__tests__/dormant-runtime.spec.ts` 6 个
+  - `@openintj/server`：`__tests__/dormant.spec.ts` 12 个 + `__tests__/hybrid-retrieve.spec.ts` 14 个 + `__tests__/rate-limited-llm.spec.ts` 9 个
+  - `@openintj/desktop`：`__tests__/ipc-handlers.spec.ts` 扩展 5 个（hybrid + Dormant IPC）
+- CI 跑分：默认 mode 312 passed / 7 skipped，E2E mode（`OPENINTJ_E2E=1`）全部跑通
+
+### Design 备忘
+
+- HybridRetriever 装配是"每次查询临时建索引"——适合中等规模（≤几千 fragments）；大规模建议改用 LanceDB FTS
+- DormantRuntime 默认不持久化 PassiveStore 与 PersonaConfig；持久化层等下一个 phase 接入
+- `RateLimitedLlmClient` 实现已经迁移到 `@openintj/concurrency` 包，`apps/server/src/rate-limited-llm.ts` 仅做兼容 re-export
+
+---
+
+## [3.0.0-alpha.2] —— Phase 3.2 GitHub Actions CI (2026-05-09)
+
+> 把本地已经能跑通的 lint / typecheck / test (CI + E2E) 锁进 GitHub Actions，
+> 给后续所有改动兜底。
+
+### Added
+
+- `.github/workflows/ci.yml`（仓库根，旧的错放在 `ts/.github/` 下从未触发，已删除）
+  - **lint-and-typecheck**：matrix 跑 Node 20 + Node 22；先 biome lint，再 turbo typecheck
+  - **test**：matrix 跑 ubuntu / windows / macos × Node 20；先 turbo build 再 turbo test（CI 模式）
+  - **e2e-persistence**：仅 ubuntu，设 `OPENINTJ_E2E=1` 跑 LanceDB + SQLite 真盘端到端
+  - 加 `concurrency.cancel-in-progress` 减少同分支重复跑
+  - 全局 `NODE_OPTIONS=--max-old-space-size=6144` 防 tsc OOM
+  - 全部 turbo 调用都带 `--concurrency=1`，统一跨 OS 的策略
+
+### Changed
+
+- `ts/turbo.json`：`test` 任务的 cache key 加入 `OPENINTJ_E2E` / `OPENINTJ_DATA_DIR` / `OPENINTJ_DESKTOP_NO_PERSIST` / `OPENINTJ_LANCE_DEBUG`
+  - **关键修复**：之前 turbo 不感知这些 env 的变化，e2e job 会命中常规 test 的缓存、e2e 测试被默默跳过
+- `ts/biome.json`：放宽与历史代码冲突的规则（`useLiteralKeys` / `noNonNullAssertion` / `noUnusedTemplateLiteral` / `noDelete` / `noArrayIndexKey` 等共 13 条）
+  - 这些是**风格偏好**而非 bug；保留 `useImportType` / `noUnusedVariables` / `noUnusedImports` 等真正的正确性规则
+  - 现状：`pnpm lint` exit 0，2 条 React `useExhaustiveDependencies` 警告（已知，不阻塞）
+- biome formatter 一次性格式化 107 个 tsconfig.json / package.json（多行 references 数组改单行）
+
+### Tooling
+
+- 现在三条线都能本地一把跑通（也是 CI 跑的命令）：
+  - `pnpm lint`
+  - `pnpm exec turbo run typecheck --concurrency=1`
+  - `pnpm exec turbo run test --concurrency=1`（默认 292，`OPENINTJ_E2E=1` 时 299）
+- turbo cache key 修了之后：
+  - 同 env 的二次运行：33/33 cache hit，full turbo ~500ms
+  - 切换 `OPENINTJ_E2E` 取值：所有 test 任务 cache miss，重新执行
+
+---
+
+## [3.0.0-alpha.1] —— Phase 3.1 真实持久化 e2e (2026-05-09)
+
+> Phase 3 第 1 步：把 `apps/server` / `apps/desktop` 从 in-memory 兜底切到真实磁盘
+> （LanceDB + SQLite），并补端到端"写入 → 关闭 → 重启 → 读回"测试。
+> CI 默认 292/292 绿（Phase 2 286 + 6 新增 in-mem）；`OPENINTJ_E2E=1` 全量 299/299 绿。
+
+### Added
+
+- **持久化工厂** `createPersistentMemoryStore`（`@openintj/plane-memory`）
+  - 根据 `dataDir` / `mode` 自动选择 LanceDB+SQLite 真盘或 in-memory 兜底
+  - 真盘模式自动建 `lancedb/` 子目录与 `metadata.db` 文件
+  - 缺 `dataDir` 但 `mode='real'` 时显式抛错（fail-fast）
+- **服务端入口** `assembleServerAgent({ dataDir?, persistenceMode? })`
+  - 支持 env `OPENINTJ_DATA_DIR` 启用真盘
+  - 新增 `agent.close()`（关 LanceDB / SQLite）与 `persistentInfo`
+  - `/api/status` 暴露当前持久化模式与数据目录
+- **桌面端入口** `assembleDesktopAgent({ dataDir?, persistenceMode? })`
+  - Electron 主进程默认用 `app.getPath('userData')` 作 dataDir
+  - `app.on('before-quit')` 钩 `agent.close()` 防止数据库句柄泄漏
+  - env `OPENINTJ_DESKTOP_NO_PERSIST=1` 可强制走 in-memory（CI 友好）
+- **e2e 测试**（`OPENINTJ_E2E=1` 启用）
+  - `plane-memory/__tests__/persistence-factory.spec.ts`：工厂自身的真盘往返
+  - `apps/server/__tests__/persistence-e2e.spec.ts`：装配 → 写 → close → 重装配 → hydrate → 检索 + 审计读回
+  - `apps/desktop/__tests__/agent-persistence.spec.ts`：desktop agent 真盘往返与 NO_PERSIST 短路
+
+### Changed
+
+- `@openintj/storage-lance`：`apache-arrow` 从 `peerDependencies` 移到 `dependencies`（`init()` 必用，不是可选）
+- `LanceDBVectorStore.init()`：从"靠 seed-row 推断 schema"改为用 `apache-arrow` 显式声明 `FixedSizeList<Float32, N>` + `List<Utf8>` schema；旧版 LanceDB 无 `createEmptyTable` 时回落到 seed-row + delete 路径
+- `LanceDBVectorStore` 的 `delete` / `search` SQL：camelCase 列名一律双引号（LanceDB 大小写敏感，否则报 "No field named fragmentid"）
+- `LanceDBVectorStore.search()`：新增 `normalizeEmbedding` / `normalizeStringArray`，把 LanceDB 返回的 TypedArray / Arrow Vector 规范化成 plain `number[]` / `string[]` 后再 `VectorRowSchema.parse`，修复"`count()` 返 N 但 `scanAll()` / `search()` 返空"的静默丢行 bug
+- e2e suite 全部带 30 秒超时（`describe(..., { timeout: 30_000 }, ...)`），LanceDB 首次建表 + 重新打开偏慢
+
+### Fixed
+
+- 真实持久化模式下 vector search 返空数组（zod parse 因 TypedArray / Arrow Vector 静默失败）
+- LanceDB SQL 过滤器对 camelCase 字段名报 "No field named fragmentid"
+- `apache-arrow` 静态导入失败（peer 解析路径不一致）
+- e2e 测试在重启第二个进程时因 5s 默认超时被误判为失败
+
+### Tooling
+
+- 调试用：设置 `OPENINTJ_LANCE_DEBUG=1` 时，`LanceDBVectorStore.search()` 会把 zod 解析失败的行打印到 stderr
+- 本地真盘自检命令：`$env:OPENINTJ_E2E="1"; pnpm -r --workspace-concurrency=1 test`
+
+---
+
+## [3.0.0-alpha.0] —— Phase 2 完成 (2026-04-29)
+
+> Phase 2 收尾：TS 端在 `v2.0-python-reference` 之上完成"装配 + 持久化 + 客户端 + RFC-003 三方向"四个纵深方向。
+> typecheck 全绿；workspace 内 17 个测试包共 **286 个用例全部通过**（详见
+> [`docs/architecture/phase2-complete.md`](./docs/architecture/phase2-complete.md)）。
+
+### Added
+
+- **Memory Shader Pipeline**（`@openintj/plane-memory`）
+  - `vertexShader` / `geometryShader` / `fragmentShader` 三阶段对齐 Python `memory_plane.ShaderPipeline`
+  - `ShaderPipeline` 主类 + `ContextEngine` 上下文构建器
+  - 钩子事件：`event.SHADER_APPLIED`、`event.CONTEXT_COMPACTED`
+- **EmbeddingProvider 抽象**（`@openintj/core`）
+  - 统一 `EmbeddingProvider` 接口（同步 / 异步），保留 `SimpleEmbedder` 兜底
+  - `MemoryStore` 与 `MemoryRetriever` 改造为可注入 provider
+- **嵌入实现**
+  - `@openintj/embed-ollama`：通过 Ollama `/api/embeddings` 端点
+  - `@openintj/embed-xenova`：本地 `@xenova/transformers`（peer dependency）
+- **持久化**
+  - `@openintj/storage-lance`：`VectorStore` 接口 + `InMemoryVectorStore` + `LanceDBVectorStore`（peer 依赖 `@lancedb/lancedb`）
+  - `@openintj/storage-sqlite`：`MetadataStore` 接口 + 内存兜底 + `SqliteMetadataStore`（peer 依赖 `better-sqlite3`），含 fragments_meta / audit / sessions 三张表与迁移
+  - `PersistentMemoryStore`：包装内存层 + LanceDB + SQLite，启动 hydrate、写入 dual-write、`reassignMemoryType` 升级 short→long
+- **`MemoryFragment.memoryType`**：显式区分 `short_term | working | long_term`
+- **应用形态**
+  - `apps/server`：Hono HTTP + SSE 流式 chat、`/api/status`、`/api/memory`、`/api/audit`，请求体由 zod 校验
+  - `apps/desktop`：Electron 主进程 IPC（RFC-004 协议）+ preload `contextBridge` + Renderer（React 18 + Vite + Tailwind）三栏布局
+- **RFC-003 三方向原型**
+  - `@openintj/concurrency`：Mutex / Semaphore / Channel / ConditionVariable / AgentPool / ForkJoin / TokenBucket / BackpressureGate
+  - `@openintj/taskpool`：SharedContext / HybridRetriever（vector + BM25 + RRF）/ TaskQueue（DAG 优先级）/ ObjectPool（hot/warm/cold + LRU）
+  - `@openintj/dormant`：PassiveStore / PatternMiner（n-gram + 可注入 LLM 抽取，CJK 字符级分词）/ InternalizationManager（用户审批写入 PersonaConfig）
+- **集成测试**：`apps/cli/__tests__/rfc3-integration.spec.ts` 覆盖三方向端到端流程
+- **文档**：[`docs/architecture/phase2-complete.md`](./docs/architecture/phase2-complete.md) 收尾报告
+
+### Changed
+
+- `MemoryStore` / `MemoryRetriever` 现在以构造时注入的 `EmbeddingProvider` 为准；同步 API 在异步 provider 下会显式抛错
+- `ContextEngine` 的预算追踪修正：`conversationTokens` 现在是累加而非覆盖，`CONTEXT_COMPACTED` 钩子触发条件更准确
+- TAO/ReAct 与 4 平面默认在 `apps/server` / `apps/desktop` 通过 `assembleAgent`-pattern 统一装配
+
+### Fixed
+
+- `Executor` 重试路径：替换原 Python 端的"伪重试"，落地真正的指数退避 + 状态机合法转换
+- `ShaderConfig` 拆出独立的 `recencyHalfLifeHours`，纠正 Python 端把"摘要最大长度"误用为"半衰期小时数"的 bug
+- 多处 TypeScript `exactOptionalPropertyTypes: true` 严格模式下的类型问题（AgentPool 泛型 / BackpressureGate 定时器 / persistent-store 属性删除等）
+- PatternMiner CJK 分词：从"按空白切词"改为"CJK 字符级 + Latin 词级"混合分词，能正确从中文流水中挖掘 n-gram
+
+### Tooling
+
+- 新增工作区目录：`packages/embed/*`、`packages/concurrency`、`packages/taskpool`、`packages/dormant`
+- `pnpm-workspace.yaml` / `tsconfig.json` 引用同步更新
+- 验证命令：`pnpm -r typecheck` 与 `pnpm -r --workspace-concurrency=1 test`（Windows 下并行 esbuild 偶发 "service was stopped" 时使用串行模式）
+
+---
+
+## [2.0.0-python-reference] —— Python 实现冻结 (2026-04-29)
+
+- Python v2.0 在仓库根目录冻结为"语义参考实现"
+- 不再接收新功能；仅修复严重安全 / 文档 / 行为对齐问题
+- 详见 [`docs/architecture/python-reference.md`](./docs/architecture/python-reference.md)
