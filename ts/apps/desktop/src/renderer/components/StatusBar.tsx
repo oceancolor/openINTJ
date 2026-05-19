@@ -1,13 +1,8 @@
 import type React from "react";
+import type { StatusResponse } from "../../shared/ipc-protocol.js";
 
-export interface StatusSnapshot {
-  llm: { provider: string; status: string; model?: string };
-  memory: { counts: Record<string, number>; total: number };
-  governance: {
-    audit: { totalEvents: number; blockedCount: number };
-  };
-  tools: string[];
-}
+/** Re-export 给 App.tsx 与上游消费方使用。 */
+export type StatusSnapshot = StatusResponse;
 
 export const StatusBar: React.FC<{ status: StatusSnapshot | undefined }> = ({ status }) => {
   if (!status) {
@@ -35,7 +30,27 @@ export const StatusBar: React.FC<{ status: StatusSnapshot | undefined }> = ({ st
           ? ` (拦截 ${status.governance.audit.blockedCount})`
           : ""}
       </span>
-      <span>工具: {status.tools.join(", ")}</span>
+      {status.retrievalMode ? (
+        <span className="text-gray-500">
+          检索: <span className="text-gray-300">{status.retrievalMode}</span>
+        </span>
+      ) : null}
+      {status.persistence ? (
+        <span className="text-gray-500">
+          盘: <span className="text-gray-300">{status.persistence.mode}</span>
+        </span>
+      ) : null}
+      {status.dormant ? (
+        <span className="text-gray-500">
+          Dormant:{" "}
+          <span
+            className={status.dormant.pendingProposals > 0 ? "text-yellow-300" : "text-gray-300"}
+          >
+            {status.dormant.passiveSize} ev / {status.dormant.pendingProposals} 待审
+          </span>
+        </span>
+      ) : null}
+      <span className="ml-auto">工具: {status.tools.join(", ")}</span>
     </div>
   );
 };

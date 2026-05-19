@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { ChatRequestSchema, IPC, MemoryQueryRequestSchema } from "../src/shared/ipc-protocol.js";
+import {
+  ChatRequestSchema,
+  DormantDecisionResponseSchema,
+  DormantListResponseSchema,
+  DormantMineResponseSchema,
+  DormantPersonaResponseSchema,
+  IPC,
+  MemoryQueryRequestSchema,
+  StatusResponseSchema,
+} from "../src/shared/ipc-protocol.js";
 
 // 我们 mock electron 模块（CI 中无法启动真实 Electron）
 vi.mock("electron", () => ({
@@ -296,5 +305,182 @@ describe("IPC handler registration", () => {
     reg.unregister();
     // 5 个原本的 + 5 个 dormant = 至少 10
     expect(removeHandler.mock.calls.length).toBeGreaterThanOrEqual(10);
+  });
+
+  // ---------- Phase 3.5 #9.B：UI 装配前的 IPC 形状契约 ----------
+
+  it("STATUS 返回值通过 StatusResponseSchema 全字段校验（含 dormant + retrievalMode + persistence）", async () => {
+    const handlers = new Map<string, (e: unknown, p?: unknown) => unknown>();
+    const fakeIpc = {
+      handle: (ch: string, cb: (e: unknown, p?: unknown) => unknown) => handlers.set(ch, cb),
+      removeHandler: () => {},
+    } as unknown as Parameters<typeof registerIpcHandlers>[2];
+
+    const agent = await assembleDesktopAgent({
+      llmProvider: "mock",
+      enableDormant: true,
+      retrievalMode: "hybrid",
+    });
+    registerIpcHandlers(agent, undefined, fakeIpc);
+
+    const raw = await handlers.get(IPC.STATUS)?.({}, undefined);
+    const parsed = StatusResponseSchema.safeParse(raw);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.dormant?.enabled).toBe(true);
+      expect(parsed.data.retrievalMode).toBe("hybrid");
+      // mock 装配 memory 模式
+      expect(parsed.data.persistence?.mode ?? "memory").toBe("memory");
+    }
+  });
+
+  it("DORMANT_MINE 返回通过 DormantMineResponseSchema 校验", async () => {
+    const handlers = new Map<string, (e: unknown, p?: unknown) => unknown>();
+    const fakeIpc = {
+      handle: (ch: string, cb: (e: unknown, p?: unknown) => unknown) => handlers.set(ch, cb),
+      removeHandler: () => {},
+    } as unknown as Parameters<typeof registerIpcHandlers>[2];
+
+    const agent = await assembleDesktopAgent({
+      llmProvider: "mock",
+      enableDormant: true,
+      dormantOpts: {
+        minerOpts: {
+          ngramSize: 2,
+          minFrequency: 2,
+          minConfidence: 0.3,
+          llmExtract: async (n) => ({ description: n, category: "preference" }),
+        },
+      },
+    });
+    registerIpcHandlers(agent, undefined, fakeIpc);
+
+    for (let i = 0; i < 3; i++) agent.dormant!.record("绿 茶", "user");
+    const raw = await handlers.get(IPC.DORMANT_MINE)?.({}, undefined);
+    const parsed = DormantMineResponseSchema.safeParse(raw);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.scannedEvents).toBe(3);
+      expect(parsed.data.proposals.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("DORMANT_LIST 默认（无 status）返回所有 proposals + schema 校验", async () => {
+    const handlers = new Map<string, (e: unknown, p?: unknown) => unknown>();
+    const fakeIpc = {
+      handle: (ch: string, cb: (e: unknown, p?: unknown) => unknown) => handlers.set(ch, cb),
+      removeHandler: () => {},
+    } as unknown as Parameters<typeof registerIpcHandlers>[2];
+
+    const agent = await assembleDesktopAgent({
+      llmProvider: "mock",
+      enableDormant: true,
+      dormantOpts: {
+        minerOpts: {
+          ngramSize: 2,
+          minFrequency: 2,
+          minConfidence: 0.3,
+          llmExtract: async (n) => ({ description: n, category: "preference" }),
+        },
+      },
+    });
+    registerIpcHandlers(agent, undefined, fakeIpc);
+
+    for (let i = 0; i < 3; i++) agent.dormant!.record("aa bb", "user");
+    await handlers.get(IPC.DORMANT_MINE)?.({}, undefined);
+
+    // 不传 status → all
+    const raw = await handlers.get(IPC.DORMANT_LIST)?.({}, {});
+    const parsed = DormantListResponseSchema.safeParse(raw);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.total).toBeGreaterThan(0);
+      expect(parsed.data.proposals[0]!.patternDescription).toBeDefined();
+      expect(parsed.data.proposals[0]!.confidence).toBeGreaterThan(0);
+    }
+  });
+
+  it("DORMANT_REJECT 返回 status=rejected + 不污染 persona", async () => {
+    const handlers = new Map<string, (e: unknown, p?: unknown) => unknown>();
+    const fakeIpc = {
+      handle: (ch: string, cb: (e: unknown, p?: unknown) => unknown) => handlers.set(ch, cb),
+      removeHandler: () => {},
+    } as unknown as Parameters<typeof registerIpcHandlers>[2];
+
+    const agent = await assembleDesktopAgent({
+      llmProvider: "mock",
+      enableDormant: true,
+      dormantOpts: {
+        minerOpts: {
+          ngramSize: 2,
+          minFrequency: 2,
+          minConfidence: 0.3,
+          llmExtract: async (n) => ({ description: n, category: "preference" }),
+        },
+      },
+    });
+    registerIpcHandlers(agent, undefined, fakeIpc);
+
+    for (let i = 0; i < 3; i++) agent.dormant!.record("不 喜 欢", "user");
+    const mineRes = (await handlers.get(IPC.DORMANT_MINE)?.({}, undefined)) as {
+      proposals: Array<{ proposalId: string }>;
+    };
+    const id = mineRes.proposals[0]!.proposalId;
+
+    const rejectRaw = await handlers.get(IPC.DORMANT_REJECT)?.({}, { proposalId: id });
+    const rejectParsed = DormantDecisionResponseSchema.safeParse(rejectRaw);
+    expect(rejectParsed.success).toBe(true);
+    if (rejectParsed.success) {
+      expect(rejectParsed.data.status).toBe("rejected");
+      expect(rejectParsed.data.decidedAt).toBeTypeOf("number");
+    }
+
+    const persona = await handlers.get(IPC.DORMANT_PERSONA)?.({}, undefined);
+    const personaParsed = DormantPersonaResponseSchema.safeParse(persona);
+    expect(personaParsed.success).toBe(true);
+    if (personaParsed.success) {
+      expect(Object.keys(personaParsed.data.preferences).length).toBe(0);
+      expect(personaParsed.data.meta.version).toBe(0);
+    }
+  });
+
+  it("APPROVE / REJECT 不存在 proposalId 时返回 not_found_or_already_decided", async () => {
+    const handlers = new Map<string, (e: unknown, p?: unknown) => unknown>();
+    const fakeIpc = {
+      handle: (ch: string, cb: (e: unknown, p?: unknown) => unknown) => handlers.set(ch, cb),
+      removeHandler: () => {},
+    } as unknown as Parameters<typeof registerIpcHandlers>[2];
+
+    const agent = await assembleDesktopAgent({
+      llmProvider: "mock",
+      enableDormant: true,
+    });
+    registerIpcHandlers(agent, undefined, fakeIpc);
+
+    const r1 = (await handlers.get(IPC.DORMANT_APPROVE)?.({}, { proposalId: "ghost" })) as {
+      error?: string;
+    };
+    expect(r1.error).toBe("not_found_or_already_decided");
+
+    const r2 = (await handlers.get(IPC.DORMANT_REJECT)?.({}, { proposalId: "ghost" })) as {
+      error?: string;
+    };
+    expect(r2.error).toBe("not_found_or_already_decided");
+  });
+
+  it("DORMANT_PERSONA 未启用时返回 dormant_not_enabled", async () => {
+    const handlers = new Map<string, (e: unknown, p?: unknown) => unknown>();
+    const fakeIpc = {
+      handle: (ch: string, cb: (e: unknown, p?: unknown) => unknown) => handlers.set(ch, cb),
+      removeHandler: () => {},
+    } as unknown as Parameters<typeof registerIpcHandlers>[2];
+
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, fakeIpc);
+
+    const r = (await handlers.get(IPC.DORMANT_PERSONA)?.({}, undefined)) as {
+      error?: string;
+    };
+    expect(r.error).toBe("dormant_not_enabled");
   });
 });

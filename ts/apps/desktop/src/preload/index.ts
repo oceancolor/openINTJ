@@ -9,6 +9,14 @@ import { contextBridge, ipcRenderer } from "electron";
 import {
   type ChatRequest,
   type ChatResponse,
+  type DormantDecisionError,
+  type DormantDecisionResponse,
+  type DormantError,
+  type DormantListRequest,
+  type DormantListResponse,
+  type DormantMineResponse,
+  type DormantPersonaResponse,
+  type DormantProposalDecision,
   IPC,
   type MemoryQueryRequest,
   type MemoryQueryResult,
@@ -42,6 +50,31 @@ const api = {
     recent: unknown[];
   }> {
     return ipcRenderer.invoke(IPC.AUDIT_RECENT, limit);
+  },
+  // ---------- Dormant Memory Learning (Phase 3.5 #9.B) ----------
+  /** 触发一次 mine：分析 PassiveStore → 产出 proposals。 */
+  dormantMine(): Promise<DormantMineResponse | DormantError> {
+    return ipcRenderer.invoke(IPC.DORMANT_MINE);
+  },
+  /** 列出 proposals；不传 status 时返回所有状态。 */
+  dormantList(req?: DormantListRequest): Promise<DormantListResponse | DormantError> {
+    return ipcRenderer.invoke(IPC.DORMANT_LIST, req ?? {});
+  },
+  /** 批准一条 proposal → 写入 PersonaConfig；返回 status='applied'。 */
+  dormantApprove(
+    req: DormantProposalDecision,
+  ): Promise<DormantDecisionResponse | DormantDecisionError> {
+    return ipcRenderer.invoke(IPC.DORMANT_APPROVE, req);
+  },
+  /** 拒绝一条 proposal；不污染 PersonaConfig；返回 status='rejected'。 */
+  dormantReject(
+    req: DormantProposalDecision,
+  ): Promise<DormantDecisionResponse | DormantDecisionError> {
+    return ipcRenderer.invoke(IPC.DORMANT_REJECT, req);
+  },
+  /** 拿当前 PersonaConfig 快照。 */
+  dormantPersona(): Promise<DormantPersonaResponse | DormantError> {
+    return ipcRenderer.invoke(IPC.DORMANT_PERSONA);
   },
   onTaoEvent(cb: (payload: unknown) => void): () => void {
     return onEvent(IPC.EVT_TAO, cb);

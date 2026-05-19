@@ -4,6 +4,63 @@
 版本号沿用 [SemVer](https://semver.org/lang/zh-CN/) 与
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 
+## [3.0.0-alpha.5] —— Phase 3.5 Dormant 审批 UI (2026-05-19)
+
+> Phase 3.4 把 Dormant 持久化的模型/装配/IPC 都做完了，但桌面端 renderer 没接。
+> 这一版把最后一公里补上：preload 暴露 5 个 dormant API + 桌面端审批面板 +
+> StatusBar 暴露 dormant pending 角标。详见
+> [`docs/architecture/phase3-5-dormant-approval-ui.md`](./docs/architecture/phase3-5-dormant-approval-ui.md)。
+
+### Added
+
+- **`apps/desktop/src/shared/ipc-protocol.ts`** —— 把 IPC 协议补成"所见即所得"
+  - `StatusResponseSchema` 补 `persistence` / `retrievalMode` / `dormant` 三个 optional
+    字段（与 main 进程 `agent.status()` 实际返回对齐；之前 renderer 端类型早就过期）
+  - 新增响应 DTO：`DormantMineResponseSchema` / `DormantListResponseSchema` /
+    `DormantDecisionResponseSchema` / `DormantPersonaResponseSchema` /
+    `DormantProposalDtoSchema` / `DormantPatternDtoSchema`
+  - 新增错误 schema：`DormantErrorSchema` / `DormantDecisionErrorSchema`
+- **`apps/desktop/src/preload/index.ts`** —— 5 个新 API：
+  - `dormantMine()` / `dormantList(req?)` / `dormantApprove({ proposalId })` /
+    `dormantReject({ proposalId })` / `dormantPersona()`
+  - 返回类型是联合类型（success | error），renderer 必须 narrow 才能用，无法把错误当数据
+- **`apps/desktop/src/renderer/components/DormantPanel.tsx`** —— 新组件
+  - 顶栏 [Mine] 按钮 + 状态 filter（pending/applied/rejected/all）
+  - proposal 列表卡片：状态徽章 + 频次 + 置信度 + 描述 + `targetField ← value` +
+    [✓ 应用] [✗ 拒绝] 按钮
+  - 底部折叠区：当前 Persona JSON
+  - 未启用时显示居中提示 + 启用方法
+- **`apps/desktop/src/renderer/App.tsx`** —— 右侧栏从单 panel 改成 tab 布局
+  - tab 标题：[推理轨迹] [Dormant + pending 数字角标]
+  - tab 角标：`status.dormant.pendingProposals > 0` 时显示黄色徽章
+- **`apps/desktop/src/renderer/components/StatusBar.tsx`**
+  - 新增条目：检索模式 / 持久化模式 / Dormant 状态（passive 事件数 + 待审 proposal 数）
+  - 类型从本地 `StatusSnapshot` interface 改为 protocol 中的 `StatusResponse` re-export
+
+### Changed
+
+- `TrajectoryPanel.tsx` 和 `DormantPanel.tsx` 去掉外层 border/bg/header 装饰
+  （这些 chrome 现在由 App.tsx 的 tab 容器统一提供，避免双层 border）
+
+### Testing
+
+- `apps/desktop/__tests__/ipc-handlers.spec.ts`：12 → **18 tests passed**（+6）
+  - STATUS 用 StatusResponseSchema 全字段校验（含 dormant + retrievalMode + persistence）
+  - DORMANT_MINE 用 DormantMineResponseSchema 校验返回值结构
+  - DORMANT_LIST 默认（无 status）返回所有 proposals + 字段校验
+  - DORMANT_REJECT 返回 status=rejected + 不污染 persona
+  - APPROVE/REJECT 不存在 proposalId 时返回 `not_found_or_already_decided`
+  - DORMANT_PERSONA 未启用时返回 `dormant_not_enabled`
+
+### Notes
+
+- 当前 desktop 工作区只有 main-process 测试，**没有 renderer React 测试**
+  （DormantPanel 的逻辑分支已被 IPC 层契约测试覆盖；UI 留给手动 / Playwright e2e #4）
+- Mine 任务由用户主动触发；后台 mine 推送（`EVT_DORMANT`）留给未来需要时再做
+- 用户唯一的 persona 写入路径仍然是审批 proposals，UI 不提供字段级直接编辑
+
+---
+
 ## [3.0.0-alpha.4] —— Phase 3.4 Dormant 持久化 (2026-05-19)
 
 > Phase 3.3 留下的最重的尾巴：PassiveStore / PersonaConfig 进程一断电就丢。

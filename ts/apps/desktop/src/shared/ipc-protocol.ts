@@ -44,6 +44,29 @@ export const StatusResponseSchema = z.object({
     }),
   }),
   tools: z.array(z.string()),
+  /** Phase 3.1 起：当前持久化模式 + 数据目录（real 模式时存在）。 */
+  persistence: z
+    .object({
+      mode: z.enum(["memory", "real"]),
+      dataDir: z.string().optional(),
+    })
+    .optional(),
+  /** Phase 3.3 起：默认检索模式（vector / hybrid）。 */
+  retrievalMode: z.enum(["vector", "hybrid"]).optional(),
+  /** Phase 3.3/3.4 起：Dormant 子系统状态（仅启用时存在）。 */
+  dormant: z
+    .object({
+      enabled: z.literal(true),
+      passiveSize: z.number(),
+      pendingProposals: z.number(),
+      persistence: z
+        .object({
+          adapter: z.string(),
+          dbPath: z.string().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
 });
 export type StatusResponse = z.infer<typeof StatusResponseSchema>;
 
@@ -77,6 +100,85 @@ export const DormantListRequestSchema = z.object({
   status: z.enum(["pending", "approved", "rejected", "applied"]).optional(),
 });
 export type DormantListRequest = z.infer<typeof DormantListRequestSchema>;
+
+/** 单条 proposal 在 IPC 上的精简形式（pattern 只保留 description）。 */
+export const DormantProposalDtoSchema = z.object({
+  proposalId: z.string(),
+  targetField: z.string(),
+  value: z.unknown(),
+  status: z.enum(["pending", "approved", "rejected", "applied"]),
+  ts: z.number(),
+  decidedAt: z.number().optional(),
+  patternDescription: z.string(),
+  confidence: z.number(),
+  frequency: z.number(),
+});
+export type DormantProposalDto = z.infer<typeof DormantProposalDtoSchema>;
+
+/** Phase 3.3 起：未启用时所有 dormant.* channel 返回该 shape。 */
+export const DormantErrorSchema = z.object({
+  error: z.literal("dormant_not_enabled"),
+  hint: z.string().optional(),
+});
+export type DormantError = z.infer<typeof DormantErrorSchema>;
+
+export const DormantPatternDtoSchema = z.object({
+  patternId: z.string(),
+  description: z.string(),
+  category: z.enum(["preference", "phrase", "habit", "context", "other"]),
+  frequency: z.number(),
+  confidence: z.number(),
+});
+export type DormantPatternDto = z.infer<typeof DormantPatternDtoSchema>;
+
+export const DormantMineResponseSchema = z.object({
+  scannedEvents: z.number(),
+  patterns: z.array(DormantPatternDtoSchema),
+  proposals: z.array(
+    z.object({
+      proposalId: z.string(),
+      targetField: z.string(),
+      value: z.unknown(),
+      status: z.enum(["pending", "approved", "rejected", "applied"]),
+      patternDescription: z.string(),
+    }),
+  ),
+});
+export type DormantMineResponse = z.infer<typeof DormantMineResponseSchema>;
+
+export const DormantListResponseSchema = z.object({
+  total: z.number(),
+  proposals: z.array(DormantProposalDtoSchema),
+});
+export type DormantListResponse = z.infer<typeof DormantListResponseSchema>;
+
+export const DormantDecisionResponseSchema = z.object({
+  proposalId: z.string(),
+  status: z.enum(["pending", "approved", "rejected", "applied"]),
+  decidedAt: z.number().optional(),
+});
+export type DormantDecisionResponse = z.infer<typeof DormantDecisionResponseSchema>;
+
+export const DormantPersonaResponseSchema = z.object({
+  preferences: z.record(z.string(), z.unknown()),
+  phrases: z.record(z.string(), z.string()),
+  habits: z.record(z.string(), z.unknown()),
+  context: z.record(z.string(), z.unknown()),
+  meta: z.object({ lastUpdated: z.number(), version: z.number() }),
+});
+export type DormantPersonaResponse = z.infer<typeof DormantPersonaResponseSchema>;
+
+/** Phase 3.3 起：approve/reject 失败时返回的错误 shape。 */
+export const DormantDecisionErrorSchema = z.object({
+  error: z.union([
+    z.literal("dormant_not_enabled"),
+    z.literal("not_found_or_already_decided"),
+    z.literal("invalid_request"),
+  ]),
+  issues: z.array(z.unknown()).optional(),
+  hint: z.string().optional(),
+});
+export type DormantDecisionError = z.infer<typeof DormantDecisionErrorSchema>;
 
 // ---------- Channel constants ----------
 

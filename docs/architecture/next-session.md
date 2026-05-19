@@ -1,7 +1,7 @@
 # 下一次工作交接备忘
 
 > 本文件用于工作中断 / 多日离开后快速恢复上下文。
-> 上次更新：2026-05-19（Phase 3.4 Dormant 持久化收官 + Phase 2/3 全量首次落盘当日）
+> 上次更新：2026-05-19（Phase 3.5 Dormant 审批 UI 收官当日）
 
 ---
 
@@ -10,21 +10,22 @@
 - **Phase 3.1（真实持久化 e2e）已收官**，仓库标签：`v3.0.0-alpha.1`
 - **Phase 3.2（GitHub Actions CI）已收官**，仓库标签：`v3.0.0-alpha.2`
 - **Phase 3.3（RFC-003 装配进主 Agent）已收官**，仓库标签：`v3.0.0-alpha.3`
-- **Phase 3.4（Dormant 持久化 #9.A）已收官**，仓库标签：`v3.0.0-alpha.4` ⭐ 本轮新增
+- **Phase 3.4（Dormant 持久化 #9.A）已收官**，仓库标签：`v3.0.0-alpha.4`
+- **Phase 3.5（Dormant 审批 UI #9.B）已收官**，仓库标签：`v3.0.0-alpha.5` ⭐ 本轮新增
 - **CI 状态**（本地与 GitHub Actions 同口径）：
   - `pnpm lint` exit 0（2 条 React useExhaustiveDependencies 警告，不阻塞）
   - `pnpm exec turbo run typecheck --concurrency=1` → 33/33 successful
-  - `pnpm exec turbo run test --concurrency=1`（CI 模式）→ 33/33 successful，**360 passed + 11 skipped**
-  - `OPENINTJ_E2E=1 pnpm exec turbo run test --concurrency=1`（真盘模式）→ 33/33 successful，**371 passed，0 skipped**
+  - `pnpm exec turbo run test --concurrency=1`（CI 模式）→ 33/33 successful，**366 passed + 11 skipped**
+  - `OPENINTJ_E2E=1 pnpm exec turbo run test --concurrency=1`（真盘模式）→ 33/33 successful，**377 passed，0 skipped**
   - turbo cache 已经把 `OPENINTJ_E2E` 等 env 算进 cache key，env 切换会强制 invalidate 测试任务
-- **本轮主要产出（Phase 3.4 / #9 Dormant 持久化）**：
-  - `packages/dormant/src/persistence.ts`：`DormantPersistenceAdapter` 接口 + `InMemoryDormantStore` 参考实现 + `DormantSnapshot`
-  - `packages/dormant/src/dormant-runtime.ts`：`adapter` 槽 + `hydrate()` + 五条热路径写穿
-  - `packages/dormant/src/internalization-manager.ts`：`restoreState()`（hydrate 不污染 meta）
-  - `packages/dormant/src/passive-store.ts`：`recordBulk()`（hydrate 批量回填）
-  - `packages/storage/sqlite/src/dormant.ts`：`SqliteDormantStore`（独立 `dormant.sqlite` + WAL + schema v1）
-  - `apps/server/src/agent.ts` + `apps/desktop/src/main/agent.ts`：`dormantPersistence` opt-in + `dormantDbPath` + auto-wiring
-  - 新增测试 3 组：`@openintj/dormant`（9）+ `@openintj/storage-sqlite` dormant（11）+ `@openintj/server` dormant e2e（6，CI 时 2 PASS + 4 skip）
+- **本轮主要产出（Phase 3.5 / #9.B Dormant 审批 UI）**：
+  - `apps/desktop/src/shared/ipc-protocol.ts`：StatusResponseSchema 补 `persistence` / `retrievalMode` / `dormant` + 6 个 Dormant DTO/Response/Error schema
+  - `apps/desktop/src/preload/index.ts`：暴露 5 个 dormant API（mine/list/approve/reject/persona），返回 success | error 联合类型
+  - `apps/desktop/src/renderer/components/DormantPanel.tsx`：新组件 —— mine 按钮 / status filter / proposal 卡片（含 approve/reject）/ persona 折叠区
+  - `apps/desktop/src/renderer/App.tsx`：右侧栏改 tab 布局（推理轨迹 / Dormant + pending 角标）
+  - `apps/desktop/src/renderer/components/StatusBar.tsx`：补 retrievalMode / persistence.mode / dormant 状态；类型从本地 interface 切到 protocol re-export
+  - `apps/desktop/__tests__/ipc-handlers.spec.ts`：12 → 18 tests（+6 个新契约测试）
+- **Phase 3.4 产出**（上一轮）：见 [`phase3-4-dormant-persistence.md`](./phase3-4-dormant-persistence.md)
 - **未提交变更**：仓库根 `.dockerignore` / `.env.example` / `deploy.sh` / `docker-compose.yml` / `nginx.conf` 仍未跟踪（Python v2 部署相关，**不属于本阶段范围**）
 
 ## 二、下次开机第一步：自检
@@ -68,15 +69,16 @@ Remove-Item env:OPENINTJ_DORMANT, env:OPENINTJ_RETRIEVAL_MODE, env:OPENINTJ_RATE
 | 7 | **可观测性**：Hooks → OpenTelemetry | 低 | 低-中 | ⭐ | 待办 |
 | 8 | ~~GitHub Actions CI 工作流~~ | ~~低~~ | ~~中~~ | ⭐⭐ | ✅ 2026-05-09 完成 |
 | 9.A | ~~Dormant 持久化（SqliteDormantStore + hydrate）~~ | ~~中~~ | ~~高~~ | ⭐⭐⭐ | ✅ 2026-05-19 完成（Phase 3.4） |
-| 9.B | **Dormant 审批 UI**：桌面端接 `/api/dormant/proposals` IPC channel + 列表/审批组件 | 中 | 中-高 | ⭐⭐⭐ | 待办（3.4 衍生） |
+| 9.B | ~~Dormant 审批 UI（preload + DormantPanel + tab 布局）~~ | ~~中~~ | ~~中-高~~ | ⭐⭐⭐ | ✅ 2026-05-19 完成（Phase 3.5） |
 | 10 | **HybridRetriever LanceDB FTS 路径**：大规模 fragments 时换 LanceDB 原生 FTS，避免每次重建索引 | 中 | 中 | ⭐⭐ | 待办（3.3 衍生） |
 | 11 | **Dormant 事件清理**：`pruneEvents(olderThanTs)` / LRU 防 `dormant_events` 无限增长 | 低 | 中 | ⭐⭐ | 待办（3.4 衍生） |
 
 **默认推荐下一站**：
 
-- **#9.B Dormant 审批 UI**（持久化层已就绪，桌面端真正能看见 proposals 才算闭环）
-- 或 **#1 行为对齐测试**（覆盖核心组件，给重构兜底）
+- **#1 行为对齐测试**（覆盖核心组件，给重构兜底；Python v2 ↔ TS 固定输入断言事件序列等价）
+- 或 **#4 Playwright Desktop E2E**（顺手能覆盖 Phase 3.5 的 UI；当前 renderer 0 测试，唯一缺口）
 - 或 **#3 嵌入基准**（低成本，给默认选型一个数据支持）
+- 或 **#11 dormant 事件清理**（Phase 3.4 留下的小尾巴）
 
 ## 四、上下文复盘清单
 
@@ -176,9 +178,26 @@ Remove-Item env:OPENINTJ_DORMANT, env:OPENINTJ_RETRIEVAL_MODE, env:OPENINTJ_RATE
 - `ts/apps/server/src/agent.ts` + `ts/apps/desktop/src/main/agent.ts`：新增 `dormantPersistence` / `dormantDbPath` opts + auto-wire + hydrate + `dormantPersistenceInfo`
 - `CHANGELOG.md`：新增 `3.0.0-alpha.4` 条目
 
+### Phase 3.5（Dormant 审批 UI / #9.B）
+
+新增：
+
+- `ts/apps/desktop/src/renderer/components/DormantPanel.tsx`（mine + filter + 卡片 + persona 折叠）
+- `docs/architecture/phase3-5-dormant-approval-ui.md`
+
+改动：
+
+- `ts/apps/desktop/src/shared/ipc-protocol.ts`：StatusResponseSchema 补三字段 + 6 个 Dormant DTO/Response/Error schema
+- `ts/apps/desktop/src/preload/index.ts`：暴露 5 个 dormant API（联合类型 success | error）
+- `ts/apps/desktop/src/renderer/App.tsx`：右侧栏改 tab 布局 + Dormant pending 角标
+- `ts/apps/desktop/src/renderer/components/StatusBar.tsx`：补 retrievalMode/persistence/dormant 三段；StatusSnapshot 切到 protocol re-export
+- `ts/apps/desktop/src/renderer/components/TrajectoryPanel.tsx`：去外层 chrome（tab 容器统一提供）
+- `ts/apps/desktop/__tests__/ipc-handlers.spec.ts`：扩展 6 个新契约测试
+- `CHANGELOG.md`：新增 `3.0.0-alpha.5` 条目
+
 ---
 
-## 七、Phase 3.3 / 3.4 关键陷阱（接续时回看）
+## 七、Phase 3.3 / 3.4 / 3.5 关键陷阱（接续时回看）
 
 1. **`DormantRuntime` 默认 `category: "other"` 时 proposals 为空**
    - PatternMiner 不配 `llmExtract` 会把每个 ngram 打成 "other"
@@ -191,7 +210,10 @@ Remove-Item env:OPENINTJ_DORMANT, env:OPENINTJ_RETRIEVAL_MODE, env:OPENINTJ_RATE
 6. **Phase 3.4 装配点**：装配顺序很重要 —— `await createSqliteDormantStore` → 传入 `DormantRuntime` 的 `adapter` 槽 → `await runtime.hydrate()`。close 时**先 dormant.close 再 persistentStore.close**
 7. **Phase 3.4 `SqliteDormantConfigInput`**：`wal` 用 `z.boolean().default(true)`，input/output 类型不一致 —— 用 `z.input<>` 给装配点，`z.infer<>` 给内部
 8. **Phase 3.4 `dormant_events` 表无限增长**：当前 PassiveStore 内存有 `maxPassiveEvents` 环形上限，但磁盘表会一直累积。下个 phase 加 `pruneEvents(olderThanTs)`（#11）
-9. **桌面端审批 UI 仍未接**：dormant proposals 已经能持久化，但 desktop renderer 没有 UI 入口（#9.B）
+9. ~~**桌面端审批 UI 仍未接**~~：✅ Phase 3.5 完成
+10. **Phase 3.5 协议联合类型**：preload 5 个 dormant API 全部返回 `Success | Error` 联合类型 —— renderer 必须用 `'error' in r` narrow 才能拿数据。这是为了把"dormant 未启用"这类正常态从 try/catch 里剥离出来
+11. **Phase 3.5 类型对齐**：`StatusBar.tsx` 不再本地定义 `StatusSnapshot`，而是 `type StatusSnapshot = StatusResponse`（来自 protocol）。新加字段时只改 ipc-protocol.ts 即可全栈传播
+12. **Phase 3.5 renderer 0 测试**：desktop 工作区只有 main-process vitest，没有 jsdom/@testing-library/react。`DormantPanel` 的逻辑分支已被 IPC 契约测试覆盖；UI 渲染留给手动 / Playwright e2e（#4）
 
 ---
 

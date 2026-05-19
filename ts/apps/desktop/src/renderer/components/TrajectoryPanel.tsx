@@ -39,26 +39,21 @@ export const TrajectoryPanel: React.FC<{ entries: TrajectoryEntry[] }> = ({ entr
   }, [entries.length]);
 
   return (
-    <div className="flex flex-col h-full bg-[#11111b] border-l border-gray-800">
-      <div className="px-3 py-2 text-xs font-semibold text-gray-300 border-b border-gray-800 uppercase tracking-wide">
-        推理轨迹
-      </div>
-      <div ref={ref} className="flex-1 overflow-y-auto p-3 space-y-2 text-xs">
-        {entries.length === 0 ? (
-          <div className="text-gray-500">暂无轨迹</div>
-        ) : (
-          entries.map((e, i) => (
-            <div key={i} className="border-l-2 border-gray-700 pl-2">
-              <div className={`font-semibold ${KIND_COLORS[e.kind] ?? "text-gray-400"}`}>
-                {KIND_LABELS[e.kind] ?? e.kind}
-              </div>
-              <pre className="text-gray-400 whitespace-pre-wrap break-all text-[11px]">
-                {JSON.stringify(e.payload, null, 2)}
-              </pre>
+    <div ref={ref} className="h-full overflow-y-auto p-3 space-y-2 text-xs">
+      {entries.length === 0 ? (
+        <div className="text-gray-500">暂无轨迹</div>
+      ) : (
+        entries.map((e, i) => (
+          <div key={i} className="border-l-2 border-gray-700 pl-2">
+            <div className={`font-semibold ${KIND_COLORS[e.kind] ?? "text-gray-400"}`}>
+              {KIND_LABELS[e.kind] ?? e.kind}
             </div>
-          ))
-        )}
-      </div>
+            <pre className="text-gray-400 whitespace-pre-wrap break-all text-[11px]">
+              {JSON.stringify(e.payload, null, 2)}
+            </pre>
+          </div>
+        ))
+      )}
     </div>
   );
 };
