@@ -1,0 +1,16 @@
+# Python v2.0 参考实现产生的字节码 / 缓存（仓库根的 .py 模块仅作语义参考）
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# OS / Editor
+.DS_Store
+Thumbs.db

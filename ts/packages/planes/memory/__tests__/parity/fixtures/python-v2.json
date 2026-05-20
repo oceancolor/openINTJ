@@ -1,0 +1,154 @@
+{
+  "schemaVersion": 1,
+  "generatedFrom": "memory_plane.MemoryStore / MemoryRetriever (v2 frozen)",
+  "notes": {
+    "halfLifeAlignment": "Python MemoryRetriever 用 max_summary_length/10 当半衰期 (已知 bug)。本 fixture 把 max_summary_length 设为 240 → 半衰期 24h，与 TS ShaderConfig.recencyHalfLifeHours 默认值对齐。",
+    "scoringFormula": "score = relevance_weight*vec + importance_weight*recency + recency_weight*keyword（注意 Python 把 'recency_weight' 当 keyword 权重，把 'importance_weight' 当 decayed-importance 权重；TS 一致复制。）"
+  },
+  "storeOverflows": [
+    {
+      "maxShortTerm": 3,
+      "adds": [
+        "alpha",
+        "beta",
+        "gamma",
+        "delta",
+        "epsilon"
+      ],
+      "expected": {
+        "shortTerm": [
+          "gamma",
+          "delta",
+          "epsilon"
+        ],
+        "longTerm": [
+          "alpha",
+          "beta"
+        ]
+      }
+    },
+    {
+      "maxShortTerm": 5,
+      "adds": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expected": {
+        "shortTerm": [
+          "a",
+          "b",
+          "c"
+        ],
+        "longTerm": []
+      }
+    }
+  ],
+  "retrieval": {
+    "query": "hello world deploy",
+    "testNow": 1779246669.2949605,
+    "shader": {
+      "recencyHalfLifeHours": 24.0,
+      "relevanceWeight": 0.4,
+      "recencyWeight": 0.4,
+      "importanceWeight": 0.2
+    },
+    "fragments": [
+      {
+        "content": "hello world",
+        "importance": 0.8,
+        "ageSeconds": 0.0,
+        "taskTags": [
+          "general_chat"
+        ]
+      },
+      {
+        "content": "openintj deploy script",
+        "importance": 0.6,
+        "ageSeconds": 43200.0,
+        "taskTags": []
+      },
+      {
+        "content": "unrelated noise",
+        "importance": 0.2,
+        "ageSeconds": 0.0,
+        "taskTags": []
+      },
+      {
+        "content": "the quick brown fox",
+        "importance": 0.5,
+        "ageSeconds": 86400.0,
+        "taskTags": []
+      },
+      {
+        "content": "hello deploy world",
+        "importance": 0.9,
+        "ageSeconds": 3600.0,
+        "taskTags": [
+          "code_generation"
+        ]
+      }
+    ],
+    "expected": [
+      {
+        "content": "hello deploy world",
+        "score": 0.5018351278153139,
+        "components": {
+          "relevance": -0.18260423401803041,
+          "keyword": 1.0,
+          "recency": 0.8743841067263757
+        },
+        "importance": 0.9,
+        "taskTags": [
+          "code_generation"
+        ]
+      },
+      {
+        "content": "hello world",
+        "score": 0.27829841749969947,
+        "components": {
+          "relevance": -0.37092062217543953,
+          "keyword": 0.6666666666666666,
+          "recency": 0.799999997624139
+        },
+        "importance": 0.8,
+        "taskTags": [
+          "general_chat"
+        ]
+      },
+      {
+        "content": "openintj deploy script",
+        "score": 0.10176036923562361,
+        "components": {
+          "relevance": -0.291080055602855,
+          "keyword": 0.3333333333333333,
+          "recency": 0.42429529026035073
+        },
+        "importance": 0.6,
+        "taskTags": []
+      },
+      {
+        "content": "unrelated noise",
+        "score": 0.07102435628694623,
+        "components": {
+          "relevance": 0.07756089093116243,
+          "keyword": 0.0,
+          "recency": 0.1999999993589918
+        },
+        "importance": 0.2,
+        "taskTags": []
+      },
+      {
+        "content": "the quick brown fox",
+        "score": 0.0637121986175472,
+        "components": {
+          "relevance": 0.034262097901556,
+          "keyword": 0.0,
+          "recency": 0.25003679701877296
+        },
+        "importance": 0.5,
+        "taskTags": []
+      }
+    ]
+  }
+}

@@ -1,7 +1,7 @@
 # 下一次工作交接备忘
 
 > 本文件用于工作中断 / 多日离开后快速恢复上下文。
-> 上次更新：2026-05-19（Phase 3.5 Dormant 审批 UI 收官当日）
+> 上次更新：2026-05-20（Phase 3.6 Python v2 ↔ TS 行为对齐测试收官当日）
 
 ---
 
@@ -11,21 +11,24 @@
 - **Phase 3.2（GitHub Actions CI）已收官**，仓库标签：`v3.0.0-alpha.2`
 - **Phase 3.3（RFC-003 装配进主 Agent）已收官**，仓库标签：`v3.0.0-alpha.3`
 - **Phase 3.4（Dormant 持久化 #9.A）已收官**，仓库标签：`v3.0.0-alpha.4`
-- **Phase 3.5（Dormant 审批 UI #9.B）已收官**，仓库标签：`v3.0.0-alpha.5` ⭐ 本轮新增
+- **Phase 3.5（Dormant 审批 UI #9.B）已收官**，仓库标签：`v3.0.0-alpha.5`
+- **Phase 3.6（Python v2 ↔ TS 行为对齐测试 #1）已收官**，仓库标签：`v3.0.0-alpha.6` ⭐ 本轮新增
 - **CI 状态**（本地与 GitHub Actions 同口径）：
   - `pnpm lint` exit 0（2 条 React useExhaustiveDependencies 警告，不阻塞）
   - `pnpm exec turbo run typecheck --concurrency=1` → 33/33 successful
-  - `pnpm exec turbo run test --concurrency=1`（CI 模式）→ 33/33 successful，**366 passed + 11 skipped**
-  - `OPENINTJ_E2E=1 pnpm exec turbo run test --concurrency=1`（真盘模式）→ 33/33 successful，**377 passed，0 skipped**
+  - `pnpm exec turbo run test --concurrency=1`（CI 模式）→ 33/33 successful，**430 passed + 11 skipped**
+  - `OPENINTJ_E2E=1 pnpm exec turbo run test --concurrency=1`（真盘模式）→ 33/33 successful，**441 passed，0 skipped**
   - turbo cache 已经把 `OPENINTJ_E2E` 等 env 算进 cache key，env 切换会强制 invalidate 测试任务
-- **本轮主要产出（Phase 3.5 / #9.B Dormant 审批 UI）**：
-  - `apps/desktop/src/shared/ipc-protocol.ts`：StatusResponseSchema 补 `persistence` / `retrievalMode` / `dormant` + 6 个 Dormant DTO/Response/Error schema
-  - `apps/desktop/src/preload/index.ts`：暴露 5 个 dormant API（mine/list/approve/reject/persona），返回 success | error 联合类型
-  - `apps/desktop/src/renderer/components/DormantPanel.tsx`：新组件 —— mine 按钮 / status filter / proposal 卡片（含 approve/reject）/ persona 折叠区
-  - `apps/desktop/src/renderer/App.tsx`：右侧栏改 tab 布局（推理轨迹 / Dormant + pending 角标）
-  - `apps/desktop/src/renderer/components/StatusBar.tsx`：补 retrievalMode / persistence.mode / dormant 状态；类型从本地 interface 切到 protocol re-export
-  - `apps/desktop/__tests__/ipc-handlers.spec.ts`：12 → 18 tests（+6 个新契约测试）
-- **Phase 3.4 产出**（上一轮）：见 [`phase3-4-dormant-persistence.md`](./phase3-4-dormant-persistence.md)
+- **本轮主要产出（Phase 3.6 / #1 行为对齐测试）**：
+  - `scripts/python-parity/generate_fixtures.py`：Python 端只读取证脚本（覆盖 4 个 slice）
+  - `scripts/python-parity/README.md`：工具说明 + 已知偏差速查
+  - 4 份 fixture JSON（`packages/*/__tests__/parity/fixtures/python-v2.json`），commit-in，CI 无需 Python
+  - 4 个 TS parity spec（`packages/*/__tests__/parity/python-v2.spec.ts`），共 **64 个新 tests**：
+    - core (23) / control (21) / execution (17) / memory (3)
+  - `ts/biome.json`：把 `**/__tests__/parity/fixtures/**` 加入 ignore（fixture 是 Python 产物）
+  - `docs/architecture/phase3-6-parity-tests.md`：阶段记录 + 已知偏差矩阵 + 容差策略
+- **Phase 3.5 产出**（上一轮）：见 [`phase3-5-dormant-approval-ui.md`](./phase3-5-dormant-approval-ui.md)
+- **Phase 3.4 产出**：见 [`phase3-4-dormant-persistence.md`](./phase3-4-dormant-persistence.md)
 - **未提交变更**：仓库根 `.dockerignore` / `.env.example` / `deploy.sh` / `docker-compose.yml` / `nginx.conf` 仍未跟踪（Python v2 部署相关，**不属于本阶段范围**）
 
 ## 二、下次开机第一步：自检
@@ -35,11 +38,11 @@ cd F:\openINTJ\ts
 pnpm install                                             # 确认依赖未漂移
 pnpm lint                                                # exit 0
 pnpm exec turbo run typecheck --concurrency=1            # 33/33 successful
-pnpm exec turbo run test --concurrency=1                 # 312 PASS / 7 skipped（CI 模式）
+pnpm exec turbo run test --concurrency=1                 # 430 PASS / 11 skipped（CI 模式）
 
 # 想跑真盘 e2e（需要 @lancedb/lancedb + better-sqlite3 已装）：
 $env:OPENINTJ_E2E="1"
-pnpm exec turbo run test --concurrency=1                 # 318 PASS / 0 skipped
+pnpm exec turbo run test --concurrency=1                 # 441 PASS / 0 skipped
 Remove-Item env:OPENINTJ_E2E
 
 # 验证 RFC-003 装配 opt-in：
@@ -48,6 +51,10 @@ $env:OPENINTJ_RETRIEVAL_MODE="hybrid"
 $env:OPENINTJ_RATE_LIMIT_QPS="5"
 pnpm --filter @openintj/server exec vitest run __tests__/dormant.spec.ts __tests__/hybrid-retrieve.spec.ts __tests__/rate-limited-llm.spec.ts
 Remove-Item env:OPENINTJ_DORMANT, env:OPENINTJ_RETRIEVAL_MODE, env:OPENINTJ_RATE_LIMIT_QPS
+
+# 重新生成 Python v2 ↔ TS 行为对齐 fixture（极少需要；Python v2 已冻结）：
+cd F:\openINTJ
+py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture JSON
 ```
 
 > Windows 下 turbo `--concurrency=1` 是统一策略：避免并行 tsc / esbuild 抢内存导致的 V8 OOM 和 esbuild "service was stopped"。
@@ -60,7 +67,7 @@ Remove-Item env:OPENINTJ_DORMANT, env:OPENINTJ_RETRIEVAL_MODE, env:OPENINTJ_RATE
 
 | # | 任务 | 开工成本 | 收益 | 推荐度 | 状态 |
 |---|---|---|---|:-:|:-:|
-| 1 | **Python v2 ↔ TS 行为对齐测试**：固定输入跑两边，断言事件序列等价 | 中 | 高 | ⭐⭐⭐ | 待办 |
+| 1 | ~~Python v2 ↔ TS 行为对齐测试~~ | ~~中~~ | ~~高~~ | ⭐⭐⭐ | ✅ 2026-05-20 完成（Phase 3.6） |
 | 2 | ~~真实持久化 e2e~~ | ~~中~~ | ~~高~~ | ⭐⭐⭐ | ✅ 2026-05-09 完成 |
 | 3 | **嵌入基准**：simple vs xenova vs ollama 在固定语料上的 nDCG | 低 | 中 | ⭐⭐ | 待办 |
 | 4 | **Desktop E2E（Playwright + Electron）**：真渲染器跑 mock chat | 中 | 中 | ⭐⭐ | 待办 |
@@ -72,13 +79,14 @@ Remove-Item env:OPENINTJ_DORMANT, env:OPENINTJ_RETRIEVAL_MODE, env:OPENINTJ_RATE
 | 9.B | ~~Dormant 审批 UI（preload + DormantPanel + tab 布局）~~ | ~~中~~ | ~~中-高~~ | ⭐⭐⭐ | ✅ 2026-05-19 完成（Phase 3.5） |
 | 10 | **HybridRetriever LanceDB FTS 路径**：大规模 fragments 时换 LanceDB 原生 FTS，避免每次重建索引 | 中 | 中 | ⭐⭐ | 待办（3.3 衍生） |
 | 11 | **Dormant 事件清理**：`pruneEvents(olderThanTs)` / LRU 防 `dormant_events` 无限增长 | 低 | 中 | ⭐⭐ | 待办（3.4 衍生） |
+| 12 | **Parity 扩展**：governance plane / Hooks / ContextEngine 接进 parity 网 | 中 | 中 | ⭐⭐ | 待办（3.6 衍生） |
 
 **默认推荐下一站**：
 
-- **#1 行为对齐测试**（覆盖核心组件，给重构兜底；Python v2 ↔ TS 固定输入断言事件序列等价）
-- 或 **#4 Playwright Desktop E2E**（顺手能覆盖 Phase 3.5 的 UI；当前 renderer 0 测试，唯一缺口）
+- **#4 Playwright Desktop E2E**（顺手能覆盖 Phase 3.5 的 UI；当前 renderer 0 测试，唯一缺口）
 - 或 **#3 嵌入基准**（低成本，给默认选型一个数据支持）
 - 或 **#11 dormant 事件清理**（Phase 3.4 留下的小尾巴）
+- 或 **#12 parity 扩展**（顺势补 governance / Hooks / ContextEngine 进对齐网）
 
 ## 四、上下文复盘清单
 
@@ -105,7 +113,7 @@ Remove-Item env:OPENINTJ_DORMANT, env:OPENINTJ_RETRIEVAL_MODE, env:OPENINTJ_RATE
 - **biome 已放宽**：`useLiteralKeys` / `noNonNullAssertion` / `noUnusedTemplateLiteral` 等 13 条与历史代码冲突的规则已关；不要再因为 lint 报错就批量改业务代码
 - `@xenova/transformers` 仍是 peer dependency，按需 `pnpm add`
 
-## 六、本次会话产出文件清单（Phase 3.1 + 3.2）
+## 六、累计产出文件清单（Phase 3.1 → 3.6）
 
 ### Phase 3.1（持久化 e2e）
 
@@ -195,9 +203,30 @@ Remove-Item env:OPENINTJ_DORMANT, env:OPENINTJ_RETRIEVAL_MODE, env:OPENINTJ_RATE
 - `ts/apps/desktop/__tests__/ipc-handlers.spec.ts`：扩展 6 个新契约测试
 - `CHANGELOG.md`：新增 `3.0.0-alpha.5` 条目
 
+### Phase 3.6（Python v2 ↔ TS 行为对齐测试 / #1）
+
+新增：
+
+- `scripts/python-parity/generate_fixtures.py`（Python 端只读取证脚本，覆盖 4 个 slice）
+- `scripts/python-parity/README.md`（工具说明 + 已知偏差速查）
+- `ts/packages/core/__tests__/parity/python-v2.spec.ts`（23 tests：SimpleEmbedder / cosine / decay）
+- `ts/packages/core/__tests__/parity/fixtures/python-v2.json`
+- `ts/packages/planes/control/__tests__/parity/python-v2.spec.ts`（21 tests：GoalParser / Planner）
+- `ts/packages/planes/control/__tests__/parity/fixtures/python-v2.json`
+- `ts/packages/planes/execution/__tests__/parity/python-v2.spec.ts`（17 tests：StateMachine / Executor）
+- `ts/packages/planes/execution/__tests__/parity/fixtures/python-v2.json`
+- `ts/packages/planes/memory/__tests__/parity/python-v2.spec.ts`（3 tests：Store overflow / Retriever scoring）
+- `ts/packages/planes/memory/__tests__/parity/fixtures/python-v2.json`
+- `docs/architecture/phase3-6-parity-tests.md`（阶段记录 + 已知偏差矩阵 + 容差策略）
+
+改动：
+
+- `ts/biome.json`：`files.ignore` 加 `**/__tests__/parity/fixtures/**`
+- `CHANGELOG.md`：新增 `3.0.0-alpha.6` 条目
+
 ---
 
-## 七、Phase 3.3 / 3.4 / 3.5 关键陷阱（接续时回看）
+## 七、Phase 3.3 / 3.4 / 3.5 / 3.6 关键陷阱（接续时回看）
 
 1. **`DormantRuntime` 默认 `category: "other"` 时 proposals 为空**
    - PatternMiner 不配 `llmExtract` 会把每个 ngram 打成 "other"
@@ -214,6 +243,10 @@ Remove-Item env:OPENINTJ_DORMANT, env:OPENINTJ_RETRIEVAL_MODE, env:OPENINTJ_RATE
 10. **Phase 3.5 协议联合类型**：preload 5 个 dormant API 全部返回 `Success | Error` 联合类型 —— renderer 必须用 `'error' in r` narrow 才能拿数据。这是为了把"dormant 未启用"这类正常态从 try/catch 里剥离出来
 11. **Phase 3.5 类型对齐**：`StatusBar.tsx` 不再本地定义 `StatusSnapshot`，而是 `type StatusSnapshot = StatusResponse`（来自 protocol）。新加字段时只改 ipc-protocol.ts 即可全栈传播
 12. **Phase 3.5 renderer 0 测试**：desktop 工作区只有 main-process vitest，没有 jsdom/@testing-library/react。`DormantPanel` 的逻辑分支已被 IPC 契约测试覆盖；UI 渲染留给手动 / Playwright e2e（#4）
+13. **Phase 3.6 parity fixture 是 commit-in 资产**：`packages/*/__tests__/parity/fixtures/python-v2.json` 由 `scripts/python-parity/generate_fixtures.py` 一次性生成。CI 不跑 Python；只有 Python v2 端被"延寿活动"修补、或 `generate_fixtures.py` 自身改动时才需要重跑。biome 已 ignore 该目录，**不要**对 fixture 跑格式化。
+14. **Phase 3.6 已知偏差矩阵**：详见 `phase3-6-parity-tests.md` §三。不要随手"修齐" Planner delete/execute 模板回 general、或把 TS `Math.LN2` 改回 `0.693` —— 这些偏差**有意保留**（TS 修复或扩展 Python）。
+15. **Phase 3.6 决意保留 Python 0.693 近似**：`decayImportance` parity 容差用 `1e-4` 而非 `1e-12`。换 embedder（如 xenova / nomic-embed）也别动这条；它只影响 `decay` 一项的纯数学精度。
+16. **Phase 3.6 fixture `schemaVersion=1`**：TS spec 加载时会断言版本；将来如果想加新字段（如 `governance` slice），把 `schemaVersion` 升 2 强制旧 fixture 失效，避免误判。
 
 ---
 

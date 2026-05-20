@@ -1,0 +1,329 @@
+{
+  "schemaVersion": 1,
+  "generatedFrom": "execution_plane.StepStateMachine / Executor (v2 frozen)",
+  "notes": {
+    "knownDivergence": [
+      "Python Executor 在失败分支会触发 FAILED→FAILED（非法转换会抛错，",
+      "Python 旧实现的 if/transition 双跳被记录为 v2 已知 bug；TS 已修复）。",
+      "本 fixture 只跑全成功路径，避免触发该已知差异。"
+    ]
+  },
+  "transitions": [
+    {
+      "from": "pending",
+      "to": "ready",
+      "allowed": true,
+      "eventType": "STEP_STARTED",
+      "eventSource": "step-state-machine",
+      "eventPayload": {
+        "step_id": "t-pending-ready",
+        "from": "pending",
+        "to": "ready"
+      }
+    },
+    {
+      "from": "pending",
+      "to": "skipped",
+      "allowed": true,
+      "eventType": "STEP_STARTED",
+      "eventSource": "step-state-machine",
+      "eventPayload": {
+        "step_id": "t-pending-skipped",
+        "from": "pending",
+        "to": "skipped"
+      }
+    },
+    {
+      "from": "pending",
+      "to": "running",
+      "allowed": false,
+      "errorCode": "EXECUTION_FAILED"
+    },
+    {
+      "from": "ready",
+      "to": "running",
+      "allowed": true,
+      "eventType": "STEP_STARTED",
+      "eventSource": "step-state-machine",
+      "eventPayload": {
+        "step_id": "t-ready-running",
+        "from": "ready",
+        "to": "running"
+      }
+    },
+    {
+      "from": "ready",
+      "to": "skipped",
+      "allowed": true,
+      "eventType": "STEP_STARTED",
+      "eventSource": "step-state-machine",
+      "eventPayload": {
+        "step_id": "t-ready-skipped",
+        "from": "ready",
+        "to": "skipped"
+      }
+    },
+    {
+      "from": "ready",
+      "to": "completed",
+      "allowed": false,
+      "errorCode": "EXECUTION_FAILED"
+    },
+    {
+      "from": "running",
+      "to": "completed",
+      "allowed": true,
+      "eventType": "STEP_FINISHED",
+      "eventSource": "step-state-machine",
+      "eventPayload": {
+        "step_id": "t-running-completed",
+        "from": "running",
+        "to": "completed"
+      }
+    },
+    {
+      "from": "running",
+      "to": "failed",
+      "allowed": true,
+      "eventType": "STEP_FAILED",
+      "eventSource": "step-state-machine",
+      "eventPayload": {
+        "step_id": "t-running-failed",
+        "from": "running",
+        "to": "failed"
+      }
+    },
+    {
+      "from": "running",
+      "to": "waiting_approval",
+      "allowed": true,
+      "eventType": "STEP_STARTED",
+      "eventSource": "step-state-machine",
+      "eventPayload": {
+        "step_id": "t-running-waiting_approval",
+        "from": "running",
+        "to": "waiting_approval"
+      }
+    },
+    {
+      "from": "running",
+      "to": "skipped",
+      "allowed": false,
+      "errorCode": "EXECUTION_FAILED"
+    },
+    {
+      "from": "failed",
+      "to": "ready",
+      "allowed": true,
+      "eventType": "STEP_STARTED",
+      "eventSource": "step-state-machine",
+      "eventPayload": {
+        "step_id": "t-failed-ready",
+        "from": "failed",
+        "to": "ready"
+      }
+    },
+    {
+      "from": "failed",
+      "to": "completed",
+      "allowed": false,
+      "errorCode": "EXECUTION_FAILED"
+    },
+    {
+      "from": "waiting_approval",
+      "to": "running",
+      "allowed": true,
+      "eventType": "STEP_STARTED",
+      "eventSource": "step-state-machine",
+      "eventPayload": {
+        "step_id": "t-waiting_approval-running",
+        "from": "waiting_approval",
+        "to": "running"
+      }
+    },
+    {
+      "from": "waiting_approval",
+      "to": "skipped",
+      "allowed": true,
+      "eventType": "STEP_STARTED",
+      "eventSource": "step-state-machine",
+      "eventPayload": {
+        "step_id": "t-waiting_approval-skipped",
+        "from": "waiting_approval",
+        "to": "skipped"
+      }
+    },
+    {
+      "from": "waiting_approval",
+      "to": "completed",
+      "allowed": false,
+      "errorCode": "EXECUTION_FAILED"
+    }
+  ],
+  "executions": [
+    {
+      "mode": "sequential",
+      "steps": [
+        {
+          "stepId": "s1",
+          "action": "think"
+        },
+        {
+          "stepId": "s2",
+          "action": "act"
+        },
+        {
+          "stepId": "s3",
+          "action": "respond"
+        }
+      ],
+      "expected": {
+        "success": true,
+        "finishedSteps": [
+          "s1",
+          "s2",
+          "s3"
+        ],
+        "failedSteps": [],
+        "eventTrace": [
+          {
+            "type": "STEP_STARTED",
+            "stepId": "s1",
+            "from": "pending",
+            "to": "ready"
+          },
+          {
+            "type": "STEP_STARTED",
+            "stepId": "s1",
+            "from": "ready",
+            "to": "running"
+          },
+          {
+            "type": "STEP_FINISHED",
+            "stepId": "s1",
+            "from": "running",
+            "to": "completed"
+          },
+          {
+            "type": "STEP_STARTED",
+            "stepId": "s2",
+            "from": "pending",
+            "to": "ready"
+          },
+          {
+            "type": "STEP_STARTED",
+            "stepId": "s2",
+            "from": "ready",
+            "to": "running"
+          },
+          {
+            "type": "STEP_FINISHED",
+            "stepId": "s2",
+            "from": "running",
+            "to": "completed"
+          },
+          {
+            "type": "STEP_STARTED",
+            "stepId": "s3",
+            "from": "pending",
+            "to": "ready"
+          },
+          {
+            "type": "STEP_STARTED",
+            "stepId": "s3",
+            "from": "ready",
+            "to": "running"
+          },
+          {
+            "type": "STEP_FINISHED",
+            "stepId": "s3",
+            "from": "running",
+            "to": "completed"
+          }
+        ]
+      }
+    },
+    {
+      "mode": "parallel",
+      "steps": [
+        {
+          "stepId": "p1",
+          "action": "lookup"
+        },
+        {
+          "stepId": "p2",
+          "action": "lookup"
+        },
+        {
+          "stepId": "p3",
+          "action": "lookup"
+        }
+      ],
+      "expected": {
+        "success": true,
+        "finishedSteps": [
+          "p1",
+          "p2",
+          "p3"
+        ],
+        "failedSteps": [],
+        "eventTrace": [
+          {
+            "type": "STEP_STARTED",
+            "stepId": "p1",
+            "from": "pending",
+            "to": "ready"
+          },
+          {
+            "type": "STEP_STARTED",
+            "stepId": "p1",
+            "from": "ready",
+            "to": "running"
+          },
+          {
+            "type": "STEP_FINISHED",
+            "stepId": "p1",
+            "from": "running",
+            "to": "completed"
+          },
+          {
+            "type": "STEP_STARTED",
+            "stepId": "p2",
+            "from": "pending",
+            "to": "ready"
+          },
+          {
+            "type": "STEP_STARTED",
+            "stepId": "p2",
+            "from": "ready",
+            "to": "running"
+          },
+          {
+            "type": "STEP_FINISHED",
+            "stepId": "p2",
+            "from": "running",
+            "to": "completed"
+          },
+          {
+            "type": "STEP_STARTED",
+            "stepId": "p3",
+            "from": "pending",
+            "to": "ready"
+          },
+          {
+            "type": "STEP_STARTED",
+            "stepId": "p3",
+            "from": "ready",
+            "to": "running"
+          },
+          {
+            "type": "STEP_FINISHED",
+            "stepId": "p3",
+            "from": "running",
+            "to": "completed"
+          }
+        ]
+      }
+    }
+  ]
+}

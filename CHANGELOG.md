@@ -4,6 +4,63 @@
 版本号沿用 [SemVer](https://semver.org/lang/zh-CN/) 与
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 
+## [3.0.0-alpha.6] —— Phase 3.6 Python v2 ↔ TS 行为对齐测试 (2026-05-20)
+
+> 给 TS 实现盖一层"行为级回归网"——把冻结的 Python v2.0 当语义参考，
+> 在固定输入上断言 TS 输出等价。详见
+> [`docs/architecture/phase3-6-parity-tests.md`](./docs/architecture/phase3-6-parity-tests.md)。
+
+### Added
+
+- **`scripts/python-parity/generate_fixtures.py`** —— Python 端取证脚本
+  - 加载仓库根冻结的 `framework_core` / `memory_plane` / `control_plane` / `execution_plane`
+  - 在预设输入上跑 → 把可观察输出固化为 4 份 JSON fixture（每个 TS 包一份）
+  - **只读**：绝不修改 Python 代码；Python v2 已冻结
+- **`scripts/python-parity/README.md`** —— 工具使用说明 + 已知偏差速查表
+- **4 个 TS parity spec**（共 **64 个新 tests**）：
+  - `ts/packages/core/__tests__/parity/python-v2.spec.ts` —— **23 tests**：
+    SimpleEmbedder (SHA-256) / cosineSimilarity / decayImportance
+  - `ts/packages/planes/control/__tests__/parity/python-v2.spec.ts` —— **21 tests**：
+    GoalParser.parse 中英文意图 + 引号实体 + 优先级；Planner.createPlan 5 个公共 intent
+  - `ts/packages/planes/execution/__tests__/parity/python-v2.spec.ts` —— **17 tests**：
+    StepStateMachine 合法/非法转换表；Executor sequential / parallel 事件轨迹
+  - `ts/packages/planes/memory/__tests__/parity/python-v2.spec.ts` —— **3 tests**：
+    MemoryStore overflow；MemoryRetriever 评分组件 + 排序
+- **4 份 fixture JSON**（`__tests__/parity/fixtures/python-v2.json`）：
+  - 每份带 `schemaVersion` + `generatedFrom` + 关键设计 `notes`
+  - 由 Python 端脚本统一生成，commit-in，CI 无需 Python
+- **`docs/architecture/phase3-6-parity-tests.md`** —— 阶段记录 + 已知偏差矩阵 + 容差策略
+
+### Changed
+
+- **`ts/biome.json`**：`files.ignore` 加 `**/__tests__/parity/fixtures/**`
+  （fixture 是 Python 产物，不参与 biome formatter）
+
+### Testing
+
+- CI 模式（`pnpm exec turbo run test --concurrency=1`）：
+  - 33/33 packages successful
+  - **430 passed + 11 skipped**（净增 64 个 parity 测试；previously 366 + 11）
+- E2E 模式（`OPENINTJ_E2E=1`）：
+  - 33/33 packages successful
+  - **441 passed + 0 skipped**（previously 377 + 0）
+
+### Notes
+
+- 容差策略（详见 phase3-6 文档）：
+  - SHA-256 向量 / cosineSimilarity：`1e-12`（bit-identical）
+  - `decayImportance`：`1e-4`（Python 用 `0.693` 近似 `Math.LN2`；TS 更精确）
+  - MemoryRetriever 评分：分量 `1e-12`（纯位运算）/ recency + 最终 score `1e-4`
+- 5 类**已知偏差**已显式记录在 phase3-6 文档"已知偏差矩阵"：
+  1. `decayImportance` 0.693 vs `Math.LN2` —— TS 精度更高
+  2. MemoryRetriever 半衰期口径（Python 写死 `max_summary_length/10` 是 v2 bug；
+     fixture 把 `max_summary_length=240` 让两边都跑 24h 半衰期，严格可比）
+  3. Planner `delete`/`execute` 模板 —— TS 扩展；parity 只跑公共 5 个 intent
+  4. Executor 死重试 bug —— TS 已修复；fixture 只跑全成功路径
+  5. StepStateMachine 错误码命名 —— TS spec 接受两者之一
+- fixture 一次生成、长期复用；只有 Python 端"延寿活动"（极少）或 `generate_fixtures.py`
+  自身改动时才需要重跑
+
 ## [3.0.0-alpha.5] —— Phase 3.5 Dormant 审批 UI (2026-05-19)
 
 > Phase 3.4 把 Dormant 持久化的模型/装配/IPC 都做完了，但桌面端 renderer 没接。

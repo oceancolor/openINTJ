@@ -2,7 +2,16 @@
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
   "organizeImports": { "enabled": true },
   "files": {
-    "ignore": ["node_modules", "dist", "out", "release", ".turbo", "coverage", "**/*.gen.ts"]
+    "ignore": [
+      "node_modules",
+      "dist",
+      "out",
+      "release",
+      ".turbo",
+      "coverage",
+      "**/*.gen.ts",
+      "**/__tests__/parity/fixtures/**"
+    ]
   },
   "formatter": {
     "enabled": true,

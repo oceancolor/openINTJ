@@ -1,0 +1,339 @@
+{
+  "schemaVersion": 1,
+  "generatedFrom": "control_plane.GoalParser / Planner (v2 frozen)",
+  "notes": {
+    "plannerSharedIntents": [
+      "create",
+      "modify",
+      "query",
+      "plan",
+      "general"
+    ],
+    "plannerDivergence": [
+      "Python Planner 把 delete/execute 都落回 general 分支；",
+      "TS Planner 给 delete/execute 提供了专门的 3-step 模板，",
+      "因此 parity 测试只对齐公共 intent；TS 扩展行为在自家单测里验证。"
+    ]
+  },
+  "parsedGoals": [
+    {
+      "input": "你好",
+      "taskType": "general_chat",
+      "expected": {
+        "intent": "general",
+        "entities": [],
+        "priority": 5
+      }
+    },
+    {
+      "input": "创建一个用户登录页面",
+      "taskType": "code_generation",
+      "expected": {
+        "intent": "create",
+        "entities": [],
+        "priority": 7
+      }
+    },
+    {
+      "input": "生成测试数据",
+      "taskType": "general_chat",
+      "expected": {
+        "intent": "create",
+        "entities": [],
+        "priority": 5
+      }
+    },
+    {
+      "input": "修改这个 bug",
+      "taskType": "general_chat",
+      "expected": {
+        "intent": "modify",
+        "entities": [],
+        "priority": 5
+      }
+    },
+    {
+      "input": "修复 login 路由",
+      "taskType": "code_generation",
+      "expected": {
+        "intent": "modify",
+        "entities": [],
+        "priority": 7
+      }
+    },
+    {
+      "input": "删除用户 alice",
+      "taskType": "general_chat",
+      "expected": {
+        "intent": "delete",
+        "entities": [],
+        "priority": 5
+      }
+    },
+    {
+      "input": "查询数据库状态",
+      "taskType": "analysis",
+      "expected": {
+        "intent": "query",
+        "entities": [],
+        "priority": 5
+      }
+    },
+    {
+      "input": "搜索关键字",
+      "taskType": "general_chat",
+      "expected": {
+        "intent": "query",
+        "entities": [],
+        "priority": 5
+      }
+    },
+    {
+      "input": "执行部署脚本",
+      "taskType": "general_chat",
+      "expected": {
+        "intent": "execute",
+        "entities": [],
+        "priority": 5
+      }
+    },
+    {
+      "input": "规划下个季度任务",
+      "taskType": "planning",
+      "expected": {
+        "intent": "plan",
+        "entities": [],
+        "priority": 5
+      }
+    },
+    {
+      "input": "设计新架构",
+      "taskType": "planning",
+      "expected": {
+        "intent": "plan",
+        "entities": [],
+        "priority": 5
+      }
+    },
+    {
+      "input": "创建一个 \"user.py\" 文件并实现 \"main()\" 函数",
+      "taskType": "code_generation",
+      "expected": {
+        "intent": "create",
+        "entities": [
+          "user.py",
+          "main()"
+        ],
+        "priority": 7
+      }
+    },
+    {
+      "input": "Please 'fix' the bug urgently",
+      "taskType": "quick_response",
+      "expected": {
+        "intent": "general",
+        "entities": [
+          "fix"
+        ],
+        "priority": 9
+      }
+    },
+    {
+      "input": "asap deploy this",
+      "taskType": "general_chat",
+      "expected": {
+        "intent": "general",
+        "entities": [],
+        "priority": 9
+      }
+    },
+    {
+      "input": "立即停止服务",
+      "taskType": "general_chat",
+      "expected": {
+        "intent": "general",
+        "entities": [],
+        "priority": 9
+      }
+    },
+    {
+      "input": "天气怎么样",
+      "taskType": "general_chat",
+      "expected": {
+        "intent": "general",
+        "entities": [],
+        "priority": 5
+      }
+    }
+  ],
+  "plans": [
+    {
+      "intent": "create",
+      "expected": [
+        {
+          "stepId": "s1",
+          "action": "analyze",
+          "description": "分析需求",
+          "dependencies": [],
+          "status": "pending"
+        },
+        {
+          "stepId": "s2",
+          "action": "design",
+          "description": "设计方案",
+          "dependencies": [
+            "s1"
+          ],
+          "status": "pending"
+        },
+        {
+          "stepId": "s3",
+          "action": "implement",
+          "description": "实现功能",
+          "dependencies": [
+            "s2"
+          ],
+          "status": "pending"
+        },
+        {
+          "stepId": "s4",
+          "action": "verify",
+          "description": "验证结果",
+          "dependencies": [
+            "s3"
+          ],
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "intent": "modify",
+      "expected": [
+        {
+          "stepId": "s1",
+          "action": "read",
+          "description": "读取现有内容",
+          "dependencies": [],
+          "status": "pending"
+        },
+        {
+          "stepId": "s2",
+          "action": "analyze",
+          "description": "分析修改点",
+          "dependencies": [
+            "s1"
+          ],
+          "status": "pending"
+        },
+        {
+          "stepId": "s3",
+          "action": "modify",
+          "description": "执行修改",
+          "dependencies": [
+            "s2"
+          ],
+          "status": "pending"
+        },
+        {
+          "stepId": "s4",
+          "action": "verify",
+          "description": "验证修改",
+          "dependencies": [
+            "s3"
+          ],
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "intent": "query",
+      "expected": [
+        {
+          "stepId": "s1",
+          "action": "retrieve",
+          "description": "检索信息",
+          "dependencies": [],
+          "status": "pending"
+        },
+        {
+          "stepId": "s2",
+          "action": "analyze",
+          "description": "分析结果",
+          "dependencies": [
+            "s1"
+          ],
+          "status": "pending"
+        },
+        {
+          "stepId": "s3",
+          "action": "respond",
+          "description": "生成响应",
+          "dependencies": [
+            "s2"
+          ],
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "intent": "plan",
+      "expected": [
+        {
+          "stepId": "s1",
+          "action": "decompose",
+          "description": "目标分解",
+          "dependencies": [],
+          "status": "pending"
+        },
+        {
+          "stepId": "s2",
+          "action": "evaluate",
+          "description": "方案评估",
+          "dependencies": [
+            "s1"
+          ],
+          "status": "pending"
+        },
+        {
+          "stepId": "s3",
+          "action": "synthesize",
+          "description": "综合输出",
+          "dependencies": [
+            "s2"
+          ],
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "intent": "general",
+      "expected": [
+        {
+          "stepId": "s1",
+          "action": "think",
+          "description": "思考分析",
+          "dependencies": [],
+          "status": "pending"
+        },
+        {
+          "stepId": "s2",
+          "action": "act",
+          "description": "执行操作",
+          "dependencies": [
+            "s1"
+          ],
+          "status": "pending"
+        },
+        {
+          "stepId": "s3",
+          "action": "respond",
+          "description": "生成响应",
+          "dependencies": [
+            "s2"
+          ],
+          "status": "pending"
+        }
+      ]
+    }
+  ]
+}
