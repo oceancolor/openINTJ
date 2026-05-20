@@ -4,6 +4,20 @@
 版本号沿用 [SemVer](https://semver.org/lang/zh-CN/) 与
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 
+## [Unreleased] —— hotfix (2026-05-20)
+
+### Fixed
+
+- **Desktop dev/prod Electron 启动崩在 better-sqlite3 NODE_MODULE_VERSION 不匹配**：
+  `pnpm install` 默认把 native binding 编译成 Node ABI（v22 → 127），
+  Electron 33 自带的 Node fork 用 ABI 130，加载时 `dlopen` 拒绝。
+  - **修复**：给 `apps/desktop/package.json` 加 `postinstall: electron-builder install-app-deps`
+    → 每次 `pnpm install` 自动 `@electron/rebuild` 把 native deps 重编译成 Electron ABI
+  - 同时加 `rebuild-native` script 供手动触发
+  - 历史上 vitest 走 Node 装配 + e2e 走 `OPENINTJ_DESKTOP_NO_PERSIST=1` 绕过持久化，
+    都没碰真 sqlite，所以这个坑只在 `pnpm desktop:dev` / `desktop:package` 的真盘路径暴露
+  - CI 额外开销：lint-and-typecheck 等 job 多 ~8-24s（首次冷编译）
+
 ## [3.0.0-alpha.8] —— Phase 3.8 Hooks → OpenTelemetry (2026-05-20)
 
 > 给 hooks 系统补一条官方观测出口：自动把 TAO / ReAct / Tool / Policy 事件

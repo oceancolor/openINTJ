@@ -122,6 +122,11 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
   - LanceDB 返回的 `embedding` 是 TypedArray / Arrow Vector，`taskTags` 是 Arrow Vector —— `lancedb.ts` 的 `normalizeEmbedding` / `normalizeStringArray` 会兜底转 `number[]` / `string[]`
   - `apache-arrow` 是 `@openintj/storage-lance` 的 **直接依赖**（不是 peer），因为 `init()` 必用
 - **e2e 测试**：默认 skip。需要 `OPENINTJ_E2E=1`，且 `apps/server` / `apps/desktop` / `plane-memory` 工作区都已装 `@lancedb/lancedb` + `better-sqlite3`
+- **Electron native binding ABI 不匹配**（2026-05-20 踩到的）：
+  - vitest 在 Node 进程里跑 → better-sqlite3 ABI 127 ✅；Electron 33 用自家 Node fork（ABI 130）→ `desktop:dev` 真盘启动直接 `dlopen` 失败
+  - 已修：`apps/desktop/package.json` 加 `postinstall: electron-builder install-app-deps`，`pnpm install` 自动 `@electron/rebuild`（+ 8~24s）
+  - 手动触发：`pnpm --filter @openintj/desktop run rebuild-native`
+  - **不要**为了"提速"删掉 postinstall —— 之前的 e2e / vitest / NO_PERSIST 路径都不会暴露这个坑，删了之后下一次 `desktop:dev` 又会炸
 - **turbo 缓存**：`OPENINTJ_E2E` / `OPENINTJ_DATA_DIR` / `OPENINTJ_DESKTOP_NO_PERSIST` / `OPENINTJ_LANCE_DEBUG` 已纳入 cache key（`turbo.json`），切换 env 会强制 invalidate test 任务
 - **biome 已放宽**：`useLiteralKeys` / `noNonNullAssertion` / `noUnusedTemplateLiteral` 等 13 条与历史代码冲突的规则已关；不要再因为 lint 报错就批量改业务代码
 - `@xenova/transformers` 仍是 peer dependency，按需 `pnpm add`

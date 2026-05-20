@@ -16,6 +16,8 @@
     "test": "vitest run --passWithNoTests",
     "e2e": "electron-vite build && playwright test --config=e2e/playwright.config.ts",
     "e2e:run": "playwright test --config=e2e/playwright.config.ts",
+    "rebuild-native": "electron-builder install-app-deps",
+    "postinstall": "electron-builder install-app-deps",
     "clean": "rimraf out dist release .turbo *.tsbuildinfo"
   },
   "dependencies": {
