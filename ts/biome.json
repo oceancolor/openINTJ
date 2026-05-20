@@ -10,7 +10,9 @@
       ".turbo",
       "coverage",
       "**/*.gen.ts",
-      "**/__tests__/parity/fixtures/**"
+      "**/__tests__/parity/fixtures/**",
+      "**/test-results/**",
+      "**/playwright-report/**"
     ]
   },
   "formatter": {

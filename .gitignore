@@ -14,3 +14,8 @@ venv/
 # OS / Editor
 .DS_Store
 Thumbs.db
+
+# Playwright run artifacts (apps/desktop/e2e；Phase 3.7+)
+**/test-results/
+**/playwright-report/
+playwright/.cache/

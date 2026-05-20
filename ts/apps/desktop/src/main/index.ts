@@ -30,7 +30,9 @@ const createWindow = (): BrowserWindow => {
     webPreferences: {
       contextIsolation: true,
       sandbox: false,
-      preload: path.join(__dirname, "../preload/index.js"),
+      // electron-vite 把 preload 产物固定打到 index.mjs（ESM）；
+      // Electron 28+ 原生支持 .mjs preload，dev/prod 路径一致。
+      preload: path.join(__dirname, "../preload/index.mjs"),
     },
   });
 

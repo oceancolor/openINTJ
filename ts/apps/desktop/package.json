@@ -12,8 +12,10 @@
     "package:mac": "electron-vite build && electron-builder --config electron-builder.yml --mac",
     "dev": "electron-vite dev",
     "preview": "electron-vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p e2e/tsconfig.json",
     "test": "vitest run --passWithNoTests",
+    "e2e": "electron-vite build && playwright test --config=e2e/playwright.config.ts",
+    "e2e:run": "playwright test --config=e2e/playwright.config.ts",
     "clean": "rimraf out dist release .turbo *.tsbuildinfo"
   },
   "dependencies": {
@@ -37,6 +39,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",

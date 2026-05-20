@@ -4,6 +4,63 @@
 版本号沿用 [SemVer](https://semver.org/lang/zh-CN/) 与
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 
+## [3.0.0-alpha.7] —— Phase 3.7 Desktop E2E (Playwright + Electron) (2026-05-20)
+
+> 给桌面端 renderer 补上最后一层端到端兜底——用 Playwright `_electron.launch`
+> 启动真主进程 + 真 BrowserWindow，对真 DOM 做 7 个用例的断言。详见
+> [`docs/architecture/phase3-7-desktop-e2e.md`](./docs/architecture/phase3-7-desktop-e2e.md)。
+
+### Added
+
+- **`ts/apps/desktop/e2e/`** —— Playwright 端到端套件
+  - `playwright.config.ts` —— workers=1；`OPENINTJ_PLAYWRIGHT=1` 才执行，
+    默认 `testIgnore: ["**/*"]` 保证不污染主 CI 路径
+  - `fixtures.ts` —— `electronApp` + `page` fixture，默认 env：
+    `LLM_PROVIDER=mock` + `OPENINTJ_DESKTOP_NO_PERSIST=1`
+  - `tests/smoke.spec.ts` —— **5 tests**：app 启动 / header / status bar /
+    chat 全链路（你好 → mock greet）/ trajectory 计数 / dormant tab 默认未启用
+  - `tests/dormant.spec.ts` —— **2 tests**（`OPENINTJ_DORMANT=1`）：
+    mine 按钮可见 + pending filter / 点 Mine 出现扫描摘要
+  - `tsconfig.json` —— 独立 e2e 项目，不污染 `src/` 编译
+- **`.github/workflows/ci.yml`** —— 新 job `e2e-desktop`（Ubuntu + xvfb），
+  独立于 `e2e-persistence`，构建 desktop bundle → xvfb 包 Playwright →
+  失败时 upload `playwright-report/`
+- **`docs/architecture/phase3-7-desktop-e2e.md`** —— 阶段记录 + 选型 + 两个坑 + CI 集成
+
+### Changed
+
+- **`ts/apps/desktop/src/main/index.ts`**：preload 路径
+  `../preload/index.js` → `../preload/index.mjs`
+  - electron-vite 默认产物是 `.mjs`，路径不对会让 `window.openintj` 永远 undefined
+  - 历史 vitest 走 mock electron 路径不触发该 bug，Playwright 真启动才暴露
+- **`ts/apps/desktop/package.json`**：
+  - devDep 加 `@playwright/test ^1.60.0`
+  - `typecheck`：串第二段 `tsc --noEmit -p e2e/tsconfig.json`
+  - 新 script `e2e`（build + run）/ `e2e:run`（只 run）
+- **`ts/biome.json`**：`files.ignore` 加 `**/test-results/**` 与 `**/playwright-report/**`
+  （Playwright 运行产物）
+
+### Testing
+
+- 本地 Windows（Node 22）`pnpm --filter @openintj/desktop run e2e`：
+  - **7/7 passed**（34.8s）—— 5 smoke + 2 dormant
+- 默认 CI 路径（不设 `OPENINTJ_PLAYWRIGHT`）：
+  - `pnpm lint` exit 0（仍是 2 条 pre-existing useExhaustiveDependencies warn）
+  - `pnpm exec turbo run typecheck --concurrency=1` → 33/33 successful
+  - `pnpm exec turbo run test --concurrency=1` → 33/33 successful，
+    **430 passed + 11 skipped**（与 alpha.6 持平，未引入新 unit）
+
+### Notes
+
+- 两个值得记的坑（详见 phase3-7 §四）：
+  1. **electron-vite 输出 `.mjs` preload**：main 写死 `.js` 路径，silent fail，
+     直到真 Electron 启动才暴露
+  2. **Windows + Playwright `_electron.launch` 加 `--no-sandbox` 卡 30s 超时**：
+     只在该具体组合下出现；Linux + xvfb 不需要 flag
+- Playwright 跑包采用 `_electron` 模式，没有装 Chromium / Firefox / WebKit；
+  CI 也跳过 `playwright install`，依赖大小可控
+- 桌面端**渲染层第一次有机器化兜底**；之前只有 IPC contract 测试（21 个）
+
 ## [3.0.0-alpha.6] —— Phase 3.6 Python v2 ↔ TS 行为对齐测试 (2026-05-20)
 
 > 给 TS 实现盖一层"行为级回归网"——把冻结的 Python v2.0 当语义参考，

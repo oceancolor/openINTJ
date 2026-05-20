@@ -1,7 +1,7 @@
 # 下一次工作交接备忘
 
 > 本文件用于工作中断 / 多日离开后快速恢复上下文。
-> 上次更新：2026-05-20（Phase 3.6 Python v2 ↔ TS 行为对齐测试收官当日）
+> 上次更新：2026-05-20（Phase 3.7 Desktop E2E / Playwright + Electron 收官当日）
 
 ---
 
@@ -12,21 +12,25 @@
 - **Phase 3.3（RFC-003 装配进主 Agent）已收官**，仓库标签：`v3.0.0-alpha.3`
 - **Phase 3.4（Dormant 持久化 #9.A）已收官**，仓库标签：`v3.0.0-alpha.4`
 - **Phase 3.5（Dormant 审批 UI #9.B）已收官**，仓库标签：`v3.0.0-alpha.5`
-- **Phase 3.6（Python v2 ↔ TS 行为对齐测试 #1）已收官**，仓库标签：`v3.0.0-alpha.6` ⭐ 本轮新增
+- **Phase 3.6（Python v2 ↔ TS 行为对齐测试 #1）已收官**，仓库标签：`v3.0.0-alpha.6`
+- **Phase 3.7（Desktop E2E / Playwright + Electron #4）已收官**，仓库标签：`v3.0.0-alpha.7` ⭐ 本轮新增
 - **CI 状态**（本地与 GitHub Actions 同口径）：
   - `pnpm lint` exit 0（2 条 React useExhaustiveDependencies 警告，不阻塞）
-  - `pnpm exec turbo run typecheck --concurrency=1` → 33/33 successful
+  - `pnpm exec turbo run typecheck --concurrency=1` → 33/33 successful（desktop 多串了一段 `tsc -p e2e/tsconfig.json`）
   - `pnpm exec turbo run test --concurrency=1`（CI 模式）→ 33/33 successful，**430 passed + 11 skipped**
   - `OPENINTJ_E2E=1 pnpm exec turbo run test --concurrency=1`（真盘模式）→ 33/33 successful，**441 passed，0 skipped**
+  - **`OPENINTJ_PLAYWRIGHT=1 pnpm --filter @openintj/desktop run e2e`（Desktop E2E 模式）→ 7/7 passed（约 35s）**
   - turbo cache 已经把 `OPENINTJ_E2E` 等 env 算进 cache key，env 切换会强制 invalidate 测试任务
-- **本轮主要产出（Phase 3.6 / #1 行为对齐测试）**：
-  - `scripts/python-parity/generate_fixtures.py`：Python 端只读取证脚本（覆盖 4 个 slice）
-  - `scripts/python-parity/README.md`：工具说明 + 已知偏差速查
-  - 4 份 fixture JSON（`packages/*/__tests__/parity/fixtures/python-v2.json`），commit-in，CI 无需 Python
-  - 4 个 TS parity spec（`packages/*/__tests__/parity/python-v2.spec.ts`），共 **64 个新 tests**：
-    - core (23) / control (21) / execution (17) / memory (3)
-  - `ts/biome.json`：把 `**/__tests__/parity/fixtures/**` 加入 ignore（fixture 是 Python 产物）
-  - `docs/architecture/phase3-6-parity-tests.md`：阶段记录 + 已知偏差矩阵 + 容差策略
+- **本轮主要产出（Phase 3.7 / #4 Desktop E2E）**：
+  - `ts/apps/desktop/e2e/`：playwright.config.ts / fixtures.ts / tsconfig.json / tests/{smoke,dormant}.spec.ts
+    - **7 个新 e2e 用例**：5 个 smoke（启动/header/status/chat 全链路/trajectory/dormant tab）+ 2 个 dormant（mine 按钮 + 扫描摘要）
+    - 默认 opt-in：没设 `OPENINTJ_PLAYWRIGHT=1` 时 runner noop，不污染主 CI 路径
+  - `ts/apps/desktop/src/main/index.ts`：preload 路径 `index.js` → `index.mjs`（修历史 silent fail）
+  - `ts/apps/desktop/package.json`：加 `@playwright/test`、新 script `e2e/e2e:run`、typecheck 串第二段 e2e tsconfig
+  - `.github/workflows/ci.yml`：新增 `e2e-desktop` job（Ubuntu 24.04 + xvfb，与 `e2e-persistence` 同级）
+  - `ts/biome.json`：`files.ignore` 加 `**/test-results/**` 与 `**/playwright-report/**`
+  - `docs/architecture/phase3-7-desktop-e2e.md`：阶段记录 + 两个坑 + CI 集成
+- **Phase 3.6 产出**（上一轮）：见 [`phase3-6-parity-tests.md`](./phase3-6-parity-tests.md)
 - **Phase 3.5 产出**（上一轮）：见 [`phase3-5-dormant-approval-ui.md`](./phase3-5-dormant-approval-ui.md)
 - **Phase 3.4 产出**：见 [`phase3-4-dormant-persistence.md`](./phase3-4-dormant-persistence.md)
 - **未提交变更**：仓库根 `.dockerignore` / `.env.example` / `deploy.sh` / `docker-compose.yml` / `nginx.conf` 仍未跟踪（Python v2 部署相关，**不属于本阶段范围**）
@@ -44,6 +48,11 @@ pnpm exec turbo run test --concurrency=1                 # 430 PASS / 11 skipped
 $env:OPENINTJ_E2E="1"
 pnpm exec turbo run test --concurrency=1                 # 441 PASS / 0 skipped
 Remove-Item env:OPENINTJ_E2E
+
+# 想跑 Desktop E2E（Playwright + 真 Electron + 真 BrowserWindow，约 35s）：
+$env:OPENINTJ_PLAYWRIGHT="1"
+pnpm --filter @openintj/desktop run e2e                  # 7/7 passed（含 build）
+Remove-Item env:OPENINTJ_PLAYWRIGHT
 
 # 验证 RFC-003 装配 opt-in：
 $env:OPENINTJ_DORMANT="1"
@@ -70,7 +79,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 | 1 | ~~Python v2 ↔ TS 行为对齐测试~~ | ~~中~~ | ~~高~~ | ⭐⭐⭐ | ✅ 2026-05-20 完成（Phase 3.6） |
 | 2 | ~~真实持久化 e2e~~ | ~~中~~ | ~~高~~ | ⭐⭐⭐ | ✅ 2026-05-09 完成 |
 | 3 | **嵌入基准**：simple vs xenova vs ollama 在固定语料上的 nDCG | 低 | 中 | ⭐⭐ | 待办 |
-| 4 | **Desktop E2E（Playwright + Electron）**：真渲染器跑 mock chat | 中 | 中 | ⭐⭐ | 待办 |
+| 4 | ~~Desktop E2E（Playwright + Electron）~~ | ~~中~~ | ~~中~~ | ⭐⭐ | ✅ 2026-05-20 完成（Phase 3.7） |
 | 5 | ~~RFC-003 装配进主 Agent~~ | ~~中~~ | ~~中~~ | ⭐⭐ | ✅ 2026-05-11 完成 |
 | 6 | **打包发布**：electron-builder Win/macOS + electron-updater | 高 | 中 | ⭐ | 待办 |
 | 7 | **可观测性**：Hooks → OpenTelemetry | 低 | 低-中 | ⭐ | 待办 |
@@ -83,10 +92,11 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 
 **默认推荐下一站**：
 
-- **#4 Playwright Desktop E2E**（顺手能覆盖 Phase 3.5 的 UI；当前 renderer 0 测试，唯一缺口）
-- 或 **#3 嵌入基准**（低成本，给默认选型一个数据支持）
-- 或 **#11 dormant 事件清理**（Phase 3.4 留下的小尾巴）
+- **#3 嵌入基准**（低成本，给默认选型一个数据支持；下一阶段顺手填）
+- 或 **#11 dormant 事件清理**（Phase 3.4 留下的小尾巴；30 行 SQL + 几个 spec）
 - 或 **#12 parity 扩展**（顺势补 governance / Hooks / ContextEngine 进对齐网）
+- 或 **#6 打包发布**（electron-builder Win/macOS + electron-updater；体感工程量最大但收益最直观）
+- 或 **#7 可观测性**（Hooks → OpenTelemetry；和 #4 互补，给生产路径加遥测）
 
 ## 四、上下文复盘清单
 
@@ -224,9 +234,30 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 - `ts/biome.json`：`files.ignore` 加 `**/__tests__/parity/fixtures/**`
 - `CHANGELOG.md`：新增 `3.0.0-alpha.6` 条目
 
+### Phase 3.7（Desktop E2E / Playwright + Electron / #4）
+
+新增：
+
+- `ts/apps/desktop/e2e/playwright.config.ts`（workers=1，`OPENINTJ_PLAYWRIGHT=1` 才执行）
+- `ts/apps/desktop/e2e/fixtures.ts`（`electronApp` + `page` fixture，默认 mock + no-persist）
+- `ts/apps/desktop/e2e/tsconfig.json`（独立 e2e 项目，不污染 src）
+- `ts/apps/desktop/e2e/tests/smoke.spec.ts`（5 tests：boot / status / chat / trajectory / dormant tab）
+- `ts/apps/desktop/e2e/tests/dormant.spec.ts`（2 tests：mine 按钮 + 扫描摘要，需 `OPENINTJ_DORMANT=1`）
+- `docs/architecture/phase3-7-desktop-e2e.md`（阶段记录 + 两个坑 + CI 集成）
+
+改动：
+
+- `ts/apps/desktop/src/main/index.ts`：preload 路径 `../preload/index.js` → `../preload/index.mjs`（修历史 silent fail）
+- `ts/apps/desktop/package.json`：加 devDep `@playwright/test ^1.60`；
+  `typecheck` 串第二段 `tsc --noEmit -p e2e/tsconfig.json`；
+  新 script `e2e`（build + run）/ `e2e:run`（只 run）
+- `ts/biome.json`：`files.ignore` 加 `**/test-results/**` 与 `**/playwright-report/**`
+- `.github/workflows/ci.yml`：新增 `e2e-desktop` job（Ubuntu 24.04 + xvfb，需要 libnss3/libgtk-3-0 等运行时）
+- `CHANGELOG.md`：新增 `3.0.0-alpha.7` 条目
+
 ---
 
-## 七、Phase 3.3 / 3.4 / 3.5 / 3.6 关键陷阱（接续时回看）
+## 七、Phase 3.3 / 3.4 / 3.5 / 3.6 / 3.7 关键陷阱（接续时回看）
 
 1. **`DormantRuntime` 默认 `category: "other"` 时 proposals 为空**
    - PatternMiner 不配 `llmExtract` 会把每个 ngram 打成 "other"
@@ -247,6 +278,10 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 14. **Phase 3.6 已知偏差矩阵**：详见 `phase3-6-parity-tests.md` §三。不要随手"修齐" Planner delete/execute 模板回 general、或把 TS `Math.LN2` 改回 `0.693` —— 这些偏差**有意保留**（TS 修复或扩展 Python）。
 15. **Phase 3.6 决意保留 Python 0.693 近似**：`decayImportance` parity 容差用 `1e-4` 而非 `1e-12`。换 embedder（如 xenova / nomic-embed）也别动这条；它只影响 `decay` 一项的纯数学精度。
 16. **Phase 3.6 fixture `schemaVersion=1`**：TS spec 加载时会断言版本；将来如果想加新字段（如 `governance` slice），把 `schemaVersion` 升 2 强制旧 fixture 失效，避免误判。
+17. **Phase 3.7 preload `.mjs` 才是正确路径**：electron-vite 默认产物是 `out/preload/index.mjs`。**不要**回退到 `.js`，否则 `window.openintj` 永远 undefined，但 vitest 走 mock electron 路径不会暴露 —— 只有真 Electron 启动才崩。Electron 28+ 原生支持 ESM preload。
+18. **Phase 3.7 Windows + Playwright `_electron.launch` 别加 `--no-sandbox`**：该 flag 在 Windows + Electron 33 + Playwright 1.60 这个具体组合下会让 launch 卡死 30s。Linux + xvfb 不需要这个 flag。fixture 已经只传 `[MAIN_ENTRY]`；扩 e2e 用例时也别图省事重新加 flag。
+19. **Phase 3.7 e2e 默认 opt-in**：`OPENINTJ_PLAYWRIGHT=1` 才会跑；不设 env 时 playwright.config.ts 顶部直接 `testIgnore: ["**/*"]`。pnpm test / turbo test 不会触发它。CI 走专用 `e2e-desktop` job（已加 `OPENINTJ_PLAYWRIGHT: "1"` env）。
+20. **Phase 3.7 strict-mode locator**：`getByText(/mock 模式/)` 会撞 chat 气泡 + trajectory JSON dump。新加 e2e 断言前先用 tailwind 颜色 token 圈父定位（`div.bg-\\[\\#1e1e2e\\]` = 主聊天区，`div.bg-\\[\\#313244\\]` = assistant 气泡）。
 
 ---
 

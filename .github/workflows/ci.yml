@@ -130,3 +130,55 @@ jobs:
         #   apps/server/__tests__/persistence-e2e.spec.ts
         #   apps/desktop/__tests__/agent-persistence.spec.ts
         run: pnpm exec turbo run test --concurrency=1
+
+  e2e-desktop:
+    name: E2E Desktop (Playwright + Electron — Linux)
+    runs-on: ubuntu-latest
+    needs: [lint-and-typecheck]
+    env:
+      OPENINTJ_PLAYWRIGHT: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: ts/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Electron Linux runtime deps
+        # Electron 33 on Ubuntu 24.04 needs these GTK/X libs to spawn a window.
+        # Playwright's own deps aren't enough because we're not launching browsers.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libxkbcommon0 \
+            libxcomposite1 libxdamage1 libxrandr2 libgbm1 libpango-1.0-0 \
+            libcairo2 libasound2t64 libgtk-3-0 xvfb
+
+      - name: Build desktop bundle (main + preload + renderer)
+        run: pnpm --filter @openintj/desktop run build
+
+      - name: Run Playwright (xvfb)
+        # Single worker, real BrowserWindow under Xvfb.
+        run: xvfb-run --auto-servernum --server-args='-screen 0 1280x720x24' \
+          pnpm --filter @openintj/desktop run e2e:run
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-desktop
+          path: |
+            ts/apps/desktop/playwright-report
+            ts/apps/desktop/test-results
+          retention-days: 7
