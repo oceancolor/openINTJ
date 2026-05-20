@@ -4,19 +4,50 @@
 版本号沿用 [SemVer](https://semver.org/lang/zh-CN/) 与
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 
-## [Unreleased] —— hotfix (2026-05-20)
+## [Unreleased] —— hotfix bundle #2 (2026-05-20 → 2026-05-21)
+
+> 这是 alpha.8 之后的第二批 hotfix，主要解决 Windows 真盘启动链路上的三个独立坑。
+
+### Added
+
+- **`@openintj/shared` 新增 `loadOpenintjEnv()` + `summarizeLlmEnv()`**
+  （`packages/shared/src/env.ts`）：
+  - 走 Node 21.7+ 原生 `process.loadEnvFile`，不引入 dotenv 依赖
+  - 从入口起点 **逐级向上** 找 `.env.local` / `.env`，直到 `.git` 根；
+    支持本仓库的「外层 `F:\openINTJ\.env`+ 内层 `F:\openINTJ\ts\pnpm-workspace.yaml`」混合布局
+  - 先加载的优先（已存在 `process.env` 永远最高优先级）
+  - `summarizeLlmEnv()` 把 LLM 配置浓缩成单行日志，**绝不打印 API Key 本体**
+  - 9 个 vitest spec 覆盖（多层目录 / `.env.local` 优先级 / shell env 不被覆盖 / key 不泄漏）
+- **`vitest.global-setup.ts`** —— 跑测试前自动把 `better-sqlite3` 切回 Node ABI
+- **`apps/desktop/scripts/ensure-electron-abi.cjs`** —— `predev` / `prepackage` 钩子，
+  跑 Electron 前自动把 `better-sqlite3` 切到 Electron ABI
+
+### Changed
+
+- **CLI / server / desktop 三个入口启动时都自动 `loadOpenintjEnv()`** 并打印 LLM 摘要
+  - `apps/cli/src/index.ts`、`apps/server/src/index.ts`、`apps/desktop/src/main/index.ts`
+  - `.env.example` 文档承诺的"自动加载 .env"现在真生效；以前是没人写 loader
+- **桌面端启动加 Chromium 命令行开关静音后台探测**
+  （`disable-background-networking` / `disable-features=SafeBrowsing,NetworkTimeServiceQuerying,DialMediaRouteProvider,MediaRouter,OptimizationHints,Translate,InterestFeedContentSuggestions` / `disable-component-update` / `disable-domain-reliability`）
+  - 干掉了 `ssl_client_socket_impl.cc handshake failed; net_error -107` 类噪音日志
+  - opt-out：`OPENINTJ_DESKTOP_KEEP_BG_NET=1`
 
 ### Fixed
 
-- **Desktop dev/prod Electron 启动崩在 better-sqlite3 NODE_MODULE_VERSION 不匹配**：
-  `pnpm install` 默认把 native binding 编译成 Node ABI（v22 → 127），
-  Electron 33 自带的 Node fork 用 ABI 130，加载时 `dlopen` 拒绝。
-  - **修复**：给 `apps/desktop/package.json` 加 `postinstall: electron-builder install-app-deps`
-    → 每次 `pnpm install` 自动 `@electron/rebuild` 把 native deps 重编译成 Electron ABI
-  - 同时加 `rebuild-native` script 供手动触发
-  - 历史上 vitest 走 Node 装配 + e2e 走 `OPENINTJ_DESKTOP_NO_PERSIST=1` 绕过持久化，
-    都没碰真 sqlite，所以这个坑只在 `pnpm desktop:dev` / `desktop:package` 的真盘路径暴露
-  - CI 额外开销：lint-and-typecheck 等 job 多 ~8-24s（首次冷编译）
+- **Desktop dev/prod Electron 启动崩在 better-sqlite3 NODE_MODULE_VERSION 不匹配**（继续修）：
+  - 上一版改成 `postinstall: electron-builder install-app-deps`，结果发现两个隐藏问题：
+    1. `electron-builder install-app-deps` 在 pnpm 布局里**报 finished 但实际不替换 .node 文件**；
+       现在直接走 `prebuild-install --runtime=electron --target=33.x --force`
+    2. 把 binding 切到 Electron ABI(130) 后，所有走 Node ABI(127) 的 vitest 都 dlopen 失败 →
+       原 postinstall 彻底废，改成**双向自愈**：
+       - **predev 钩子** 跑 `apps/desktop/scripts/ensure-electron-abi.cjs`，在 `pnpm desktop:dev` /
+         `pnpm desktop:package` 前自动确保 binding = Electron ABI
+       - **vitest globalSetup** 跑 `vitest.global-setup.ts`，在 `pnpm test` 前自动确保 binding = Node ABI
+       - 两边都用 **子进程 probe** 来读 ABI 状态（关键：本进程不能 `require('better-sqlite3')`，
+         否则 Windows 下 .node 句柄被锁住，prebuild-install EBUSY）
+- **".env 没人加载" 静默坑** —— `.env.example` 写着会自动加载，但 cli/server/desktop 三个入口都没人 `dotenv.config()`，结果 `LLM_PROVIDER=hunyuan` 永远走不通；
+  现在三处都接 `loadOpenintjEnv()` 自动 fix
+- **`packages/shared` 此前只是一个 `__sharedPlaceholder` 占位**，本次扩展成真正的跨入口工具包
 
 ## [3.0.0-alpha.8] —— Phase 3.8 Hooks → OpenTelemetry (2026-05-20)
 

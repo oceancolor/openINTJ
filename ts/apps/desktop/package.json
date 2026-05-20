@@ -10,15 +10,18 @@
     "package": "electron-vite build && electron-builder --config electron-builder.yml",
     "package:win": "electron-vite build && electron-builder --config electron-builder.yml --win",
     "package:mac": "electron-vite build && electron-builder --config electron-builder.yml --mac",
+    "predev": "node scripts/ensure-electron-abi.cjs",
     "dev": "electron-vite dev",
+    "prepackage": "node scripts/ensure-electron-abi.cjs",
+    "prepackage:win": "node scripts/ensure-electron-abi.cjs",
+    "prepackage:mac": "node scripts/ensure-electron-abi.cjs",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit && tsc --noEmit -p e2e/tsconfig.json",
     "test": "vitest run --passWithNoTests",
     "e2e": "electron-vite build && playwright test --config=e2e/playwright.config.ts",
     "e2e:run": "playwright test --config=e2e/playwright.config.ts",
-    "rebuild-native": "electron-builder install-app-deps",
-    "postinstall": "electron-builder install-app-deps",
-    "clean": "rimraf out dist release .turbo *.tsbuildinfo"
+    "rebuild-native": "node scripts/ensure-electron-abi.cjs",
+    "clean": "rimraf out dist release .turbo *.tsbuildinfo .cache"
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.13.0",

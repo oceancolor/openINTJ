@@ -14,7 +14,10 @@
 - **Phase 3.5（Dormant 审批 UI #9.B）已收官**，仓库标签：`v3.0.0-alpha.5`
 - **Phase 3.6（Python v2 ↔ TS 行为对齐测试 #1）已收官**，仓库标签：`v3.0.0-alpha.6`
 - **Phase 3.7（Desktop E2E / Playwright + Electron #4）已收官**，仓库标签：`v3.0.0-alpha.7`
-- **Phase 3.8（Hooks → OpenTelemetry #7）已收官**，仓库标签：`v3.0.0-alpha.8` ⭐ 本轮新增
+- **Phase 3.8（Hooks → OpenTelemetry #7）已收官**，仓库标签：`v3.0.0-alpha.8`
+- **Windows 本地启动两批 hotfix 已落**（2026-05-20 → 05-21，无 tag，对应 CHANGELOG `[Unreleased]`）：
+  - hotfix #1：Electron 33 vs Node 22 better-sqlite3 ABI 双向自愈 + `.env` 自动加载 + Chromium 后台 SSL 噪音静音
+  - 现在 `pnpm desktop:dev` 可以在 Windows 上直接跑：`.env.local` 里写好 HUNYUAN_API_KEY 即可
 - **CI 状态**（本地与 GitHub Actions 同口径）：
   - `pnpm lint` exit 0（2 条 React useExhaustiveDependencies 警告，不阻塞）
   - `pnpm exec turbo run typecheck --concurrency=1` → 35/35 successful（新增 `@openintj/telemetry-otel`）
@@ -122,11 +125,27 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
   - LanceDB 返回的 `embedding` 是 TypedArray / Arrow Vector，`taskTags` 是 Arrow Vector —— `lancedb.ts` 的 `normalizeEmbedding` / `normalizeStringArray` 会兜底转 `number[]` / `string[]`
   - `apache-arrow` 是 `@openintj/storage-lance` 的 **直接依赖**（不是 peer），因为 `init()` 必用
 - **e2e 测试**：默认 skip。需要 `OPENINTJ_E2E=1`，且 `apps/server` / `apps/desktop` / `plane-memory` 工作区都已装 `@lancedb/lancedb` + `better-sqlite3`
-- **Electron native binding ABI 不匹配**（2026-05-20 踩到的）：
+- **Electron native binding ABI 不匹配**（2026-05-20 踩到、05-21 二次修复）：
   - vitest 在 Node 进程里跑 → better-sqlite3 ABI 127 ✅；Electron 33 用自家 Node fork（ABI 130）→ `desktop:dev` 真盘启动直接 `dlopen` 失败
-  - 已修：`apps/desktop/package.json` 加 `postinstall: electron-builder install-app-deps`，`pnpm install` 自动 `@electron/rebuild`（+ 8~24s）
-  - 手动触发：`pnpm --filter @openintj/desktop run rebuild-native`
-  - **不要**为了"提速"删掉 postinstall —— 之前的 e2e / vitest / NO_PERSIST 路径都不会暴露这个坑，删了之后下一次 `desktop:dev` 又会炸
+  - **第一版 postinstall 修复废弃了** —— 把 binding 切到 Electron ABI 后所有 vitest 都炸；
+    现在改成 **双向自愈**：
+    - `apps/desktop/scripts/ensure-electron-abi.cjs`（`predev` / `prepackage` 钩子）：
+      跑 `pnpm desktop:dev` / `desktop:package` 前自动切到 Electron ABI
+    - `ts/vitest.global-setup.ts`：跑 `pnpm test` 前自动把 binding 切回 Node ABI
+  - 两个脚本都用 **`spawnSync` 子进程 probe 读 ABI**（关键：本进程绝不能 `require('better-sqlite3')`，否则 Windows 下 .node 句柄被锁住，下一步 prebuild-install 报 EBUSY/EPERM）
+  - rebuild 命令也得换 —— `electron-builder install-app-deps` 在 pnpm 布局里**会报 finished 但实际不替换 .node 文件**，改走 `prebuild-install --runtime=electron --target=33.x --force` 才真正落盘
+  - 手动触发：`pnpm --filter @openintj/desktop run rebuild-native`（切到 Electron）/ vitest 跑一次（切回 Node）
+- **`.env` 加载链路**（2026-05-21 修）：
+  - `.env.example` 文档承诺"启动服务时自动加载"，但 cli/server/desktop 三个入口此前都没真 loader → `LLM_PROVIDER=hunyuan` 永远走 mock；
+  - 新增 `@openintj/shared/env.ts` 的 `loadOpenintjEnv()`，三处入口都在最前面调用；
+  - **目录布局陷阱**：本仓库是 `F:\openINTJ\.env`+ `F:\openINTJ\ts\pnpm-workspace.yaml` 混合双根；
+    loader 用 **逐级向上扫描**，到 `.git` 根停。不能只看 `pnpm-workspace.yaml`（会把 `ts/` 错认成根）
+  - 优先级（高 → 低）：shell env → 离 startDir 更近的 .env.local → 同级 .env → 上一级 .env.local → ...
+  - `summarizeLlmEnv()` 启动时打印 LLM 摘要供 debug；**不打印 key 本体**
+- **Electron Chromium 后台 SSL 噪音**（2026-05-20 看到的两条 `ssl_client_socket_impl.cc -107`）：
+  - 那是 Safe Browsing / 强制门户检测 / NetworkTimeService 等组件被 GFW 打断，**与 Hunyuan 调用无关**
+  - 已在 `apps/desktop/src/main/index.ts` 用 `app.commandLine.appendSwitch("disable-background-networking" / "disable-features=...")` 静音
+  - 想恢复后台服务：`$env:OPENINTJ_DESKTOP_KEEP_BG_NET="1"`
 - **turbo 缓存**：`OPENINTJ_E2E` / `OPENINTJ_DATA_DIR` / `OPENINTJ_DESKTOP_NO_PERSIST` / `OPENINTJ_LANCE_DEBUG` 已纳入 cache key（`turbo.json`），切换 env 会强制 invalidate test 任务
 - **biome 已放宽**：`useLiteralKeys` / `noNonNullAssertion` / `noUnusedTemplateLiteral` 等 13 条与历史代码冲突的规则已关；不要再因为 lint 报错就批量改业务代码
 - `@xenova/transformers` 仍是 peer dependency，按需 `pnpm add`

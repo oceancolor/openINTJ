@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import { loadOpenintjEnv } from "@openintj/shared";
 import kleur from "kleur";
 import { type LlmProvider, assembleAgent } from "./agent.js";
+
+// CLI 是开发者直接调用的入口，最常忘记 export $env:HUNYUAN_API_KEY；
+// 把 .env / .env.local 自动注入（不覆盖 shell env），让 cp .env.example .env 真正生效。
+loadOpenintjEnv({ logPrefix: "[openintj cli env]" });
 
 const program = new Command();
 program

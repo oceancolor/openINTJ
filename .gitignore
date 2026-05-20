@@ -19,3 +19,9 @@ Thumbs.db
 **/test-results/
 **/playwright-report/
 playwright/.cache/
+
+# 环境变量本地覆盖（HUNYUAN_API_KEY 等敏感信息，绝对不能上仓库）
+.env
+.env.local
+.env.*.local
+
