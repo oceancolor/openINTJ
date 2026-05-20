@@ -33,6 +33,7 @@
     "@openintj/storage-lance": "workspace:*",
     "@openintj/storage-sqlite": "workspace:*",
     "@openintj/taskpool": "workspace:*",
+    "@openintj/telemetry-otel": "workspace:*",
     "apache-arrow": "^17.0.0",
     "better-sqlite3": "^11.0.0",
     "electron-updater": "^6.3.9",

@@ -15,6 +15,7 @@
     { "path": "./packages/embed/xenova" },
     { "path": "./packages/storage/lance" },
     { "path": "./packages/storage/sqlite" },
+    { "path": "./packages/telemetry/otel" },
     { "path": "./packages/concurrency" },
     { "path": "./packages/taskpool" },
     { "path": "./packages/dormant" },

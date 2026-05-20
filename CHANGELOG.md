@@ -4,6 +4,62 @@
 版本号沿用 [SemVer](https://semver.org/lang/zh-CN/) 与
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 
+## [3.0.0-alpha.8] —— Phase 3.8 Hooks → OpenTelemetry (2026-05-20)
+
+> 给 hooks 系统补一条官方观测出口：自动把 TAO / ReAct / Tool / Policy 事件
+> 翻译成 OpenTelemetry span 树 + counter metric。业务零侵入；未启用零开销。
+> 详见 [`docs/architecture/phase3-8-otel.md`](./docs/architecture/phase3-8-otel.md)。
+
+### Added
+
+- **新包 `@openintj/telemetry-otel`** —— Hook 事件 → OTel 适配
+  - `attachOtelToHooks(bus, opts)` —— 订阅 hook 事件，per-traceId 维护
+    iteration / action / tool span 帧栈；返回 `dispose()`
+  - `bootstrapNodeOtel(opts)` —— 可选 SDK 引导（懒 import `sdk-trace-node` +
+    `exporter-trace-otlp-http`；缺包才抛错，不影响 attach 零开销路径）
+  - Span 树：`openintj.tao.iteration` → `openintj.react.action` → `openintj.tool.call`
+  - Counter：`openintj.tao.iterations`、`openintj.react.actions`、`openintj.tool.calls`、
+    `openintj.tool.errors`、`openintj.policy.blocked`、`openintj.memory.loaded`
+  - SDK 全标 `peerDependenciesMeta.optional: true`，consumer 不调 bootstrap 就不用装
+- **`__tests__/{noop,spans,metrics,dispose}.spec.ts`** —— 10 个新测试
+  - 未注册 provider 时 0 错、0 span（零成本路径）
+  - InMemorySpanExporter 断言 parent/child 关系 + ERROR 状态 + recordException
+  - InMemoryMetricExporter 断言 6 个 counter 累计
+  - `dispose()` 兜底 end 未结束 span + unregister 所有 handler
+- **`apps/server/__tests__/otel-wiring.spec.ts`** —— 4 个 wiring 测试：
+  代码 / env / 默认关 / 显式关 4 条路径都跑一遍真实 `agent.run()`
+- **`docs/architecture/phase3-8-otel.md`** —— 阶段记录 + 选型 + 6 类陷阱
+
+### Changed
+
+- **`ts/apps/server/src/agent.ts`**：
+  - `ServerAgentOpts.enableOtel?: boolean | AttachOtelOpts`
+  - `resolveOtel(opts)`：bool / object / `OPENINTJ_OTEL=1` env 三通道
+  - `ServerAgent.otel?: AttachedOtel`；`agent.close()` 调 `otel.dispose()`
+- **`ts/apps/desktop/src/main/agent.ts`**：镜像 server 端装配
+- **`ts/pnpm-workspace.yaml`**：加 `packages/telemetry/*`
+- **`ts/tsconfig.json`**：refs 加 `packages/telemetry/otel`
+- **`ts/apps/{server,desktop}/{package.json, tsconfig.json}`**：依赖 + ref
+- **`ts/apps/server/package.json`**：devDep 加 `@opentelemetry/{api,sdk-trace-base}`
+  （仅 wiring 测试用；运行时不需要）
+
+### Testing
+
+- 本地（Windows 11 / Node 22）：
+  - `pnpm lint` exit 0（仍是 2 条 pre-existing useExhaustiveDependencies warn）
+  - `pnpm exec turbo run typecheck --concurrency=1` → 35/35 successful
+  - `pnpm exec turbo run test --concurrency=1` → 35/35 successful，
+    **444 passed + 11 skipped**（净增 14：10 telemetry-otel + 4 server-wiring）
+
+### Notes
+
+- **零成本默认**：`enableOtel` 不真就根本不调 `attachOtelToHooks`；
+  启用但未注册 TracerProvider 时 OTel API 返回 NoopTracer/NoopMeter，
+  span / counter 都是空对象操作（setAttribute / add 是 noop）
+- **HookBus traceId 是 UUID，OTel traceId 是 hex 128-bit**：不相同！
+  本适配器把 HookBus traceId 写到 `trace_id` span 属性，方便反查
+- **bootstrapNodeOtel idempotent**：用 ProxyTracerProvider 探针检测（traceId 全零）
+
 ## [3.0.0-alpha.7] —— Phase 3.7 Desktop E2E (Playwright + Electron) (2026-05-20)
 
 > 给桌面端 renderer 补上最后一层端到端兜底——用 Playwright `_electron.launch`

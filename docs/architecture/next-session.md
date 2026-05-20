@@ -1,7 +1,7 @@
 # 下一次工作交接备忘
 
 > 本文件用于工作中断 / 多日离开后快速恢复上下文。
-> 上次更新：2026-05-20（Phase 3.7 Desktop E2E / Playwright + Electron 收官当日）
+> 上次更新：2026-05-20（Phase 3.8 Hooks → OpenTelemetry 收官当日）
 
 ---
 
@@ -13,24 +13,26 @@
 - **Phase 3.4（Dormant 持久化 #9.A）已收官**，仓库标签：`v3.0.0-alpha.4`
 - **Phase 3.5（Dormant 审批 UI #9.B）已收官**，仓库标签：`v3.0.0-alpha.5`
 - **Phase 3.6（Python v2 ↔ TS 行为对齐测试 #1）已收官**，仓库标签：`v3.0.0-alpha.6`
-- **Phase 3.7（Desktop E2E / Playwright + Electron #4）已收官**，仓库标签：`v3.0.0-alpha.7` ⭐ 本轮新增
+- **Phase 3.7（Desktop E2E / Playwright + Electron #4）已收官**，仓库标签：`v3.0.0-alpha.7`
+- **Phase 3.8（Hooks → OpenTelemetry #7）已收官**，仓库标签：`v3.0.0-alpha.8` ⭐ 本轮新增
 - **CI 状态**（本地与 GitHub Actions 同口径）：
   - `pnpm lint` exit 0（2 条 React useExhaustiveDependencies 警告，不阻塞）
-  - `pnpm exec turbo run typecheck --concurrency=1` → 33/33 successful（desktop 多串了一段 `tsc -p e2e/tsconfig.json`）
-  - `pnpm exec turbo run test --concurrency=1`（CI 模式）→ 33/33 successful，**430 passed + 11 skipped**
-  - `OPENINTJ_E2E=1 pnpm exec turbo run test --concurrency=1`（真盘模式）→ 33/33 successful，**441 passed，0 skipped**
+  - `pnpm exec turbo run typecheck --concurrency=1` → 35/35 successful（新增 `@openintj/telemetry-otel`）
+  - `pnpm exec turbo run test --concurrency=1`（CI 模式）→ 35/35 successful，**444 passed + 11 skipped**
+  - `OPENINTJ_E2E=1 pnpm exec turbo run test --concurrency=1`（真盘模式）→ 35/35 successful，**455 passed，0 skipped**
   - **`OPENINTJ_PLAYWRIGHT=1 pnpm --filter @openintj/desktop run e2e`（Desktop E2E 模式）→ 7/7 passed（约 35s）**
   - turbo cache 已经把 `OPENINTJ_E2E` 等 env 算进 cache key，env 切换会强制 invalidate 测试任务
-- **本轮主要产出（Phase 3.7 / #4 Desktop E2E）**：
-  - `ts/apps/desktop/e2e/`：playwright.config.ts / fixtures.ts / tsconfig.json / tests/{smoke,dormant}.spec.ts
-    - **7 个新 e2e 用例**：5 个 smoke（启动/header/status/chat 全链路/trajectory/dormant tab）+ 2 个 dormant（mine 按钮 + 扫描摘要）
-    - 默认 opt-in：没设 `OPENINTJ_PLAYWRIGHT=1` 时 runner noop，不污染主 CI 路径
-  - `ts/apps/desktop/src/main/index.ts`：preload 路径 `index.js` → `index.mjs`（修历史 silent fail）
-  - `ts/apps/desktop/package.json`：加 `@playwright/test`、新 script `e2e/e2e:run`、typecheck 串第二段 e2e tsconfig
-  - `.github/workflows/ci.yml`：新增 `e2e-desktop` job（Ubuntu 24.04 + xvfb，与 `e2e-persistence` 同级）
-  - `ts/biome.json`：`files.ignore` 加 `**/test-results/**` 与 `**/playwright-report/**`
-  - `docs/architecture/phase3-7-desktop-e2e.md`：阶段记录 + 两个坑 + CI 集成
-- **Phase 3.6 产出**（上一轮）：见 [`phase3-6-parity-tests.md`](./phase3-6-parity-tests.md)
+- **本轮主要产出（Phase 3.8 / #7 Hooks → OpenTelemetry）**：
+  - **新包 `@openintj/telemetry-otel`**（packages/telemetry/otel/）：
+    - `attachOtelToHooks(bus, opts)` —— 订阅 hook 事件、per-traceId 维护
+      iteration / action / tool span 帧栈、产 6 个 counter；返回 `dispose()`
+    - `bootstrapNodeOtel(opts)` —— 可选 SDK 引导（懒 import；缺包才抛错）
+    - 10 个新 spec：noop 2 / spans 2 / metrics 3 / dispose 3
+  - server / desktop agent 装配端：`enableOtel?: boolean | AttachOtelOpts` + `OPENINTJ_OTEL=1` env + `agent.otel`；`close()` 调 dispose
+  - `apps/server/__tests__/otel-wiring.spec.ts`：4 个 wiring 验证（代码 / env / 默认关 / 显式关）
+  - `pnpm-workspace.yaml`：加 `packages/telemetry/*`；根 `tsconfig.json` refs 加新包
+  - `docs/architecture/phase3-8-otel.md`：阶段记录 + 选型 + 7 类陷阱
+- **Phase 3.7 产出**（上一轮）：见 [`phase3-7-desktop-e2e.md`](./phase3-7-desktop-e2e.md)
 - **Phase 3.5 产出**（上一轮）：见 [`phase3-5-dormant-approval-ui.md`](./phase3-5-dormant-approval-ui.md)
 - **Phase 3.4 产出**：见 [`phase3-4-dormant-persistence.md`](./phase3-4-dormant-persistence.md)
 - **未提交变更**：仓库根 `.dockerignore` / `.env.example` / `deploy.sh` / `docker-compose.yml` / `nginx.conf` 仍未跟踪（Python v2 部署相关，**不属于本阶段范围**）
@@ -82,7 +84,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 | 4 | ~~Desktop E2E（Playwright + Electron）~~ | ~~中~~ | ~~中~~ | ⭐⭐ | ✅ 2026-05-20 完成（Phase 3.7） |
 | 5 | ~~RFC-003 装配进主 Agent~~ | ~~中~~ | ~~中~~ | ⭐⭐ | ✅ 2026-05-11 完成 |
 | 6 | **打包发布**：electron-builder Win/macOS + electron-updater | 高 | 中 | ⭐ | 待办 |
-| 7 | **可观测性**：Hooks → OpenTelemetry | 低 | 低-中 | ⭐ | 待办 |
+| 7 | ~~可观测性：Hooks → OpenTelemetry~~ | ~~低~~ | ~~低-中~~ | ⭐ | ✅ 2026-05-20 完成（Phase 3.8） |
 | 8 | ~~GitHub Actions CI 工作流~~ | ~~低~~ | ~~中~~ | ⭐⭐ | ✅ 2026-05-09 完成 |
 | 9.A | ~~Dormant 持久化（SqliteDormantStore + hydrate）~~ | ~~中~~ | ~~高~~ | ⭐⭐⭐ | ✅ 2026-05-19 完成（Phase 3.4） |
 | 9.B | ~~Dormant 审批 UI（preload + DormantPanel + tab 布局）~~ | ~~中~~ | ~~中-高~~ | ⭐⭐⭐ | ✅ 2026-05-19 完成（Phase 3.5） |
@@ -96,7 +98,8 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 - 或 **#11 dormant 事件清理**（Phase 3.4 留下的小尾巴；30 行 SQL + 几个 spec）
 - 或 **#12 parity 扩展**（顺势补 governance / Hooks / ContextEngine 进对齐网）
 - 或 **#6 打包发布**（electron-builder Win/macOS + electron-updater；体感工程量最大但收益最直观）
-- 或 **#7 可观测性**（Hooks → OpenTelemetry；和 #4 互补，给生产路径加遥测）
+- 或 **#10 HybridRetriever LanceDB FTS**（3.3 衍生；N>10k fragment 时性能升级）
+- 或 **Phase 3.8.1 OTel 扩展**：Hono route + Electron IPC 自动 span 接到 agent span 树
 
 ## 四、上下文复盘清单
 
@@ -234,6 +237,32 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 - `ts/biome.json`：`files.ignore` 加 `**/__tests__/parity/fixtures/**`
 - `CHANGELOG.md`：新增 `3.0.0-alpha.6` 条目
 
+### Phase 3.8（Hooks → OpenTelemetry / #7）
+
+新增：
+
+- `ts/packages/telemetry/otel/`（新包 `@openintj/telemetry-otel`）：
+  - `package.json`：deps=`@openintj/core` + `@opentelemetry/api`；6 个 SDK 包全标 `peerDependenciesMeta.optional`
+  - `src/attach.ts`（~290 行）：`attachOtelToHooks(bus, opts)`，per-traceId span 帧栈 + 6 counter + dispose
+  - `src/bootstrap.ts`（~100 行）：`bootstrapNodeOtel(opts)`，懒 import SDK + ProxyTracerProvider 探针 idempotent
+  - `src/index.ts`：barrel
+  - `__tests__/noop.spec.ts`（2 tests）：未注册 provider 不抛、不产 span
+  - `__tests__/spans.spec.ts`（2 tests）：InMemorySpanExporter 断言 parent/child + ERROR 状态 + recordException
+  - `__tests__/metrics.spec.ts`（3 tests）：InMemoryMetricExporter 断言 6 counter 累计
+  - `__tests__/dispose.spec.ts`（3 tests）：dispose 兜底 end + unregister + 新 iteration 把旧 iter 标 unfinished
+- `ts/apps/server/__tests__/otel-wiring.spec.ts`（4 tests）：enableOtel 三通道
+- `docs/architecture/phase3-8-otel.md`：阶段记录 + 选型 + 7 类陷阱
+
+改动：
+
+- `ts/pnpm-workspace.yaml`：加 `packages/telemetry/*`
+- `ts/tsconfig.json`：refs 加 `packages/telemetry/otel`
+- `ts/apps/server/{src/agent.ts, package.json, tsconfig.json}`：
+  - `enableOtel` opt + `resolveOtel(opts)` + `agent.otel` + close 调 dispose
+  - devDep 加 `@opentelemetry/{api,sdk-trace-base}`（仅 wiring 测试用，运行时不需要）
+- `ts/apps/desktop/{src/main/agent.ts, package.json, tsconfig.json}`：镜像 server
+- `CHANGELOG.md`：新增 `3.0.0-alpha.8` 条目
+
 ### Phase 3.7（Desktop E2E / Playwright + Electron / #4）
 
 新增：
@@ -257,7 +286,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 
 ---
 
-## 七、Phase 3.3 / 3.4 / 3.5 / 3.6 / 3.7 关键陷阱（接续时回看）
+## 七、Phase 3.3 / 3.4 / 3.5 / 3.6 / 3.7 / 3.8 关键陷阱（接续时回看）
 
 1. **`DormantRuntime` 默认 `category: "other"` 时 proposals 为空**
    - PatternMiner 不配 `llmExtract` 会把每个 ngram 打成 "other"
@@ -282,6 +311,11 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 18. **Phase 3.7 Windows + Playwright `_electron.launch` 别加 `--no-sandbox`**：该 flag 在 Windows + Electron 33 + Playwright 1.60 这个具体组合下会让 launch 卡死 30s。Linux + xvfb 不需要这个 flag。fixture 已经只传 `[MAIN_ENTRY]`；扩 e2e 用例时也别图省事重新加 flag。
 19. **Phase 3.7 e2e 默认 opt-in**：`OPENINTJ_PLAYWRIGHT=1` 才会跑；不设 env 时 playwright.config.ts 顶部直接 `testIgnore: ["**/*"]`。pnpm test / turbo test 不会触发它。CI 走专用 `e2e-desktop` job（已加 `OPENINTJ_PLAYWRIGHT: "1"` env）。
 20. **Phase 3.7 strict-mode locator**：`getByText(/mock 模式/)` 会撞 chat 气泡 + trajectory JSON dump。新加 e2e 断言前先用 tailwind 颜色 token 圈父定位（`div.bg-\\[\\#1e1e2e\\]` = 主聊天区，`div.bg-\\[\\#313244\\]` = assistant 气泡）。
+21. **Phase 3.8 HookBus traceId ≠ OTel traceId**：前者是 UUID 字符串、后者是 128-bit hex 由 SDK 生成。本适配器把 HookBus traceId 写到 `trace_id` span 属性方便反查。不要让 caller 拿 `agent.otel` 当作 trace context 源。
+22. **Phase 3.8 tool 事件必须带 traceId 才能挂对 parent**：`tool.beforeCall` / `tool.afterCall` / `tool.onError` emit 时必须传 `{ traceId }`（ToolHub 真实代码已这么做）。漏传的话 tool span 会挂在 'anon' trace 上，与 iteration / action 失联。写 hook 单测时尤其要注意。
+23. **Phase 3.8 OTel SDK 是 optional peer**：`attachOtelToHooks` 只需 `@opentelemetry/api`（已是硬依赖）；`bootstrapNodeOtel` 懒 import 6 个 SDK 包，缺包就 throw。生产部署用 OTLP 时 consumer 自己 `pnpm add @opentelemetry/{sdk-trace-node,exporter-trace-otlp-http,resources,semantic-conventions}`。
+24. **Phase 3.8 metric 默认 DELTA**：`InMemoryMetricExporter` 的 `AggregationTemporality.DELTA = 0`；构造时显式传 0，否则跨多次 emit 会丢中间增量。生产 exporter 一般是 CUMULATIVE，行为不同。
+25. **Phase 3.8 tool.onError 不 end span**：故意设计，让 `tool.afterCall` 统一收尾（happy-path 一致）。如果业务异常分支不发 afterCall，`dispose()` 会兜底 end 并打 `disposed=true` 标记。
 
 ---
 

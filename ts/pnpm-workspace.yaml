@@ -4,6 +4,7 @@ packages:
   - "packages/llm/*"
   - "packages/embed/*"
   - "packages/storage/*"
+  - "packages/telemetry/*"
   - "packages/concurrency"
   - "packages/taskpool"
   - "packages/dormant"

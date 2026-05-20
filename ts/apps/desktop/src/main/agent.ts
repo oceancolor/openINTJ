@@ -32,6 +32,11 @@ import {
   HybridRetriever,
   type HybridScored,
 } from "@openintj/taskpool";
+import {
+  type AttachOtelOpts,
+  type AttachedOtel,
+  attachOtelToHooks,
+} from "@openintj/telemetry-otel";
 
 export type LlmProvider = "ollama" | "hunyuan" | "mock";
 
@@ -64,6 +69,14 @@ export interface DesktopAgentOpts {
   retrievalMode?: "vector" | "hybrid";
   /** RFC-003 方向 1：LLM 速率限制。env OPENINTJ_RATE_LIMIT_QPS 也启用。 */
   rateLimit?: RateLimitOpts;
+  /**
+   * Phase 3.8：把 HookBus 接到 OpenTelemetry。
+   * - true：attachOtelToHooks(hooks)
+   * - AttachOtelOpts：透传
+   * - env OPENINTJ_OTEL=1 也启用
+   * 默认关闭；未注册 OTel provider 时 attach 也是 no-op。
+   */
+  enableOtel?: boolean | AttachOtelOpts;
 }
 
 const buildLlm = (provider: LlmProvider): LlmClient => {
@@ -210,6 +223,8 @@ export interface DesktopAgent {
   dormant?: DormantRuntime;
   /** Dormant 子系统的持久化信息（dormant 启用且挂了 adapter 时存在）。 */
   dormantPersistenceInfo?: { adapter: string; dbPath?: string };
+  /** OpenTelemetry 接线状态（enableOtel 真值时存在；含 dispose 钩子）。 */
+  otel?: AttachedOtel;
   /** 基于 HybridRetriever 的检索辅助；无论 retrievalMode 都可用。 */
   retrieveHybrid(query: string, opts?: DesktopRetrieveHybridOpts): Promise<DesktopHybridHit[]>;
   run(query: string): Promise<TaoResult>;
@@ -230,8 +245,18 @@ export interface DesktopAgent {
   close(): Promise<void>;
 }
 
+const resolveDesktopOtel = (opts: DesktopAgentOpts): AttachOtelOpts | undefined => {
+  if (opts.enableOtel === true) return {};
+  if (opts.enableOtel && typeof opts.enableOtel === "object") return opts.enableOtel;
+  if (opts.enableOtel === false) return undefined;
+  if (process.env["OPENINTJ_OTEL"] === "1") return {};
+  return undefined;
+};
+
 export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise<DesktopAgent> => {
   const hooks = new HookBus();
+  const otelOpts = resolveDesktopOtel(opts);
+  const otel = otelOpts ? attachOtelToHooks(hooks, otelOpts) : undefined;
   const rawLlm = buildLlm(opts.llmProvider ?? "mock");
   const rateLimit = resolveRateLimit(opts);
   const llm: LlmClient = rateLimit ? new RateLimitedLlmClient(rawLlm, rateLimit) : rawLlm;
@@ -336,6 +361,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     retrievalMode,
     ...(dormant ? { dormant } : {}),
     ...(dormantPersistenceInfo ? { dormantPersistenceInfo } : {}),
+    ...(otel ? { otel } : {}),
     retrieveHybrid,
     async run(query: string) {
       memory.recordUserInput(query);
@@ -371,6 +397,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       };
     },
     async close() {
+      if (otel) otel.dispose();
       if (dormant) await dormant.close();
       await persistentStore.close();
     },

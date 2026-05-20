@@ -25,6 +25,11 @@ import {
   createPersistentMemoryStore,
 } from "@openintj/plane-memory";
 import { createSqliteDormantStore } from "@openintj/storage-sqlite";
+import {
+  type AttachOtelOpts,
+  type AttachedOtel,
+  attachOtelToHooks,
+} from "@openintj/telemetry-otel";
 import { type RateLimitOpts, RateLimitedLlmClient } from "./rate-limited-llm.js";
 
 export interface ServerAgentOpts {
@@ -76,6 +81,15 @@ export interface ServerAgentOpts {
    * 默认关闭；零开销路径。
    */
   rateLimit?: RateLimitOpts;
+  /**
+   * RFC-003 衍生 / Phase 3.8 ：把 HookBus 接到 OpenTelemetry。
+   * - true：attachOtelToHooks(hooks)，使用默认 scope（@openintj/telemetry-otel）
+   * - AttachOtelOpts：透传给 attachOtelToHooks
+   * - env OPENINTJ_OTEL=1 也会启用
+   * 默认关闭。未注册 TracerProvider/MeterProvider 时 attach 也是零开销（OTel API 走 no-op）。
+   * 真正想 export trace/metric 时，调用方需自己先调 `bootstrapNodeOtel(...)` 或注册自家 SDK。
+   */
+  enableOtel?: boolean | AttachOtelOpts;
 }
 
 export interface ServerAgent {
@@ -96,6 +110,8 @@ export interface ServerAgent {
   dormantPersistenceInfo?: { adapter: string; dbPath?: string };
   /** 当前默认检索模式（由 opts / env 决定）。 */
   retrievalMode: "vector" | "hybrid";
+  /** OpenTelemetry 接线状态（enableOtel 真值时存在；含 dispose 钩子）。 */
+  otel?: AttachedOtel;
   run(query: string): Promise<TaoResult>;
   status(): Promise<{
     llm: ReturnType<LlmClient["getStatus"]>;
@@ -173,6 +189,14 @@ const resolveDormantPersistence = (
   return { kind: "memory" };
 };
 
+const resolveOtel = (opts: ServerAgentOpts): AttachOtelOpts | undefined => {
+  if (opts.enableOtel === true) return {};
+  if (opts.enableOtel && typeof opts.enableOtel === "object") return opts.enableOtel;
+  if (opts.enableOtel === false) return undefined;
+  if (process.env["OPENINTJ_OTEL"] === "1") return {};
+  return undefined;
+};
+
 const resolveRateLimit = (opts: ServerAgentOpts): RateLimitOpts | undefined => {
   if (opts.rateLimit) return opts.rateLimit;
   const qpsRaw = process.env["OPENINTJ_RATE_LIMIT_QPS"];
@@ -186,6 +210,8 @@ const resolveRateLimit = (opts: ServerAgentOpts): RateLimitOpts | undefined => {
 
 export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<ServerAgent> => {
   const hooks = new HookBus();
+  const otelOpts = resolveOtel(opts);
+  const otel = otelOpts ? attachOtelToHooks(hooks, otelOpts) : undefined;
   const rawLlm = buildLlm(opts.llmProvider);
   const rateLimit = resolveRateLimit(opts);
   const llm: LlmClient = rateLimit ? new RateLimitedLlmClient(rawLlm, rateLimit) : rawLlm;
@@ -287,6 +313,7 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
     ...(dormant ? { dormant } : {}),
     ...(dormantPersistenceInfo ? { dormantPersistenceInfo } : {}),
     retrievalMode,
+    ...(otel ? { otel } : {}),
     async run(query: string) {
       memory.recordUserInput(query);
       if (dormant) dormant.record(query, "user", { stage: "run.input" });
@@ -321,6 +348,7 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
       };
     },
     async close() {
+      if (otel) otel.dispose();
       if (dormant) await dormant.close();
       await persistentStore.close();
     },

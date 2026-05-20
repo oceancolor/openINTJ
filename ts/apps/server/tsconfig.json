@@ -21,6 +21,7 @@
     { "path": "../../packages/llm/openai-compat" },
     { "path": "../../packages/storage/lance" },
     { "path": "../../packages/storage/sqlite" },
-    { "path": "../../packages/taskpool" }
+    { "path": "../../packages/taskpool" },
+    { "path": "../../packages/telemetry/otel" }
   ]
 }
