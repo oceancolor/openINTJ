@@ -13,7 +13,7 @@ import {
   DormantRuntime,
   type DormantRuntimeOpts,
 } from "@openintj/dormant";
-import { HunyuanClient } from "@openintj/llm-hunyuan";
+import { HunyuanClient, createHunyuanSearchTool } from "@openintj/llm-hunyuan";
 import { OllamaClient } from "@openintj/llm-ollama";
 import { ControlPlane } from "@openintj/plane-control";
 import { Executor, ToolHub } from "@openintj/plane-execution";
@@ -315,11 +315,13 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
   });
   const toolHub = new ToolHub({ hooks });
   const noop = () => ({ note: "[mock]" });
+  // search 工具优先接混元联网搜索（按 rawLlm，避开速率限制包装层）；非混元则保持占位。
+  const searchHandler = rawLlm instanceof HunyuanClient ? createHunyuanSearchTool(rawLlm) : noop;
   toolHub.registerBuiltinTools({
     readFile: noop,
     writeFile: noop,
     executeCommand: noop,
-    search: noop,
+    search: searchHandler,
   });
   const execution = new Executor({ toolHub, hooks, registerBuiltins: false });
 

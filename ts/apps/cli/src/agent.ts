@@ -11,7 +11,7 @@ import {
   TaoLoop,
   type TaoResult,
 } from "@openintj/core";
-import { HunyuanClient } from "@openintj/llm-hunyuan";
+import { HunyuanClient, createHunyuanSearchTool } from "@openintj/llm-hunyuan";
 import { OllamaClient } from "@openintj/llm-ollama";
 import { ControlPlane } from "@openintj/plane-control";
 import { Executor, ToolHub } from "@openintj/plane-execution";
@@ -97,11 +97,14 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
     hits: [],
   });
 
+  // search 默认接混元联网搜索（llm 为混元时）；否则退回无副作用占位。
+  const defaultSearchHandler =
+    llm instanceof HunyuanClient ? createHunyuanSearchTool(llm) : defaultSearch;
   toolHub.registerBuiltinTools({
     readFile: handlers.readFile ?? defaultReadFile,
     writeFile: handlers.writeFile ?? defaultWriteFile,
     executeCommand: handlers.executeCommand ?? defaultExecuteCommand,
-    search: handlers.search ?? defaultSearch,
+    search: handlers.search ?? defaultSearchHandler,
   });
   const execution = new Executor({ toolHub, hooks, registerBuiltins: false });
 

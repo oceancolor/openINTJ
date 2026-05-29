@@ -135,15 +135,21 @@ export const summarizeLlmEnv = (
   env: NodeJS.ProcessEnv = process.env,
 ): {
   provider: string;
-  hunyuan: { hasKey: boolean; baseUrl: string; model: string };
+  hunyuan: { hasKey: boolean; baseUrl: string; model: string; search: boolean };
   ollama: { baseUrl: string; model: string };
   summary: string;
 } => {
   const provider = env["LLM_PROVIDER"] ?? "mock";
+  const isTruthy = (raw: string | undefined): boolean => {
+    if (!raw) return false;
+    const v = raw.trim().toLowerCase();
+    return v === "1" || v === "true" || v === "yes" || v === "on";
+  };
   const hunyuan = {
     hasKey: Boolean(env["HUNYUAN_API_KEY"]?.trim()),
     baseUrl: env["HUNYUAN_BASE_URL"] ?? "https://api.hunyuan.cloud.tencent.com/v1",
     model: env["HUNYUAN_MODEL"] ?? "hunyuan-turbos-latest",
+    search: isTruthy(env["HUNYUAN_ENABLE_SEARCH"]) || isTruthy(env["HUNYUAN_FORCE_SEARCH"]),
   };
   const ollama = {
     baseUrl: env["OLLAMA_BASE_URL"] ?? "http://127.0.0.1:11434",
@@ -151,7 +157,7 @@ export const summarizeLlmEnv = (
   };
   const tail =
     provider === "hunyuan"
-      ? `hunyuanApiKey=${hunyuan.hasKey ? "set" : "MISSING"} model=${hunyuan.model}`
+      ? `hunyuanApiKey=${hunyuan.hasKey ? "set" : "MISSING"} model=${hunyuan.model} search=${hunyuan.search ? "on" : "off"}`
       : provider === "ollama"
         ? `ollamaModel=${ollama.model} baseUrl=${ollama.baseUrl}`
         : "(mock — no remote LLM call)";

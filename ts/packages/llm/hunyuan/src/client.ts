@@ -5,6 +5,7 @@ import {
   ErrorCode,
   type LlmClient,
   type LlmStatus,
+  type ToolHandler,
 } from "@openintj/core";
 import { generateMockResponse } from "./mock-responses.js";
 import { type HunyuanConfig, HunyuanConfigSchema, loadHunyuanConfigFromEnv } from "./types.js";
@@ -16,12 +17,30 @@ interface OpenAIChatRequestMessage {
   name?: string;
 }
 
+export interface HunyuanSearchSource {
+  index?: number;
+  title?: string;
+  url?: string;
+  text?: string;
+}
+
+export interface HunyuanSearchResult {
+  query: string;
+  /** 模型基于联网搜索结果生成的回答（命中搜索时含实时信息）。 */
+  answer: string;
+  /** 命中搜索时的来源列表（需服务端开启 search_info）。 */
+  sources: HunyuanSearchSource[];
+  mode: "live" | "mock" | "unauthorized";
+}
+
 interface OpenAIChatResponse {
   choices: Array<{
     message: { role: string; content: string };
     finish_reason?: string;
   }>;
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  /** 混元扩展：开启 search_info 且命中搜索时返回的来源列表。 */
+  search_info?: { search_results?: HunyuanSearchSource[] };
 }
 
 interface OpenAIErrorEnvelope {
@@ -41,6 +60,8 @@ export class HunyuanClient implements LlmClient {
   private lastError = "";
   private lastErrorCode = "";
   private lastErrorType = "";
+  /** 最近一次命中联网搜索时返回的来源列表（需 enableEnhancement + searchInfo）。 */
+  lastSearchSources: HunyuanSearchSource[] = [];
 
   constructor(cfg: Partial<HunyuanConfig> | undefined = undefined) {
     this.config = cfg !== undefined ? HunyuanConfigSchema.parse(cfg) : loadHunyuanConfigFromEnv();
@@ -58,6 +79,27 @@ export class HunyuanClient implements LlmClient {
   async chat(messages: ChatMessage[], opts: ChatOptions = {}): Promise<string> {
     if (this.isMockMode) return generateMockResponse(messages);
     return await this.request(messages, opts, this.config.model);
+  }
+
+  /**
+   * 联网搜索：对单次调用强制开启功能增强（enable_enhancement + force_search + search_info），
+   * 不依赖全局 env 开关，返回模型回答 + 命中来源。用于把"真实 search 工具"接进 Agent。
+   */
+  async webSearch(query: string, opts: ChatOptions = {}): Promise<HunyuanSearchResult> {
+    const messages: ChatMessage[] = [{ role: "user", content: query }];
+    if (this.isMockMode) {
+      return {
+        query,
+        answer: generateMockResponse(messages),
+        sources: [],
+        mode: this.authFailed ? "unauthorized" : "mock",
+      };
+    }
+    const answer = await this.request(messages, opts, this.config.model, "force");
+    if (this.authFailed) {
+      return { query, answer, sources: [], mode: "unauthorized" };
+    }
+    return { query, answer, sources: [...this.lastSearchSources], mode: "live" };
   }
 
   async visionChat(
@@ -109,8 +151,15 @@ export class HunyuanClient implements LlmClient {
     messages: ChatMessage[],
     opts: ChatOptions,
     model: string,
+    searchMode: "config" | "force" = "config",
   ): Promise<string> {
     const url = `${this.config.baseUrl.replace(/\/$/, "")}/chat/completions`;
+    // force 模式（webSearch 走这里）无视全局 env，强制联网；config 模式按配置。
+    const forced = searchMode === "force";
+    // forceSearch 隐含开启联网搜索；citation 依赖 enableEnhancement + searchInfo。
+    const searchEnabled = forced || this.config.enableEnhancement || this.config.forceSearch;
+    const forceSearch = forced || this.config.forceSearch;
+    const wantSearchInfo = forced || (searchEnabled && this.config.searchInfo);
     const body = {
       model: opts.model ?? model,
       messages: this.toOpenAIMessages(messages),
@@ -118,6 +167,10 @@ export class HunyuanClient implements LlmClient {
       top_p: opts.topP ?? this.config.topP,
       max_tokens: opts.maxTokens ?? this.config.maxTokens,
       stream: false,
+      ...(searchEnabled ? { enable_enhancement: true } : {}),
+      ...(forceSearch ? { force_search_enhancement: true } : {}),
+      ...(wantSearchInfo ? { search_info: true } : {}),
+      ...(wantSearchInfo && this.config.citation ? { citation: true } : {}),
     };
 
     const controller = new AbortController();
@@ -156,6 +209,7 @@ export class HunyuanClient implements LlmClient {
         });
       }
       const data = parsed as OpenAIChatResponse;
+      this.lastSearchSources = data.search_info?.search_results ?? [];
       return data.choices?.[0]?.message?.content ?? "";
     } catch (err) {
       if (err instanceof AgentError) throw err;
@@ -185,3 +239,26 @@ export class HunyuanClient implements LlmClient {
     });
   }
 }
+
+/**
+ * 用混元联网搜索构造一个真实的 `search` 工具 handler，可注册到 ToolHub 的内置 search 槽。
+ * - 调用时强制开启联网搜索（不依赖 HUNYUAN_ENABLE_SEARCH env）。
+ * - 无 key / 鉴权失败时返回 `mode: "mock"|"unauthorized"`，不抛错（与工具语义一致）。
+ */
+export const createHunyuanSearchTool =
+  (client: HunyuanClient): ToolHandler =>
+  async (params: Record<string, unknown>) => {
+    const raw = params["query"];
+    const query = (typeof raw === "string" ? raw : String(raw ?? "")).trim();
+    if (!query) {
+      return { ok: false, error: "search: 缺少 query 参数" };
+    }
+    const r = await client.webSearch(query);
+    return {
+      ok: r.mode === "live",
+      mode: r.mode,
+      query: r.query,
+      answer: r.answer,
+      sources: r.sources,
+    };
+  };

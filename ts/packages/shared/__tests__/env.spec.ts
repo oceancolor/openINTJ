@@ -108,6 +108,23 @@ describe("@openintj/shared env loader", () => {
     expect(s.summary).toContain("set");
   });
 
+  it("summarizeLlmEnv 反映联网搜索开关", () => {
+    const off = summarizeLlmEnv({
+      LLM_PROVIDER: "hunyuan",
+      HUNYUAN_API_KEY: "k",
+    } as NodeJS.ProcessEnv);
+    expect(off.hunyuan.search).toBe(false);
+    expect(off.summary).toContain("search=off");
+
+    const on = summarizeLlmEnv({
+      LLM_PROVIDER: "hunyuan",
+      HUNYUAN_API_KEY: "k",
+      HUNYUAN_ENABLE_SEARCH: "1",
+    } as NodeJS.ProcessEnv);
+    expect(on.hunyuan.search).toBe(true);
+    expect(on.summary).toContain("search=on");
+  });
+
   it("summarizeLlmEnv ollama 分支", () => {
     const s = summarizeLlmEnv({
       LLM_PROVIDER: "ollama",
