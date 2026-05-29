@@ -13,6 +13,7 @@ import { BrowserWindow, app } from "electron";
 import { loadOpenintjEnv, summarizeLlmEnv } from "@openintj/shared";
 import { type DesktopAgent, assembleDesktopAgent } from "./agent.js";
 import { registerIpcHandlers } from "./ipc-handlers.js";
+import { type AutoUpdaterHandle, initAutoUpdater } from "./updater.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,6 +45,7 @@ if (process.env["OPENINTJ_DESKTOP_KEEP_BG_NET"] !== "1") {
 
 let mainWindow: BrowserWindow | undefined;
 let agent: DesktopAgent | undefined;
+let updater: AutoUpdaterHandle | undefined;
 
 const createWindow = (): BrowserWindow => {
   const win = new BrowserWindow({
@@ -96,6 +98,9 @@ void app.whenReady().then(async () => {
   mainWindow = createWindow();
   registerIpcHandlers(agent, mainWindow.webContents);
 
+  // #6 自动更新：仅打包后真正生效；dev/测试为 no-op。
+  updater = initAutoUpdater({ getWebContents: () => mainWindow?.webContents });
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createWindow();
@@ -109,6 +114,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", async () => {
+  updater?.dispose();
   if (agent) {
     try {
       await agent.close();

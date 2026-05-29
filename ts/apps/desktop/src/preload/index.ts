@@ -24,7 +24,11 @@ import {
 } from "../shared/ipc-protocol.js";
 
 const onEvent = (
-  channel: typeof IPC.EVT_TAO | typeof IPC.EVT_REACT | typeof IPC.EVT_AUDIT,
+  channel:
+    | typeof IPC.EVT_TAO
+    | typeof IPC.EVT_REACT
+    | typeof IPC.EVT_AUDIT
+    | typeof IPC.EVT_UPDATE,
   cb: (payload: unknown) => void,
 ): (() => void) => {
   const listener = (_evt: unknown, payload: unknown): void => cb(payload);
@@ -84,6 +88,19 @@ const api = {
   },
   onAuditEvent(cb: (payload: unknown) => void): () => void {
     return onEvent(IPC.EVT_AUDIT, cb);
+  },
+  // ---------- 自动更新 (#6) ----------
+  /** 主动触发一次更新检查。 */
+  updateCheck(): Promise<{ ok: boolean; reason?: string }> {
+    return ipcRenderer.invoke(IPC.UPDATE_CHECK);
+  },
+  /** 退出并安装已下载的更新。 */
+  updateInstall(): Promise<{ ok: boolean; reason?: string }> {
+    return ipcRenderer.invoke(IPC.UPDATE_INSTALL);
+  },
+  /** 订阅更新状态事件（checking / available / downloading / downloaded / error）。 */
+  onUpdateEvent(cb: (payload: unknown) => void): () => void {
+    return onEvent(IPC.EVT_UPDATE, cb);
   },
 };
 

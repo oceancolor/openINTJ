@@ -19,6 +19,10 @@ export interface DormantPersistenceAdapter {
   upsertProposal(proposal: InternalizationProposal): void;
   savePersona(persona: PersonaConfig): void;
   clearAll(): void;
+  /** 删除 ts < olderThanTs 的被动事件，返回删除条数。防 dormant_events 表无限增长。 */
+  pruneEvents(olderThanTs: number): number;
+  /** LRU：仅保留最新的 maxRows 条被动事件（按 ts 降序），删除其余，返回删除条数。 */
+  pruneEventsToMax(maxRows: number): number;
   close(): Promise<void>;
 }
 
@@ -66,6 +70,22 @@ export class InMemoryDormantStore implements DormantPersistenceAdapter {
     this.events.length = 0;
     this.proposals.clear();
     this.persona = undefined;
+  }
+
+  pruneEvents(olderThanTs: number): number {
+    const before = this.events.length;
+    this.events = this.events.filter((e) => e.ts >= olderThanTs);
+    return before - this.events.length;
+  }
+
+  pruneEventsToMax(maxRows: number): number {
+    if (maxRows < 0 || this.events.length <= maxRows) return 0;
+    // 按 ts 升序排出最旧的，删到只剩最新 maxRows 条。
+    const sortedOldFirst = [...this.events].sort((a, b) => a.ts - b.ts);
+    const removed = sortedOldFirst.length - maxRows;
+    const keepIds = new Set(sortedOldFirst.slice(removed).map((e) => e.eventId));
+    this.events = this.events.filter((e) => keepIds.has(e.eventId));
+    return removed;
   }
 
   async close(): Promise<void> {

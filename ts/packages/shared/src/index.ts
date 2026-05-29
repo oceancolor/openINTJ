@@ -12,5 +12,6 @@
  */
 
 export * from "./env.js";
+export * from "./agent-prompt.js";
 
 export const __sharedPlaceholder = true;

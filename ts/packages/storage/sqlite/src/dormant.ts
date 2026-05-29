@@ -116,6 +116,8 @@ export class SqliteDormantStore implements DormantPersistenceAdapter {
   private stmtSelectEvents?: BetterSqliteStmt;
   private stmtSelectProposals?: BetterSqliteStmt;
   private stmtSelectPersona?: BetterSqliteStmt;
+  private stmtPruneOlderThan?: BetterSqliteStmt;
+  private stmtPruneToMax?: BetterSqliteStmt;
 
   constructor(config: SqliteDormantConfigInput) {
     this.config = SqliteDormantConfigSchema.parse(config);
@@ -199,6 +201,13 @@ export class SqliteDormantStore implements DormantPersistenceAdapter {
       "SELECT proposalId, patternJson, targetField, valueJson, status, ts, decidedAt FROM dormant_proposals ORDER BY ts ASC",
     );
     this.stmtSelectPersona = this.db.prepare("SELECT id, json FROM dormant_persona WHERE id = 1");
+    this.stmtPruneOlderThan = this.db.prepare("DELETE FROM dormant_events WHERE ts < ?");
+    this.stmtPruneToMax = this.db.prepare(
+      `DELETE FROM dormant_events
+       WHERE eventId NOT IN (
+         SELECT eventId FROM dormant_events ORDER BY ts DESC, eventId DESC LIMIT ?
+       )`,
+    );
   }
 
   async loadAll(): Promise<DormantSnapshot> {
@@ -294,6 +303,27 @@ export class SqliteDormantStore implements DormantPersistenceAdapter {
     }
   }
 
+  pruneEvents(olderThanTs: number): number {
+    if (!this.stmtPruneOlderThan) return 0;
+    try {
+      return this.stmtPruneOlderThan.run(olderThanTs).changes;
+    } catch (e) {
+      console.error("[SqliteDormantStore] pruneEvents failed:", (e as Error).message);
+      return 0;
+    }
+  }
+
+  pruneEventsToMax(maxRows: number): number {
+    if (!this.stmtPruneToMax) return 0;
+    const limit = Math.max(0, Math.floor(maxRows));
+    try {
+      return this.stmtPruneToMax.run(limit).changes;
+    } catch (e) {
+      console.error("[SqliteDormantStore] pruneEventsToMax failed:", (e as Error).message);
+      return 0;
+    }
+  }
+
   async close(): Promise<void> {
     this.db?.close();
     delete this.db;
@@ -303,6 +333,8 @@ export class SqliteDormantStore implements DormantPersistenceAdapter {
     delete this.stmtSelectEvents;
     delete this.stmtSelectProposals;
     delete this.stmtSelectPersona;
+    delete this.stmtPruneOlderThan;
+    delete this.stmtPruneToMax;
   }
 }
 

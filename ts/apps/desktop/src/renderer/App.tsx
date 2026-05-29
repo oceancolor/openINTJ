@@ -3,6 +3,7 @@ import { type ChatMessage, ChatPanel } from "./components/ChatPanel.js";
 import { DormantPanel } from "./components/DormantPanel.js";
 import { StatusBar, type StatusSnapshot } from "./components/StatusBar.js";
 import { type TrajectoryEntry, TrajectoryPanel } from "./components/TrajectoryPanel.js";
+import { UpdateBanner } from "./components/UpdateBanner.js";
 import "./types.js";
 
 type RightTab = "trajectory" | "dormant";
@@ -101,6 +102,7 @@ export const App = (): JSX.Element => {
         <span className="text-base font-semibold">OpenINTJ</span>
         <span className="text-xs text-gray-500">v3.0 Local Desktop</span>
       </header>
+      <UpdateBanner />
       <div className="flex-1 grid grid-cols-[1fr_380px] min-h-0">
         <ChatPanel messages={messages} onSend={(t) => void handleSend(t)} pending={pending} />
         <div className="flex flex-col h-full bg-[#11111b] border-l border-gray-800">

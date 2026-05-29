@@ -154,6 +154,33 @@ describeIfPeer("SqliteDormantStore (:memory:)", () => {
     expect(snap.persona).toBeUndefined();
   });
 
+  it("pruneEvents 按时间删除旧事件并返回删除条数", async () => {
+    store.recordEvent(sampleEvent("e1", 1000, "a"));
+    store.recordEvent(sampleEvent("e2", 2000, "b"));
+    store.recordEvent(sampleEvent("e3", 3000, "c"));
+    const removed = store.pruneEvents(2500);
+    expect(removed).toBe(2);
+    const snap = await store.loadAll();
+    expect(snap.events.map((e) => e.eventId)).toEqual(["e3"]);
+  });
+
+  it("pruneEventsToMax 仅保留最新 N 条（按 ts 降序）", async () => {
+    store.recordEvent(sampleEvent("e1", 1000, "a"));
+    store.recordEvent(sampleEvent("e2", 2000, "b"));
+    store.recordEvent(sampleEvent("e3", 3000, "c"));
+    store.recordEvent(sampleEvent("e4", 4000, "d"));
+    const removed = store.pruneEventsToMax(2);
+    expect(removed).toBe(2);
+    const snap = await store.loadAll();
+    expect(snap.events.map((e) => e.eventId)).toEqual(["e3", "e4"]);
+  });
+
+  it("pruneEventsToMax 容量足够时不删", async () => {
+    store.recordEvent(sampleEvent("e1", 1000, "a"));
+    expect(store.pruneEventsToMax(10)).toBe(0);
+    expect((await store.loadAll()).events).toHaveLength(1);
+  });
+
   it("name 包含 dbPath，便于审计", () => {
     expect(store.name).toBe("sqlite-dormant::memory:");
   });

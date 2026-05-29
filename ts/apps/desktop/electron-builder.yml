@@ -2,6 +2,12 @@ appId: ai.openintj.desktop
 productName: OpenINTJ
 copyright: Copyright (c) 2026 OpenINTJ
 asar: true
+# 原生模块（better-sqlite3 / lancedb / *.node）必须从 asar 解包，否则打包后运行时加载失败。
+asarUnpack:
+  - "**/node_modules/better-sqlite3/**"
+  - "**/node_modules/@lancedb/**"
+  - "**/node_modules/apache-arrow/**"
+  - "**/*.node"
 directories:
   buildResources: resources
   output: release
@@ -11,8 +17,12 @@ files:
   - "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md,readme}"
 extraMetadata:
   main: out/main/index.js
+# 发布源：打包时据此生成 app-update.yml，供 electron-updater 拉取 GitHub Release。
+# owner/repo 默认从 package.json 的 repository 字段推断；CI 上可用 GH_TOKEN 上传。
 publish:
   provider: github
+  owner: oceancolor
+  repo: openINTJ
   releaseType: release
 win:
   target:
@@ -22,8 +32,6 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  installerIcon: resources/icon.ico
-  uninstallerIcon: resources/icon.ico
   shortcutName: OpenINTJ
 mac:
   target:

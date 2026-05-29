@@ -168,6 +168,28 @@ export const DormantPersonaResponseSchema = z.object({
 });
 export type DormantPersonaResponse = z.infer<typeof DormantPersonaResponseSchema>;
 
+// ---------- Auto Update (electron-updater, #6) ----------
+
+/** 自动更新状态事件（main → renderer 推送）。 */
+export const UpdateEventSchema = z.object({
+  status: z.enum([
+    "checking",
+    "available",
+    "not-available",
+    "downloading",
+    "downloaded",
+    "error",
+    "disabled",
+  ]),
+  /** 目标版本号（available / downloaded 时存在）。 */
+  version: z.string().optional(),
+  /** 下载进度百分比 0-100（downloading 时存在）。 */
+  percent: z.number().optional(),
+  /** 错误或提示信息。 */
+  message: z.string().optional(),
+});
+export type UpdateEvent = z.infer<typeof UpdateEventSchema>;
+
 /** Phase 3.3 起：approve/reject 失败时返回的错误 shape。 */
 export const DormantDecisionErrorSchema = z.object({
   error: z.union([
@@ -194,10 +216,14 @@ export const IPC = {
   DORMANT_APPROVE: "openintj:dormant.approve",
   DORMANT_REJECT: "openintj:dormant.reject",
   DORMANT_PERSONA: "openintj:dormant.persona",
+  // #6 自动更新
+  UPDATE_CHECK: "openintj:update.check",
+  UPDATE_INSTALL: "openintj:update.install",
   // server-push events
   EVT_TAO: "openintj:evt.tao",
   EVT_REACT: "openintj:evt.react",
   EVT_AUDIT: "openintj:evt.audit",
+  EVT_UPDATE: "openintj:evt.update",
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

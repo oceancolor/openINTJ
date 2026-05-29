@@ -1,0 +1,77 @@
+name: Release
+
+# 打 tag（v3.0.0 等）时构建 Win/macOS 安装包并发布到 GitHub Release。
+# electron-updater 从该 Release 拉取更新（latest.yml / latest-mac.yml + 安装包）。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: ts
+    shell: bash
+
+env:
+  TURBO_TELEMETRY_DISABLED: 1
+  NODE_OPTIONS: "--max-old-space-size=6144"
+
+jobs:
+  package:
+    name: Package ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            flag: "--win"
+          - os: macos-latest
+            flag: "--mac"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: ts/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace (incl. electron-vite bundle)
+        run: pnpm exec turbo run build --concurrency=1
+
+      - name: Align native module ABI to Electron
+        working-directory: ts/apps/desktop
+        run: node scripts/ensure-electron-abi.cjs
+
+      - name: Package & publish
+        working-directory: ts/apps/desktop
+        env:
+          # electron-builder 用 GH_TOKEN 上传安装包到 GitHub Release。
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm exec electron-builder --config electron-builder.yml ${{ matrix.flag }} --publish always
+
+      - name: Upload installers as workflow artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openintj-${{ matrix.os }}
+          path: |
+            ts/apps/desktop/release/*.exe
+            ts/apps/desktop/release/*.dmg
+            ts/apps/desktop/release/*.zip
+            ts/apps/desktop/release/*.yml
+          retention-days: 14
+          if-no-files-found: ignore

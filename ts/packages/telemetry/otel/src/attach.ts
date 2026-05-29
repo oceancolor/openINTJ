@@ -112,6 +112,7 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
   const cToolErrors = c("openintj.tool.errors", "ToolHub 错误次数");
   const cPolicyBlocked = c("openintj.policy.blocked", "Governance 拦截次数");
   const cMemoryLoaded = c("openintj.memory.loaded", "Memory 加载的 fragment 总数");
+  const cSearchSources = c("openintj.search.sources", "search 工具命中的联网来源数");
 
   const getTrace = (traceId: string): TraceState => {
     let st = traces.get(traceId);
@@ -135,6 +136,33 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
    * 这样我们能拿到 span 引用并稍后在另一个 handler 里 end。
    * parent context 通过 `trace.setSpan(...)` 显式构造。
    */
+  // 从 search 工具结果里抽取可观测属性（来源数 / 来源 URL / 联网模式）。
+  const SEARCH_URL_ATTR_MAX = 5;
+  const extractSearchAttributes = (
+    output: unknown,
+  ): { attrs: Record<string, string | number | boolean>; count: number; mode: string } => {
+    const attrs: Record<string, string | number | boolean> = {};
+    let count = 0;
+    let mode = "unknown";
+    if (output && typeof output === "object") {
+      const o = output as { mode?: unknown; sources?: unknown };
+      if (typeof o.mode === "string") {
+        mode = o.mode;
+        attrs["search.mode"] = o.mode;
+      }
+      if (Array.isArray(o.sources)) {
+        count = o.sources.length;
+        attrs["search.sources_count"] = count;
+        const urls = (o.sources as Array<{ url?: unknown }>)
+          .map((s) => (typeof s?.url === "string" ? s.url : undefined))
+          .filter((u): u is string => Boolean(u))
+          .slice(0, SEARCH_URL_ATTR_MAX);
+        if (urls.length > 0) attrs["search.urls"] = urls.join(",");
+      }
+    }
+    return { attrs, count, mode };
+  };
+
   const startSpan = (name: string, parent?: Context): { span: Span; ctx: Context } => {
     const span = parent ? tracer.startSpan(name, undefined, parent) : tracer.startSpan(name);
     for (const [k, v] of Object.entries(defaults)) span.setAttribute(k, v);
@@ -240,8 +268,15 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
       safe<HookEventMap["react.afterAction"]>((payload, hookCtx) => {
         const st = traces.get(hookCtx.traceId);
         const toolName = payload.toolResult.toolName;
+        const isSearchHit = toolName === "search" && payload.toolResult.success;
+        const search = isSearchHit
+          ? extractSearchAttributes(payload.toolResult.output)
+          : undefined;
         if (enableTraces && st?.action) {
           st.action.span.setAttribute("react.result.success", payload.toolResult.success);
+          if (search) {
+            for (const [k, v] of Object.entries(search.attrs)) st.action.span.setAttribute(k, v);
+          }
           if (!payload.toolResult.success) {
             st.action.span.setStatus({ code: SpanStatusCode.ERROR });
           }
@@ -253,6 +288,7 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
           tool: toolName,
           success: payload.toolResult.success ? "true" : "false",
         });
+        if (search) cSearchSources?.add(search.count, { mode: search.mode });
         clearTraceIfEmpty(hookCtx.traceId);
       }),
     ),
@@ -281,6 +317,10 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
         const frame = st?.tools.get(payload.tool);
         if (enableTraces && frame) {
           frame.span.setAttribute("tool.success", payload.result.success);
+          if (payload.tool === "search" && payload.result.success) {
+            const { attrs } = extractSearchAttributes(payload.result.output);
+            for (const [k, v] of Object.entries(attrs)) frame.span.setAttribute(k, v);
+          }
           if (!payload.result.success) {
             frame.span.setStatus({ code: SpanStatusCode.ERROR });
           }

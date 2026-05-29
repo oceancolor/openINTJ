@@ -129,6 +129,43 @@ describe("attachOtelToHooks — metrics", () => {
     otel.dispose();
   });
 
+  it("counts openintj.search.sources from search tool hits", async () => {
+    const bus = new HookBus();
+    const otel = attachOtelToHooks(bus);
+    const traceId = "trace-search-metric";
+    const result = {
+      toolName: "search",
+      success: true,
+      output: {
+        mode: "live",
+        sources: [{ url: "https://a" }, { url: "https://b" }, { url: "https://c" }],
+      },
+      durationMs: 1,
+      traceId,
+      callId: "s1",
+    };
+
+    await bus.emit("tao.beforeThink", { query: "q", iteration: 0 }, { traceId });
+    await bus.emit(
+      "react.beforeAction",
+      { tool: "search", params: {}, reactIter: 0, taoIter: 0 },
+      { traceId },
+    );
+    await bus.emit(
+      "react.afterAction",
+      { toolResult: result, reactIter: 0, taoIter: 0 },
+      { traceId },
+    );
+    await bus.emit("tao.afterObserve", { needsContinue: false, iteration: 0 }, { traceId });
+
+    const series = await flush();
+    const sourceSeries = series.filter((s) => s.name === "openintj.search.sources");
+    expect(sourceSeries.reduce((a, b) => a + b.sum, 0)).toBe(3);
+    expect(sourceSeries[0]?.attrs["mode"]).toBe("live");
+
+    otel.dispose();
+  });
+
   it("counts policy.onBlock and event.MEMORY_LOADED", async () => {
     const bus = new HookBus();
     const otel = attachOtelToHooks(bus);

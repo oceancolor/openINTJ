@@ -46,6 +46,21 @@ export class PassiveStore {
     return this.events.length;
   }
 
+  /** 删除 ts < olderThanTs 的事件，返回删除条数。 */
+  pruneOlderThan(olderThanTs: number): number {
+    const before = this.events.length;
+    this.events = this.events.filter((e) => e.ts >= olderThanTs);
+    return before - this.events.length;
+  }
+
+  /** 仅保留最新（按插入序近似时间序）的 maxRows 条事件，删除其余，返回删除条数。 */
+  pruneToMax(maxRows: number): number {
+    if (maxRows < 0 || this.events.length <= maxRows) return 0;
+    const removed = this.events.length - maxRows;
+    this.events = this.events.slice(removed);
+    return removed;
+  }
+
   clear(): void {
     this.events.length = 0;
   }

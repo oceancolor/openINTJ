@@ -39,6 +39,16 @@ export interface DormantRuntimeOpts {
   eventIdPrefix?: string;
   /** 可选持久化适配器；不传则纯内存。 */
   adapter?: DormantPersistenceAdapter;
+  /**
+   * 事件保留时长（毫秒）。设置后，每次 `mine()` 末尾自动清理早于
+   * `Date.now() - eventRetentionMs` 的被动事件（内存 + 持久化），防 dormant_events 无限增长。
+   */
+  eventRetentionMs?: number;
+  /**
+   * 磁盘/内存事件 LRU 上限。设置后，每次 `mine()` 末尾自动把事件裁到最新 maxDiskEvents 条。
+   * 与 eventRetentionMs 可叠加（先按时间清，再按条数裁）。
+   */
+  maxDiskEvents?: number;
 }
 
 export interface DormantMineResult {
@@ -55,6 +65,8 @@ export class DormantRuntime {
   readonly adapter?: DormantPersistenceAdapter;
   private readonly eventIdPrefix: string;
   private eventSeq = 0;
+  private readonly eventRetentionMs?: number;
+  private readonly maxDiskEvents?: number;
 
   constructor(opts: DormantRuntimeOpts = {}) {
     this.passive = new PassiveStore(opts.maxPassiveEvents ?? 10_000);
@@ -65,6 +77,8 @@ export class DormantRuntime {
     );
     this.eventIdPrefix = opts.eventIdPrefix ?? "evt";
     if (opts.adapter) this.adapter = opts.adapter;
+    if (opts.eventRetentionMs !== undefined) this.eventRetentionMs = opts.eventRetentionMs;
+    if (opts.maxDiskEvents !== undefined) this.maxDiskEvents = opts.maxDiskEvents;
   }
 
   /**
@@ -103,13 +117,41 @@ export class DormantRuntime {
     return event;
   }
 
-  /** 触发一次挖掘 + 提案生成。 */
+  /** 触发一次挖掘 + 提案生成。末尾按配置自动清理被动事件（防磁盘表无限增长）。 */
   async mine(): Promise<DormantMineResult> {
     const events = this.passive.exportAll();
     const patterns = await this.miner.mine(events);
     const proposals = this.internalization.proposeBatch(patterns.map((p) => ({ ...p })));
     for (const p of proposals) this.adapter?.upsertProposal(p);
+    this.maybeAutoPrune();
     return { patterns, proposals, scannedEvents: events.length };
+  }
+
+  /**
+   * 按时间清理：删除早于 olderThanTs 的被动事件（内存 PassiveStore + 持久化）。
+   * 返回内存中删除的条数。
+   */
+  pruneEvents(olderThanTs: number): number {
+    const removed = this.passive.pruneOlderThan(olderThanTs);
+    this.adapter?.pruneEvents(olderThanTs);
+    return removed;
+  }
+
+  /** LRU 清理：仅保留最新的 maxRows 条被动事件（内存 + 持久化）。返回内存中删除的条数。 */
+  pruneEventsToMax(maxRows: number): number {
+    const removed = this.passive.pruneToMax(maxRows);
+    this.adapter?.pruneEventsToMax(maxRows);
+    return removed;
+  }
+
+  /** 按 opts.eventRetentionMs / maxDiskEvents 自动清理；均未配置时 no-op。 */
+  private maybeAutoPrune(): void {
+    if (this.eventRetentionMs !== undefined) {
+      this.pruneEvents(Date.now() - this.eventRetentionMs);
+    }
+    if (this.maxDiskEvents !== undefined) {
+      this.pruneEventsToMax(this.maxDiskEvents);
+    }
   }
 
   listProposals(status?: InternalizationProposal["status"]): InternalizationProposal[] {

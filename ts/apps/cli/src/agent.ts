@@ -17,6 +17,7 @@ import { ControlPlane } from "@openintj/plane-control";
 import { Executor, ToolHub } from "@openintj/plane-execution";
 import { GovernancePlane } from "@openintj/plane-governance";
 import { ContextEngine, MemoryPlane } from "@openintj/plane-memory";
+import { DEFAULT_AGENT_SYSTEM_PROMPT, appendSourcesFooter } from "@openintj/shared";
 
 export type LlmProvider = "auto" | "hunyuan" | "ollama" | "mock";
 
@@ -124,7 +125,7 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
     hooks,
     react,
     availableTools: () => toolHub.list(),
-    ...(opts.systemPrompt ? { systemPrompt: opts.systemPrompt } : {}),
+    systemPrompt: opts.systemPrompt ?? DEFAULT_AGENT_SYSTEM_PROMPT,
   });
 
   return {
@@ -139,6 +140,7 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
     async run(query: string) {
       memory.recordUserInput(query);
       const result = await tao.run(query);
+      result.finalAnswer = appendSourcesFooter(result.finalAnswer, result.trajectory);
       memory.recordAssistantOutput(result.finalAnswer);
       return result;
     },

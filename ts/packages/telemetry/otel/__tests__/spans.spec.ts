@@ -115,6 +115,75 @@ describe("attachOtelToHooks — span tree", () => {
     otel.dispose();
   });
 
+  it("attaches search source attributes to action + tool spans", async () => {
+    const bus = new HookBus();
+    const otel = attachOtelToHooks(bus);
+    const traceId = "trace-search";
+    const searchOutput = {
+      ok: true,
+      mode: "live",
+      query: "今天日期",
+      answer: "…",
+      sources: [
+        { title: "A", url: "https://a.example" },
+        { title: "B", url: "https://b.example" },
+      ],
+    };
+
+    await bus.emit("tao.beforeThink", { query: "今天日期", iteration: 0 }, { traceId });
+    await bus.emit(
+      "react.beforeAction",
+      { tool: "search", params: { query: "今天日期" }, reactIter: 0, taoIter: 0 },
+      { traceId },
+    );
+    await bus.emit(
+      "tool.beforeCall",
+      { tool: "search", params: {}, toolDescriptor: { ...noopDescriptor, name: "search" } },
+      { traceId },
+    );
+    await bus.emit(
+      "tool.afterCall",
+      {
+        tool: "search",
+        result: {
+          toolName: "search",
+          success: true,
+          output: searchOutput,
+          durationMs: 1,
+          traceId,
+          callId: "s1",
+        },
+      },
+      { traceId },
+    );
+    await bus.emit(
+      "react.afterAction",
+      {
+        toolResult: {
+          toolName: "search",
+          success: true,
+          output: searchOutput,
+          durationMs: 1,
+          traceId,
+          callId: "s1",
+        },
+        reactIter: 0,
+        taoIter: 0,
+      },
+      { traceId },
+    );
+    await bus.emit("tao.afterObserve", { needsContinue: false, iteration: 0 }, { traceId });
+
+    const tool = exporter.getFinishedSpans().find((s) => s.name === "openintj.tool.call")!;
+    const action = exporter.getFinishedSpans().find((s) => s.name === "openintj.react.action")!;
+    expect(tool.attributes["search.sources_count"]).toBe(2);
+    expect(tool.attributes["search.mode"]).toBe("live");
+    expect(tool.attributes["search.urls"]).toBe("https://a.example,https://b.example");
+    expect(action.attributes["search.sources_count"]).toBe(2);
+
+    otel.dispose();
+  });
+
   it("marks failed tool calls as ERROR status with exception", async () => {
     const bus = new HookBus();
     const otel = attachOtelToHooks(bus);

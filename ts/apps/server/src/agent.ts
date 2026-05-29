@@ -24,6 +24,7 @@ import {
   type PersistentMemoryStore,
   createPersistentMemoryStore,
 } from "@openintj/plane-memory";
+import { DEFAULT_AGENT_SYSTEM_PROMPT, appendSourcesFooter } from "@openintj/shared";
 import { createSqliteDormantStore } from "@openintj/storage-sqlite";
 import {
   type AttachOtelOpts,
@@ -238,6 +239,8 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
   const dormant = dormantEnabled
     ? new DormantRuntime({
         eventIdPrefix: "server",
+        // 默认给磁盘事件一个 LRU 上限，防 dormant_events 无限增长；显式 dormantOpts 可覆盖。
+        maxDiskEvents: 50_000,
         ...(opts.dormantOpts ?? {}),
         ...(dormantAdapter ? { adapter: dormantAdapter } : {}),
       })
@@ -293,12 +296,12 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
   const tao = new TaoLoop({
     config: {
       ...DEFAULT_TAO_CONFIG,
-      maxTaoIterations: opts.maxTaoIterations ?? 1,
+      maxTaoIterations: opts.maxTaoIterations ?? 2,
     },
     hooks,
     react,
     availableTools: () => toolHub.list(),
-    ...(opts.systemPrompt ? { systemPrompt: opts.systemPrompt } : {}),
+    systemPrompt: opts.systemPrompt ?? DEFAULT_AGENT_SYSTEM_PROMPT,
   });
 
   return {
@@ -320,6 +323,8 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
       memory.recordUserInput(query);
       if (dormant) dormant.record(query, "user", { stage: "run.input" });
       const result = await tao.run(query);
+      // 把 search 工具命中的联网来源追加到答案末尾 → 随记忆/dormant 一起入库。
+      result.finalAnswer = appendSourcesFooter(result.finalAnswer, result.trajectory);
       memory.recordAssistantOutput(result.finalAnswer);
       if (dormant)
         dormant.record(result.finalAnswer, "agent", {

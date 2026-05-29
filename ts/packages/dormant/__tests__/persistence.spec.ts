@@ -101,6 +101,34 @@ describe("InMemoryDormantStore", () => {
     const snap2 = await s.loadAll();
     expect(snap2.events[0]!.metadata).toEqual({ k: "v" });
   });
+
+  it("pruneEvents 按时间删除旧事件", async () => {
+    const s = new InMemoryDormantStore();
+    for (const ts of [100, 200, 300, 400]) {
+      s.recordEvent({ eventId: `e${ts}`, ts, source: "user", text: "x", metadata: {} });
+    }
+    const removed = s.pruneEvents(300);
+    expect(removed).toBe(2);
+    const snap = await s.loadAll();
+    expect(snap.events.map((e) => e.eventId)).toEqual(["e300", "e400"]);
+  });
+
+  it("pruneEventsToMax 仅保留最新 N 条（按 ts）", async () => {
+    const s = new InMemoryDormantStore();
+    for (const ts of [100, 400, 200, 300]) {
+      s.recordEvent({ eventId: `e${ts}`, ts, source: "user", text: "x", metadata: {} });
+    }
+    const removed = s.pruneEventsToMax(2);
+    expect(removed).toBe(2);
+    const snap = await s.loadAll();
+    expect(snap.events.map((e) => e.ts).sort((a, b) => a - b)).toEqual([300, 400]);
+  });
+
+  it("pruneEventsToMax 容量足够时不删", () => {
+    const s = new InMemoryDormantStore();
+    s.recordEvent({ eventId: "e1", ts: 1, source: "user", text: "x", metadata: {} });
+    expect(s.pruneEventsToMax(5)).toBe(0);
+  });
 });
 
 describe("DormantRuntime + adapter（hydrate / write-through）", () => {
@@ -207,6 +235,40 @@ describe("DormantRuntime + adapter（hydrate / write-through）", () => {
     expect(snap.proposals).toEqual([]);
 
     await rt.close();
+  });
+
+  it("pruneEvents / pruneEventsToMax 同时清理内存与 adapter", async () => {
+    const adapter = new InMemoryDormantStore();
+    const rt = new DormantRuntime({ adapter });
+    await rt.hydrate();
+    for (const ts of [1, 2, 3, 4, 5]) {
+      adapter.recordEvent({ eventId: `e${ts}`, ts, source: "user", text: "x", metadata: {} });
+    }
+    await rt.hydrate();
+    expect(rt.passiveSize()).toBe(5);
+
+    const removedByTime = rt.pruneEvents(3);
+    expect(removedByTime).toBe(2);
+    expect(rt.passiveSize()).toBe(3);
+    expect((await adapter.loadAll()).events).toHaveLength(3);
+
+    const removedByMax = rt.pruneEventsToMax(1);
+    expect(removedByMax).toBe(2);
+    expect(rt.passiveSize()).toBe(1);
+    expect((await adapter.loadAll()).events).toHaveLength(1);
+  });
+
+  it("mine() 末尾按 eventRetentionMs / maxDiskEvents 自动清理", async () => {
+    const adapter = new InMemoryDormantStore();
+    const rt = new DormantRuntime({ adapter, maxDiskEvents: 2 });
+    await rt.hydrate();
+    rt.record("a", "user");
+    rt.record("b", "user");
+    rt.record("c", "user");
+    expect(rt.passiveSize()).toBe(3);
+    await rt.mine();
+    expect(rt.passiveSize()).toBe(2);
+    expect((await adapter.loadAll()).events).toHaveLength(2);
   });
 
   it("hydrate 可以多次调用安全（每次全量覆写）", async () => {
