@@ -1,4 +1,5 @@
 import type { Command } from "../types/command-event.js";
+import type { MemoryFragment } from "../types/memory-fragment.js";
 import type { LODLevelType, ShaderModeType } from "../types/shader.js";
 import type { ToolCallResult, ToolDescriptor } from "../types/tool.js";
 
@@ -127,6 +128,12 @@ export interface HookEventMap {
 
   // -------- Event (对齐 Python EventType) --------
   "event.MEMORY_LOADED": { count: number; budgetUsage: number };
+  /**
+   * 记忆写入 change-feed：MemoryStore 每次 add/晋升/移除时发出。
+   * 消费方（如 session 级 HybridRetriever）据此做增量 upsert/remove，免去全量重建。
+   * op=add 新增；op=update 已存在片段元数据变化（如短期溢出晋升为长期）；op=remove 移除。
+   */
+  "event.MEMORY_WRITTEN": { fragment: MemoryFragment; op: "add" | "update" | "remove" };
   "event.CONTEXT_COMPACTED": {
     compactedMessages: number;
     newBudgetUsage: number;
@@ -209,11 +216,7 @@ export const eventCategory = (event: string): HookCategory => {
   if (event.startsWith("tool.")) return "tool";
   if (event.startsWith("event.")) return "event";
   if (event.startsWith("policy.")) return "policy";
-  if (
-    event.startsWith("pool.") ||
-    event.startsWith("forkjoin.") ||
-    event.startsWith("task.")
-  ) {
+  if (event.startsWith("pool.") || event.startsWith("forkjoin.") || event.startsWith("task.")) {
     return "concurrency";
   }
   return "lifecycle";

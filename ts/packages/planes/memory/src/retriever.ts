@@ -135,3 +135,32 @@ export class MemoryRetriever {
 
 /** SimpleEmbedder 默认导出方便用户快速创建。 */
 export { SimpleEmbedder };
+
+/**
+ * 把外部检索器（如 HybridRetriever）返回的 {id, score} 解析回 RankedMemory[]，
+ * 供 ContextEngine.candidateRetrieve 使用（A1.3）。
+ *
+ * - 从 store 按 id 查回完整 MemoryFragment（含 importance/summaries/timestamp，供后续着色/衰减）。
+ * - 复用 MemoryRetriever 的 taskType 命中 ×1.3 加成，保持与默认路径行为一致。
+ * - 命中片段 bump accessCount / lastAccessed（与默认路径一致，强化「常用更近」）。
+ * - 命中不到的 id 跳过（容忍 change-feed 与 store 之间的瞬时不一致）。
+ */
+export const fragmentsToRanked = (
+  store: MemoryStore,
+  scored: ReadonlyArray<{ id: string; score: number }>,
+  opts: { taskType?: TaskTypeType; clock?: () => number } = {},
+): RankedMemory[] => {
+  const byId = new Map(store.all.map((f) => [f.fragmentId, f]));
+  const now = opts.clock ? opts.clock() : Date.now() / 1000;
+  const out: RankedMemory[] = [];
+  for (const s of scored) {
+    const fragment = byId.get(s.id);
+    if (!fragment) continue;
+    let score = s.score;
+    if (opts.taskType && fragment.taskTags.includes(opts.taskType)) score *= 1.3;
+    fragment.accessCount += 1;
+    fragment.lastAccessed = now;
+    out.push({ fragment, score, components: { relevance: s.score, keyword: 0, recency: 0 } });
+  }
+  return out;
+};

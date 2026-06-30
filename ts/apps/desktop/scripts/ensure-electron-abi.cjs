@@ -76,9 +76,7 @@ const main = () => {
     return;
   }
   if (!loaded.ok) {
-    console.log(
-      `[ensure-electron-abi] better-sqlite3 未装或异常，跳过 rebuild：${loaded.reason}`,
-    );
+    console.log(`[ensure-electron-abi] better-sqlite3 未装或异常，跳过 rebuild：${loaded.reason}`);
     return;
   }
 

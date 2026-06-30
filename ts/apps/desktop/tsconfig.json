@@ -24,6 +24,7 @@
     { "path": "../../packages/storage/lance" },
     { "path": "../../packages/storage/sqlite" },
     { "path": "../../packages/taskpool" },
+    { "path": "../../packages/classifier" },
     { "path": "../../packages/telemetry/otel" }
   ]
 }

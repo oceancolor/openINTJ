@@ -193,9 +193,17 @@ export class HybridRetriever<D extends HybridDoc = HybridDoc> {
     this.avgDocLen = 0;
   }
 
-  search(query: string, queryVector: readonly number[] | undefined, topK = 10): HybridScored<D>[] {
+  search(
+    query: string,
+    queryVector: readonly number[] | undefined,
+    topK = 10,
+    configOverride?: Partial<HybridConfig>,
+  ): HybridScored<D>[] {
     if (this.docs.length === 0) return [];
 
+    // 融合权重（alpha/beta/k1/b/useRRF/rrfK）全是 search-time 量，不影响已建索引 →
+    // 允许按查询覆盖（如 /api/memory 的 rrf 开关），无需重建。
+    const cfg = configOverride ? { ...this.config, ...configOverride } : this.config;
     const qTokens = tokenize(query);
     const N = this.docs.length;
 
@@ -213,13 +221,13 @@ export class HybridRetriever<D extends HybridDoc = HybridDoc> {
       const tf = new Map<string, number>();
       for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
       const docLen = tokens.length;
-      const lenNorm = 1 - this.config.b + this.config.b * (docLen / Math.max(1, this.avgDocLen));
+      const lenNorm = 1 - cfg.b + cfg.b * (docLen / Math.max(1, this.avgDocLen));
       for (const qt of qTokens) {
         const f = tf.get(qt) ?? 0;
         if (f === 0) continue;
         const df = this.docFreq.get(qt) ?? 0;
         const idf = Math.log(1 + (N - df + 0.5) / (df + 0.5));
-        bm25 += idf * ((f * (this.config.k1 + 1)) / (f + this.config.k1 * lenNorm));
+        bm25 += idf * ((f * (cfg.k1 + 1)) / (f + cfg.k1 * lenNorm));
       }
       bm25Scores.push(bm25);
     }
@@ -234,7 +242,7 @@ export class HybridRetriever<D extends HybridDoc = HybridDoc> {
     const bN = norm(bm25Scores);
 
     let scored: HybridScored<D>[];
-    if (this.config.useRRF) {
+    if (cfg.useRRF) {
       // RRF 融合
       const vRanked = vectorScores
         .map((s, i) => ({ i, s }))
@@ -245,8 +253,8 @@ export class HybridRetriever<D extends HybridDoc = HybridDoc> {
         .sort((a, b) => b.s - a.s)
         .map((r, rank) => ({ i: r.i, rank: rank + 1 }));
       const rrf = new Array(this.docs.length).fill(0) as number[];
-      for (const r of vRanked) rrf[r.i] = (rrf[r.i] ?? 0) + 1 / (this.config.rrfK + r.rank);
-      for (const r of bRanked) rrf[r.i] = (rrf[r.i] ?? 0) + 1 / (this.config.rrfK + r.rank);
+      for (const r of vRanked) rrf[r.i] = (rrf[r.i] ?? 0) + 1 / (cfg.rrfK + r.rank);
+      for (const r of bRanked) rrf[r.i] = (rrf[r.i] ?? 0) + 1 / (cfg.rrfK + r.rank);
       scored = this.docs.map((doc, i) => ({
         doc,
         score: rrf[i] ?? 0,
@@ -259,7 +267,7 @@ export class HybridRetriever<D extends HybridDoc = HybridDoc> {
     } else {
       scored = this.docs.map((doc, i) => ({
         doc,
-        score: this.config.alpha * (vN[i] ?? 0) + this.config.beta * (bN[i] ?? 0),
+        score: cfg.alpha * (vN[i] ?? 0) + cfg.beta * (bN[i] ?? 0),
         components: {
           vector: vectorScores[i] ?? 0,
           bm25: bm25Scores[i] ?? 0,

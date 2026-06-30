@@ -37,10 +37,7 @@ describe("selectConsistentAnswer", () => {
   });
 
   it("first strategy returns first candidate", () => {
-    const got = selectConsistentAnswer(
-      [{ finalAnswer: "one" }, { finalAnswer: "two" }],
-      "first",
-    );
+    const got = selectConsistentAnswer([{ finalAnswer: "one" }, { finalAnswer: "two" }], "first");
     expect(got?.finalAnswer).toBe("one");
   });
 });

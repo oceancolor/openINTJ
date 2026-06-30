@@ -7,6 +7,7 @@ packages:
   - "packages/telemetry/*"
   - "packages/concurrency"
   - "packages/taskpool"
+  - "packages/classifier"
   - "packages/dormant"
   - "packages/shared"
   - "apps/*"

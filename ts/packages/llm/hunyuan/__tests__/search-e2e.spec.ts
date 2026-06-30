@@ -20,40 +20,32 @@ const RUN_E2E =
 const describeE2E = RUN_E2E ? describe : describe.skip;
 
 describeE2E("Hunyuan search 真盘冒烟（OPENINTJ_E2E=1 + HUNYUAN_API_KEY）", () => {
-  it(
-    "client.webSearch 走 live 链路并返回非空回答",
-    async () => {
-      const client = new HunyuanClient(loadHunyuanConfigFromEnv(process.env));
-      expect(client.isMockMode).toBe(false);
+  it("client.webSearch 走 live 链路并返回非空回答", async () => {
+    const client = new HunyuanClient(loadHunyuanConfigFromEnv(process.env));
+    expect(client.isMockMode).toBe(false);
 
-      const result = await client.webSearch("2026 年值得关注的 AI 进展有哪些？");
-      expect(result.mode).toBe("live");
-      expect(typeof result.answer).toBe("string");
-      expect(result.answer.trim().length).toBeGreaterThan(0);
-      // 来源数随实时检索波动，仅记录不强断言。
-      console.log(
-        `[search e2e] webSearch sources=${result.sources.length} answer.len=${result.answer.length}`,
-      );
-    },
-    60_000,
-  );
+    const result = await client.webSearch("2026 年值得关注的 AI 进展有哪些？");
+    expect(result.mode).toBe("live");
+    expect(typeof result.answer).toBe("string");
+    expect(result.answer.trim().length).toBeGreaterThan(0);
+    // 来源数随实时检索波动，仅记录不强断言。
+    console.log(
+      `[search e2e] webSearch sources=${result.sources.length} answer.len=${result.answer.length}`,
+    );
+  }, 60_000);
 
-  it(
-    "createHunyuanSearchTool 作为 ToolHandler 返回 ok=true",
-    async () => {
-      const client = new HunyuanClient(loadHunyuanConfigFromEnv(process.env));
-      const tool = createHunyuanSearchTool(client);
-      const out = (await tool({ query: "OpenINTJ 是什么类型的项目？给出最新公开信息" })) as {
-        ok?: boolean;
-        mode?: string;
-        answer?: string;
-        sources?: unknown[];
-      };
-      expect(out.ok).toBe(true);
-      expect(out.mode).toBe("live");
-      expect((out.answer ?? "").trim().length).toBeGreaterThan(0);
-      console.log(`[search e2e] tool sources=${(out.sources ?? []).length}`);
-    },
-    60_000,
-  );
+  it("createHunyuanSearchTool 作为 ToolHandler 返回 ok=true", async () => {
+    const client = new HunyuanClient(loadHunyuanConfigFromEnv(process.env));
+    const tool = createHunyuanSearchTool(client);
+    const out = (await tool({ query: "OpenINTJ 是什么类型的项目？给出最新公开信息" })) as {
+      ok?: boolean;
+      mode?: string;
+      answer?: string;
+      sources?: unknown[];
+    };
+    expect(out.ok).toBe(true);
+    expect(out.mode).toBe("live");
+    expect((out.answer ?? "").trim().length).toBeGreaterThan(0);
+    console.log(`[search e2e] tool sources=${(out.sources ?? []).length}`);
+  }, 60_000);
 });

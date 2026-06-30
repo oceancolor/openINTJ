@@ -46,9 +46,7 @@ export interface AbTestReport {
  * 运行一次 A/B 评测。对每个 query，所有变体各跑一次并打分；
  * 逐 query 记 win（最高分者，允许并列），最后聚合。
  */
-export const runAbTest = async <Ctx, Out>(
-  opts: AbTestOpts<Ctx, Out>,
-): Promise<AbTestReport> => {
+export const runAbTest = async <Ctx, Out>(opts: AbTestOpts<Ctx, Out>): Promise<AbTestReport> => {
   const stats = new Map<string, AbVariantStat>();
   const contexts = new Map<string, Ctx>();
   for (const v of opts.variants) {

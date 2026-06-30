@@ -444,7 +444,11 @@ export class ReactStateMachine {
       },
     ];
 
-    await this._hooks.emit("react.onStopCondition", { kind: "explicitFinal", reactIter: 1 }, hookOpts);
+    await this._hooks.emit(
+      "react.onStopCondition",
+      { kind: "explicitFinal", reactIter: 1 },
+      hookOpts,
+    );
 
     return {
       finalAnswer: answer,

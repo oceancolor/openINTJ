@@ -43,7 +43,8 @@ export const selectConsistentAnswer = <T extends AnswerCandidate>(
     if (
       !best ||
       g.length > best.length ||
-      (g.length === best.length && (g[0]?.finalAnswer.length ?? 0) > (best[0]?.finalAnswer.length ?? 0))
+      (g.length === best.length &&
+        (g[0]?.finalAnswer.length ?? 0) > (best[0]?.finalAnswer.length ?? 0))
     ) {
       best = g;
     }

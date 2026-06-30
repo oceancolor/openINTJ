@@ -26,6 +26,7 @@
     "@openintj/llm-hunyuan": "workspace:*",
     "@openintj/concurrency": "workspace:*",
     "@openintj/taskpool": "workspace:*",
+    "@openintj/classifier": "workspace:*",
     "@openintj/dormant": "workspace:*",
     "@openintj/shared": "workspace:*",
     "commander": "^12.1.0",

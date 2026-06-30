@@ -114,6 +114,8 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
   const cToolErrors = c("openintj.tool.errors", "ToolHub 错误次数");
   const cPolicyBlocked = c("openintj.policy.blocked", "Governance 拦截次数");
   const cMemoryLoaded = c("openintj.memory.loaded", "Memory 加载的 fragment 总数");
+  const cRetrievalHit = c("openintj.retrieval.hit", "检索命中（返回≥1 片段）的次数");
+  const cTokensSpent = c("openintj.tokens.spent", "TAO run 累计 token 花费");
   const cSearchSources = c("openintj.search.sources", "search 工具命中的联网来源数");
   // 并发 / 多任务 / 多 Agent（RFC-003 方向一/二）
   const cPoolJobs = c("openintj.pool.jobs", "AgentPool job 完成次数");
@@ -277,9 +279,7 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
         const st = traces.get(hookCtx.traceId);
         const toolName = payload.toolResult.toolName;
         const isSearchHit = toolName === "search" && payload.toolResult.success;
-        const search = isSearchHit
-          ? extractSearchAttributes(payload.toolResult.output)
-          : undefined;
+        const search = isSearchHit ? extractSearchAttributes(payload.toolResult.output) : undefined;
         if (enableTraces && st?.action) {
           st.action.span.setAttribute("react.result.success", payload.toolResult.success);
           if (search) {
@@ -380,13 +380,31 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
     bus.on(
       "event.MEMORY_LOADED",
       safe<HookEventMap["event.MEMORY_LOADED"]>((payload) => {
-        if (payload.count > 0) cMemoryLoaded?.add(payload.count);
+        if (payload.count > 0) {
+          cMemoryLoaded?.add(payload.count);
+          cRetrievalHit?.add(1);
+        }
+      }),
+    ),
+  );
+
+  // token 花费：event.LOOP_ITERATION 每次 run 收尾发一次，metrics.totalTokensSpent 是本次 run 累计值。
+  offs.push(
+    bus.on(
+      "event.LOOP_ITERATION",
+      safe<HookEventMap["event.LOOP_ITERATION"]>((payload) => {
+        const total = payload.metrics["totalTokensSpent"];
+        if (typeof total === "number" && total > 0) cTokensSpent?.add(total);
       }),
     ),
   );
 
   // ---------- 并发 / 多任务 / 多 Agent ----------
-  const endConcurrentSpan = (key: string, attrs: Record<string, string | number | boolean>, error = false): void => {
+  const endConcurrentSpan = (
+    key: string,
+    attrs: Record<string, string | number | boolean>,
+    error = false,
+  ): void => {
     const span = concurrentSpans.get(key);
     if (!span) return;
     for (const [k, v] of Object.entries(attrs)) span.setAttribute(k, v);

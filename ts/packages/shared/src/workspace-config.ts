@@ -30,8 +30,7 @@ export const resolveWorkspaceConfig = (
   fallbackRoot: string,
 ): ResolvedWorkspaceConfig => {
   const root = opts.workspaceDir ?? process.env["OPENINTJ_WORKSPACE_DIR"] ?? fallbackRoot;
-  const enableCommands =
-    opts.enableCommands ?? process.env["OPENINTJ_ENABLE_COMMANDS"] === "1";
+  const enableCommands = opts.enableCommands ?? process.env["OPENINTJ_ENABLE_COMMANDS"] === "1";
   const allowedCommands =
     opts.allowedCommands ?? parseCommandList(process.env["OPENINTJ_ALLOWED_COMMANDS"]);
   return { root, enableCommands, allowedCommands };

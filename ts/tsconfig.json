@@ -18,6 +18,7 @@
     { "path": "./packages/telemetry/otel" },
     { "path": "./packages/concurrency" },
     { "path": "./packages/taskpool" },
+    { "path": "./packages/classifier" },
     { "path": "./packages/dormant" },
     { "path": "./apps/desktop" },
     { "path": "./apps/cli" },

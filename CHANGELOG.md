@@ -4,6 +4,55 @@
 版本号沿用 [SemVer](https://semver.org/lang/zh-CN/) 与
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 
+## [Unreleased] —— Memory Flywheel: 增量检索 + 长跑验证 + 可强化分类器 (2026-06-30)
+
+> 把「记忆」「检索」「分类」串成一个共享使用反馈的飞轮：每次 `agent.run()` 的
+> (query → outcome) 信号同时喂给会话级增量检索索引与可强化分类器，让两者一起「越用越好」。
+> 三个 opt-in 开关默认全关 → 默认行为零变化。详见 `docs/architecture/next-session.md` §十。
+
+### Added
+
+- **A1 记忆写入 change-feed**：`HookEventMap` 新增 `event.MEMORY_WRITTEN`
+  （`{ fragment, op: "add" | "update" | "remove" }`）；`MemoryStore` 在 `add*` / `remove` /
+  短期溢出晋升（`op:"update"`）/ 工作记忆溢出丢弃（`op:"remove"`）处发出该事件，
+  `PersistentMemoryStore.reassignMemoryType` 同步补 `op:"update"`。hydrate 直推不发事件（用 `index()` 种子）。
+- **A1 会话级增量混合索引 `MemoryHybridIndex`**（`@openintj/taskpool`）：订阅 `event.MEMORY_WRITTEN`
+  做增量 `upsert`/`remove`，替代每次查询全量 `index()` 重建；支持 `memoryTypes`/`taskTags` 过滤。
+  三端（cli/server/desktop）装配后 `seed()` + `subscribe()`，`close()` 退订。
+- **A1 `ContextEngine.candidateRetrieve` 注入点**：opt-in `OPENINTJ_LOOP_HYBRID=1` 时主循环
+  改走 hybrid 候选召回（`fragmentsToRanked` 把命中转回 `RankedMemory`，仍过 ShaderPipeline /
+  taskType boost / accessCount）；默认仍走 `MemoryRetriever`。
+- **A2 长跑验证 harness `@openintj/shared/longrun-eval.ts`**：`runLongRunSession` 逐轮记录命中/
+  token/judge + 改进曲线（后半 vs 前半 recall）；`runLongRunAb` 多变体 A/B；
+  `longrun-scenarios.ts` 提供有先后依赖的场景 fixtures；`formatLongRunRow/Turns/Ab` 控制台表。
+  `apps/cli/__tests__/longrun.harness.spec.ts`（`RUN_LONGRUN=1` 门控）跑真实 agent + classifier-on/off A/B。
+- **A2 飞轮可观测 counter**：`attachOtelToHooks` 新增 `openintj.retrieval.hit`（`event.MEMORY_LOADED`
+  命中即 +1）与 `openintj.tokens.spent`（`event.LOOP_ITERATION` 累计 token）。
+- **CLF 新包 `@openintj/classifier`**：`ReinforcingClassifier`（embed kNN/质心 classify + 软置信度 +
+  低置信回退 `detectTaskType` 关键词启发式；`reinforce` 升/降权 exemplar + LRU 封顶）+ 种子 `DEFAULT_SEEDS`
+  + 路由 `decideRoute`（高置信简单类 → `enableReact:false` 降 token）/ `outcomeSignal`（status → 反馈信号）。
+- **CLF 分类器持久化**：`ClassifierStore` 接口 + `InMemoryClassifierStore`（默认）+
+  `SqliteClassifierStore`（`@openintj/storage-sqlite`）；装配时 `hydrate()`，`reinforce`/`addSeeds` 后落盘。
+- **外部联网搜索工具 `@openintj/plane-execution/web-search-tool.ts`**：`createWebSearchTool`
+  （Tavily / Brave，provider 中立）+ `resolveWebSearchConfig`（按 `OPENINTJ_SEARCH_PROVIDER` /
+  `OPENINTJ_SEARCH_API_KEY` / `TAVILY_API_KEY` / `BRAVE_API_KEY` 推断）。三端 `search` 工具优先级：
+  外部 Web Search > 混元内建（仅旧平台有效）> 占位。失败不抛错（工具语义）；不配 key 零开销。
+  起因：旧混元平台内建搜索随平台 2026-06-22 下线，TokenHub 改 Responses API 独立产品。
+  测试 `web-search-tool.spec.ts`（10）。
+
+### Changed
+
+- **`TaoLoop.run()` 新增可选 `taskType` / `enableReact` opts**：外部预分类时跳过内部分类、
+  并按路由决定是否退化为单次 LLM；`TaoResult` / `ctx.metrics` 新增 `totalTokensSpent`（跨轮累计）。
+  `detectTaskType` 提升为公开导出供分类器复用。
+- **`MemoryPlane.recordUserInput/Output` 接受可选 `extraTags`**：把分类 label 写进 `taskTags`，
+  与 retriever 的 taskType boost 叠加、随使用复利。
+- **三端 agent 装配 + `run()`**（cli/server/desktop）：新增 `enableClassifier` opt（env `OPENINTJ_CLASSIFIER=1`）；
+  `run()` 预分类 → 注入 taskType + 降 token 路由 → 记忆带 label → 收尾 `reinforce(outcomeSignal(status))`。
+  real 持久化模式自动挂 `SqliteClassifierStore`（`<dataDir>/classifier.sqlite`），`close()` 关闭。
+- **`HybridRetriever.search` 支持 per-query `configOverride`**：会话级共享实例下仍可按查询覆盖融合参数；
+  server `retrieveHybrid` / desktop `buildHybridRetrieve` 改用共享 `MemoryHybridIndex`，不再每查询重建。
+
 ## [Unreleased] —— hotfix bundle #2 (2026-05-20 → 2026-05-21)
 
 > 这是 alpha.8 之后的第二批 hotfix，主要解决 Windows 真盘启动链路上的三个独立坑。

@@ -608,10 +608,9 @@ describe("IPC handler registration", () => {
     const agent = await assembleDesktopAgent({ llmProvider: "mock", workspaceDir: root });
     registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
 
-    const r = (await handlers.get(IPC.WORKSPACE_READ)?.(
-      {},
-      { path: "../../etc/passwd" },
-    )) as { error?: string };
+    const r = (await handlers.get(IPC.WORKSPACE_READ)?.({}, { path: "../../etc/passwd" })) as {
+      error?: string;
+    };
     expect(r.error).toBe("workspace_error");
   });
 
@@ -674,10 +673,9 @@ describe("IPC handler registration", () => {
     const agent = await assembleDesktopAgent({ llmProvider: "mock" });
     registerIpcHandlers(agent, undefined, makeFakeIpc(handlers), { config });
 
-    const r = (await handlers.get(IPC.CONFIG_UPDATE)?.(
-      {},
-      { retrievalMode: "not-a-mode" },
-    )) as { error?: string };
+    const r = (await handlers.get(IPC.CONFIG_UPDATE)?.({}, { retrievalMode: "not-a-mode" })) as {
+      error?: string;
+    };
     expect(r.error).toBe("invalid_request");
   });
 

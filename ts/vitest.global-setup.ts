@@ -75,9 +75,7 @@ export default async function globalSetup(): Promise<void> {
   }
 
   if (!first.modulePath) {
-    throw new Error(
-      "[vitest global-setup] 找不到 better-sqlite3 的安装路径，无法自动 rebuild。",
-    );
+    throw new Error("[vitest global-setup] 找不到 better-sqlite3 的安装路径，无法自动 rebuild。");
   }
   const pkgDir = path.dirname(first.modulePath);
 

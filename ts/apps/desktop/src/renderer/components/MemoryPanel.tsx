@@ -72,7 +72,11 @@ export const MemoryPanel: React.FC = () => {
                 {h.taskTags.length > 0 ? <span>tags: {h.taskTags.join(", ")}</span> : null}
               </div>
               <div className="text-gray-300 whitespace-pre-wrap break-words mt-0.5">
-                {h.content?.trim() ? h.content : <span className="text-gray-600">（仅元数据，无正文）</span>}
+                {h.content?.trim() ? (
+                  h.content
+                ) : (
+                  <span className="text-gray-600">（仅元数据，无正文）</span>
+                )}
               </div>
             </div>
           ))

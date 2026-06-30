@@ -16,5 +16,7 @@ export * from "./agent-prompt.js";
 export * from "./workspace-config.js";
 export * from "./self-consistency.js";
 export * from "./task-eval.js";
+export * from "./longrun-eval.js";
+export * from "./longrun-scenarios.js";
 
 export const __sharedPlaceholder = true;

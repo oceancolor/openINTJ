@@ -15,7 +15,8 @@ describe("perf: HookBus", () => {
     const bus = new HookBus({ logger: silent });
     const N = 20_000;
     // 预热
-    for (let i = 0; i < 1000; i++) await bus.emit("event.LOOP_ITERATION", { taoIter: i, metrics: {} });
+    for (let i = 0; i < 1000; i++)
+      await bus.emit("event.LOOP_ITERATION", { taoIter: i, metrics: {} });
     const t0 = performance.now();
     for (let i = 0; i < N; i++) await bus.emit("event.LOOP_ITERATION", { taoIter: i, metrics: {} });
     const perOpUs = ((performance.now() - t0) * 1000) / N;
@@ -32,7 +33,8 @@ describe("perf: HookBus", () => {
       });
     }
     const N = 20_000;
-    for (let i = 0; i < 1000; i++) await bus.emit("event.LOOP_ITERATION", { taoIter: i, metrics: {} });
+    for (let i = 0; i < 1000; i++)
+      await bus.emit("event.LOOP_ITERATION", { taoIter: i, metrics: {} });
     const t0 = performance.now();
     for (let i = 0; i < N; i++) await bus.emit("event.LOOP_ITERATION", { taoIter: i, metrics: {} });
     const perOpUs = ((performance.now() - t0) * 1000) / N;
@@ -51,7 +53,9 @@ describe("perf: HookBus", () => {
     }
     const perRegUs = ((performance.now() - t0) * 1000) / N;
     const removed = bus.offByTag("bench");
-    console.log(`[perf] HookBus register: ${perRegUs.toFixed(3)} µs/op (N=${N}), offByTag removed=${removed}`);
+    console.log(
+      `[perf] HookBus register: ${perRegUs.toFixed(3)} µs/op (N=${N}), offByTag removed=${removed}`,
+    );
     expect(removed).toBe(N);
     expect(perRegUs).toBeLessThan(150);
   });

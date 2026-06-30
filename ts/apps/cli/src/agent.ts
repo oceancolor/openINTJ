@@ -1,3 +1,11 @@
+import { randomUUID } from "node:crypto";
+import {
+  DEFAULT_SEEDS,
+  ReinforcingClassifier,
+  decideRoute,
+  outcomeSignal,
+} from "@openintj/classifier";
+import { forkJoin } from "@openintj/concurrency";
 /**
  * Agent 装配工厂：组合 core + 4 plane + LLM 适配器为可执行的 Agent。
  * 这是 CLI / Server / Desktop 共用的核心装配逻辑。
@@ -10,15 +18,20 @@ import {
   ReactStateMachine,
   TaoLoop,
   type TaoResult,
+  type TaskTypeType,
 } from "@openintj/core";
-import { randomUUID } from "node:crypto";
-import { forkJoin } from "@openintj/concurrency";
 import { HunyuanClient, createHunyuanSearchTool } from "@openintj/llm-hunyuan";
 import { OllamaClient } from "@openintj/llm-ollama";
 import { ControlPlane } from "@openintj/plane-control";
-import { Executor, ToolHub, createWorkspaceTools } from "@openintj/plane-execution";
+import {
+  Executor,
+  ToolHub,
+  createWebSearchTool,
+  createWorkspaceTools,
+  resolveWebSearchConfig,
+} from "@openintj/plane-execution";
 import { GovernancePlane } from "@openintj/plane-governance";
-import { ContextEngine, MemoryPlane } from "@openintj/plane-memory";
+import { ContextEngine, MemoryPlane, fragmentsToRanked } from "@openintj/plane-memory";
 import {
   DEFAULT_AGENT_SYSTEM_PROMPT,
   type SelfConsistencyStrategy,
@@ -27,6 +40,7 @@ import {
   resolveWorkspaceConfig,
   selectConsistentAnswer,
 } from "@openintj/shared";
+import { MemoryHybridIndex } from "@openintj/taskpool";
 
 export type LlmProvider = "auto" | "hunyuan" | "ollama" | "mock";
 
@@ -54,6 +68,11 @@ export interface AgentOptions {
    * 默认关闭；env OPENINTJ_SELF_CONSISTENCY=N / OPENINTJ_SELF_CONSISTENCY_STRATEGY 也可启用。
    */
   selfConsistency?: { samples: number; strategy?: SelfConsistencyStrategy };
+  /**
+   * 前端可强化分类器：开启后每次 run 先分类 → 注入 taskType + 记忆 label，高置信简单类
+   * 路由单次 LLM 降 token，收尾用 outcome 强化。默认关（env OPENINTJ_CLASSIFIER=1 也可开）。
+   */
+  enableClassifier?: boolean;
 }
 
 export interface AssembledAgent {
@@ -64,6 +83,10 @@ export interface AssembledAgent {
   memory: MemoryPlane;
   governance: GovernancePlane;
   contextEngine: ContextEngine;
+  /** session 级增量混合检索索引（订阅 event.MEMORY_WRITTEN 自动维护）。 */
+  hybridIndex: MemoryHybridIndex;
+  /** 前端可强化分类器；仅 enableClassifier 时存在。 */
+  classifier?: ReinforcingClassifier;
   tao: TaoLoop;
   run(query: string): Promise<TaoResult>;
 }
@@ -94,7 +117,31 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
   const governance = new GovernancePlane({ hooks });
   const memory = new MemoryPlane({ hooks });
   const control = new ControlPlane();
-  const contextEngine = new ContextEngine({ store: memory.store, hooks });
+
+  // session 级共享 HybridRetriever：CLI 为内存态，开局 seed 空集，之后订阅 change-feed 增量维护。
+  const hybridIndex = new MemoryHybridIndex();
+  hybridIndex.seed(memory.store.all);
+  hybridIndex.subscribe(hooks);
+
+  // A1.3 opt-in：OPENINTJ_LOOP_HYBRID=1 时主循环检索改走 session 级增量 HybridRetriever。
+  const loopHybrid = process.env["OPENINTJ_LOOP_HYBRID"] === "1";
+  const candidateRetrieve = loopHybrid
+    ? async (query: string, ro: { topK?: number; taskType?: TaskTypeType }) => {
+        const e = memory.store.embedder.embed(query);
+        const qVec = e instanceof Promise ? await e : e;
+        const hits = hybridIndex.search(query, qVec, { topK: ro.topK ?? 6 });
+        return fragmentsToRanked(
+          memory.store,
+          hits.map((h) => ({ id: h.doc.id, score: h.score })),
+          ro.taskType ? { taskType: ro.taskType } : {},
+        );
+      }
+    : undefined;
+  const contextEngine = new ContextEngine({
+    store: memory.store,
+    hooks,
+    ...(candidateRetrieve ? { candidateRetrieve } : {}),
+  });
 
   const toolHub = new ToolHub({ hooks });
   const handlers = opts.toolHandlers ?? {};
@@ -107,9 +154,13 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
     hits: [],
   });
 
-  // search 默认接混元联网搜索（llm 为混元时）；否则退回无副作用占位。
-  const defaultSearchHandler =
-    llm instanceof HunyuanClient ? createHunyuanSearchTool(llm) : defaultSearch;
+  // search 默认优先级：外部 Web Search（Tavily/Brave）> 混元内建联网搜索（仅旧平台有效）> 占位。
+  const webSearchCfg = resolveWebSearchConfig();
+  const defaultSearchHandler = webSearchCfg
+    ? createWebSearchTool(webSearchCfg)
+    : llm instanceof HunyuanClient
+      ? createHunyuanSearchTool(llm)
+      : defaultSearch;
   toolHub.registerBuiltinTools({
     readFile: handlers.readFile ?? wsTools.readFile,
     writeFile: handlers.writeFile ?? wsTools.writeFile,
@@ -152,6 +203,19 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
 
   const selfConsistency = resolveSelfConsistency(opts.selfConsistency);
 
+  // 前端可强化分类器（opt-in）。CLI 为内存态，无持久化 store；首次 run 懒加载种子。
+  const enableClassifier = opts.enableClassifier ?? process.env["OPENINTJ_CLASSIFIER"] === "1";
+  const classifier = enableClassifier
+    ? new ReinforcingClassifier({ embedder: memory.store.embedder })
+    : undefined;
+  let classifierReady = false;
+  const ensureClassifier = async (): Promise<void> => {
+    if (!classifier || classifierReady) return;
+    classifierReady = true;
+    await classifier.hydrate();
+    if (classifier.size === 0) await classifier.addSeeds(DEFAULT_SEEDS);
+  };
+
   return {
     hooks,
     llm,
@@ -160,24 +224,45 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
     memory,
     governance,
     contextEngine,
+    hybridIndex,
+    ...(classifier ? { classifier } : {}),
     tao,
     async run(query: string) {
       // 先跑（contextProvider 检索此前记忆），再记录本轮 → 避免检索命中当前输入本身。
+      // 前端分类器：预分类 → taskType + 降 token 路由（高置信简单类走单次 LLM）。
+      let cls: Awaited<ReturnType<ReinforcingClassifier["classify"]>> | undefined;
+      let route: ReturnType<typeof decideRoute> | undefined;
+      if (classifier) {
+        await ensureClassifier();
+        cls = await classifier.classify(query);
+        route = decideRoute(cls);
+      }
+      const taoOpts = (traceId?: string) => ({
+        ...(cls ? { taskType: cls.label } : {}),
+        ...(route?.single ? { enableReact: false } : {}),
+        ...(traceId ? { traceId } : {}),
+      });
       let result: TaoResult;
       if (selfConsistency) {
         // 方向一/二：并行多采样 + 投票。forkJoin 会发 forkjoin.* 事件 → OTel span/metric。
         const { fulfilled } = await forkJoin(
           Array.from({ length: selfConsistency.samples }, (_, i) => i),
-          (i) => tao.run(query, { traceId: `${randomUUID()}-sc${i}` }),
+          (i) => tao.run(query, taoOpts(`${randomUUID()}-sc${i}`)),
           { hooks, group: "self-consistency", minSuccess: 1 },
         );
         result = selectConsistentAnswer(fulfilled, selfConsistency.strategy) ?? fulfilled[0]!;
       } else {
-        result = await tao.run(query);
+        result = await tao.run(query, taoOpts());
       }
       result.finalAnswer = appendSourcesFooter(result.finalAnswer, result.trajectory);
-      memory.recordUserInput(query);
-      memory.recordAssistantOutput(result.finalAnswer);
+      // 记忆带上分类 label（与 retriever taskType ×1.3 加成叠加，随使用复利）。
+      const labelTags = cls ? [cls.label] : [];
+      memory.recordUserInput(query, labelTags);
+      memory.recordAssistantOutput(result.finalAnswer, labelTags);
+      // 收尾反馈：用 outcome 强化分类器（与记忆写入同一收尾点）。
+      if (classifier && cls) {
+        await classifier.reinforce(query, cls.label, { signal: outcomeSignal(result.status) });
+      }
       return result;
     },
   };

@@ -1,5 +1,6 @@
 import {
   type EmbeddingProvider,
+  type HookBus,
   type MemoryFragment,
   MemoryFragmentSchema,
   type MemoryType,
@@ -34,6 +35,11 @@ export interface AddOptions {
 export interface MemoryStoreOpts {
   /** 嵌入提供方；不提供则用 SimpleEmbedder(config.embeddingDim)。 */
   embedder?: EmbeddingProvider;
+  /**
+   * 可选 HookBus：注入后每次写入/晋升/移除会 emit `event.MEMORY_WRITTEN`（fire-and-forget）。
+   * 不注入则零开销。用于把记忆写入广播给增量检索索引等消费方。
+   */
+  hooks?: HookBus;
 }
 
 /**
@@ -53,12 +59,23 @@ export class MemoryStore {
   readonly shortTerm: MemoryFragment[] = [];
   readonly working: MemoryFragment[] = [];
   readonly longTerm: MemoryFragment[] = [];
+  protected readonly hooks: HookBus | undefined;
 
   constructor(cfg: Partial<MemoryStoreConfig> = {}, opts: MemoryStoreOpts = {}) {
     this.config = { ...DEFAULT_MEMORY_STORE_CONFIG, ...cfg };
     this.embedder = opts.embedder ?? new SimpleEmbedder(this.config.embeddingDim);
+    this.hooks = opts.hooks;
     // dim 对齐
     (this.config as { embeddingDim: number }).embeddingDim = this.embedder.dimension;
+  }
+
+  /**
+   * 发出记忆写入事件。add* 系列是同步 API，故 fire-and-forget（不 await emit），
+   * 错误吞掉避免污染主流程（HookBus 非 strict 模式本身也会吞 handler 抛错）。
+   */
+  protected emitWrite(fragment: MemoryFragment, op: "add" | "update" | "remove"): void {
+    if (!this.hooks) return;
+    void this.hooks.emit("event.MEMORY_WRITTEN", { fragment, op }).catch(() => {});
   }
 
   // ---------- 同步 API（要求 embedder 同步或 opts.embedding 提供） ----------
@@ -66,18 +83,21 @@ export class MemoryStore {
   addShortTerm(content: string, opts: AddOptions = {}): MemoryFragment {
     const fragment = this.makeFragmentSync(content, opts, 0.5, "short_term");
     this.pushShortTerm(fragment);
+    this.emitWrite(fragment, "add");
     return fragment;
   }
 
   addWorking(content: string, opts: AddOptions = {}): MemoryFragment {
     const fragment = this.makeFragmentSync(content, opts, 0.7, "working");
     this.pushWorking(fragment);
+    this.emitWrite(fragment, "add");
     return fragment;
   }
 
   addLongTerm(content: string, opts: AddOptions = {}): MemoryFragment {
     const fragment = this.makeFragmentSync(content, opts, 0.5, "long_term");
     this.longTerm.push(fragment);
+    this.emitWrite(fragment, "add");
     return fragment;
   }
 
@@ -86,18 +106,21 @@ export class MemoryStore {
   async addShortTermAsync(content: string, opts: AddOptions = {}): Promise<MemoryFragment> {
     const fragment = await this.makeFragmentAsync(content, opts, 0.5, "short_term");
     this.pushShortTerm(fragment);
+    this.emitWrite(fragment, "add");
     return fragment;
   }
 
   async addWorkingAsync(content: string, opts: AddOptions = {}): Promise<MemoryFragment> {
     const fragment = await this.makeFragmentAsync(content, opts, 0.7, "working");
     this.pushWorking(fragment);
+    this.emitWrite(fragment, "add");
     return fragment;
   }
 
   async addLongTermAsync(content: string, opts: AddOptions = {}): Promise<MemoryFragment> {
     const fragment = await this.makeFragmentAsync(content, opts, 0.5, "long_term");
     this.longTerm.push(fragment);
+    this.emitWrite(fragment, "add");
     return fragment;
   }
 
@@ -109,7 +132,8 @@ export class MemoryStore {
     for (const list of [this.shortTerm, this.working, this.longTerm]) {
       const idx = list.findIndex((f) => f.fragmentId === fragmentId);
       if (idx >= 0) {
-        list.splice(idx, 1);
+        const [removed] = list.splice(idx, 1);
+        if (removed) this.emitWrite(removed, "remove");
         return true;
       }
     }
@@ -141,6 +165,8 @@ export class MemoryStore {
       if (oldest) {
         oldest.memoryType = "long_term";
         this.longTerm.push(oldest);
+        // 晋升只改了 memoryType，内容/embedding 不变 → 下发 update 让消费方刷新元数据。
+        this.emitWrite(oldest, "update");
       }
     }
   }
@@ -148,7 +174,8 @@ export class MemoryStore {
   private pushWorking(fragment: MemoryFragment): void {
     this.working.push(fragment);
     while (this.working.length > this.config.maxWorking) {
-      this.working.shift();
+      const discarded = this.working.shift();
+      if (discarded) this.emitWrite(discarded, "remove");
     }
   }
 

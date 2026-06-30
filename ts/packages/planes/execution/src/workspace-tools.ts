@@ -116,7 +116,9 @@ export const createWorkspaceTools = (opts: WorkspaceToolsOpts): WorkspaceTools =
     if (!command) throw new Error("execute_command 需要非空 command 参数");
     const exe = firstToken(command);
     if (allowedCommands.length === 0 || !allowedCommands.includes(exe)) {
-      throw new Error(`命令 '${exe}' 不在白名单内（allowedCommands=[${allowedCommands.join(", ")}]）`);
+      throw new Error(
+        `命令 '${exe}' 不在白名单内（allowedCommands=[${allowedCommands.join(", ")}]）`,
+      );
     }
     try {
       const { stdout, stderr } = await execAsync(command, {

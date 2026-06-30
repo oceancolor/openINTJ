@@ -96,7 +96,9 @@ export const evaluateRanker = (
   let mrr = 0;
   for (const c of cases) {
     const ranked = rank(c.query);
-    const relevantIds = new Set([...c.relevant.entries()].filter(([, g]) => g > 0).map(([id]) => id));
+    const relevantIds = new Set(
+      [...c.relevant.entries()].filter(([, g]) => g > 0).map(([id]) => id),
+    );
     ndcg += ndcgAtK(ranked, c.relevant, k);
     recall += recallAtK(ranked, relevantIds, k);
     precision += precisionAtK(ranked, relevantIds, k);

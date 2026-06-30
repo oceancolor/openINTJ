@@ -9,8 +9,8 @@
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { BrowserWindow, app, dialog } from "electron";
 import { loadOpenintjEnv, summarizeLlmEnv } from "@openintj/shared";
+import { BrowserWindow, app, dialog } from "electron";
 import { type DesktopAgent, assembleDesktopAgent } from "./agent.js";
 import { type ConfigService, createConfigService } from "./config-store.js";
 import { type IpcDeps, registerIpcHandlers } from "./ipc-handlers.js";

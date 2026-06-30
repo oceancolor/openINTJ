@@ -1,32 +1,20 @@
-import {
-  type HybridConfig,
-  type HybridDoc,
-  HybridRetriever,
-  type HybridScored,
-} from "@openintj/taskpool";
+import type { HybridConfig, MemoryHybridHit } from "@openintj/taskpool";
 import type { ServerAgent } from "./agent.js";
 
 /**
  * RFC-003 方向 2：HybridRetriever 装配。
  *
- * 设计取舍：
- *  - 不维护持久化的混合索引；每次查询时按当前 MemoryStore 快照重建 BM25 + cosine 双路索引
- *  - 适合"中等量级（≤ 几千 fragments）"的本地 agent；超大规模可换 LanceDB 内建 FTS
- *  - 与现有 MemoryRetriever 并存：用户按需调 retrieveHybrid，不替换默认路径
+ * 设计（A1 起改为增量）：
+ *  - 复用 agent 上 session 级 `MemoryHybridIndex`（开局 seed + 订阅 change-feed 增量维护），
+ *    不再每次查询全量重建 → 检索随对话「越用越好」且省去重建成本。
+ *  - 与默认 MemoryRetriever 并存：用户按需调 retrieveHybrid，不替换默认路径。
+ *  - 超大规模仍可换 LanceDB 内建 FTS（roadmap #10 余下部分）。
  */
-export type HybridMemoryHit = HybridScored<
-  HybridDoc & {
-    metadata: {
-      memoryType: string;
-      taskTags: readonly string[];
-      importance: number;
-    };
-  }
->;
+export type HybridMemoryHit = MemoryHybridHit;
 
 export interface RetrieveHybridOpts {
   topK?: number;
-  /** 透传给 HybridRetriever 的配置（alpha/beta/useRRF/...）。 */
+  /** 按查询覆盖融合配置（alpha/beta/useRRF/...）。 */
   config?: Partial<HybridConfig>;
   /** 仅检索这些 memoryType。 */
   memoryTypes?: readonly string[];
@@ -41,27 +29,7 @@ export const retrieveHybrid = async (
   query: string,
   opts: RetrieveHybridOpts = {},
 ): Promise<HybridMemoryHit[]> => {
-  let fragments = agent.memory.store.all;
-  if (opts.memoryTypes && opts.memoryTypes.length > 0) {
-    const set = new Set(opts.memoryTypes);
-    fragments = fragments.filter((f) => set.has(f.memoryType));
-  }
-  if (opts.taskTags && opts.taskTags.length > 0) {
-    const tagSet = new Set(opts.taskTags);
-    fragments = fragments.filter((f) => f.taskTags.some((t) => tagSet.has(t)));
-  }
-  if (fragments.length === 0) return [];
-
-  const docs: HybridMemoryHit["doc"][] = fragments.map((f) => ({
-    id: f.fragmentId,
-    text: f.content,
-    vector: f.embedding,
-    metadata: {
-      memoryType: f.memoryType,
-      taskTags: f.taskTags,
-      importance: f.importance,
-    },
-  }));
+  if (agent.hybridIndex.size === 0) return [];
 
   let qVec: readonly number[] | undefined = opts.queryEmbedding;
   if (qVec === undefined) {
@@ -69,9 +37,10 @@ export const retrieveHybrid = async (
     qVec = r instanceof Promise ? await r : r;
   }
 
-  const retriever = new HybridRetriever<HybridMemoryHit["doc"]>({
+  return agent.hybridIndex.search(query, qVec, {
+    topK: opts.topK ?? 10,
     ...(opts.config ? { config: opts.config } : {}),
+    ...(opts.memoryTypes ? { memoryTypes: opts.memoryTypes } : {}),
+    ...(opts.taskTags ? { taskTags: opts.taskTags } : {}),
   });
-  retriever.index(docs);
-  return retriever.search(query, qVec, opts.topK ?? 10);
 };

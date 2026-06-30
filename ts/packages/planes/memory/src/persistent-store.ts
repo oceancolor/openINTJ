@@ -1,5 +1,6 @@
 import {
   type EmbeddingProvider,
+  type HookBus,
   type MemoryFragment,
   MemoryFragmentSchema,
   type MemoryType,
@@ -19,6 +20,8 @@ export interface PersistentMemoryStoreOpts {
   metadataStore: MetadataStore;
   embedder?: EmbeddingProvider;
   storeConfig?: Partial<MemoryStoreConfig>;
+  /** 透传给 MemoryStore 的 HookBus，用于 emit `event.MEMORY_WRITTEN` change-feed。 */
+  hooks?: HookBus;
   /**
    * 启动时是否 hydrate（从持久化层把已有 fragments 加载到内存）。
    * 默认 true。
@@ -104,7 +107,10 @@ export class PersistentMemoryStore extends MemoryStore {
   private isInitialized = false;
 
   constructor(opts: PersistentMemoryStoreOpts) {
-    super(opts.storeConfig ?? {}, opts.embedder ? { embedder: opts.embedder } : {});
+    super(opts.storeConfig ?? {}, {
+      ...(opts.embedder ? { embedder: opts.embedder } : {}),
+      ...(opts.hooks ? { hooks: opts.hooks } : {}),
+    });
     this.vectorStore = opts.vectorStore;
     this.metadataStore = opts.metadataStore;
     this.hydrateOnInit = opts.hydrateOnInit ?? true;
@@ -230,6 +236,7 @@ export class PersistentMemoryStore extends MemoryStore {
         else if (newType === "working") this.working.push(f);
         else this.longTerm.push(f);
         await this.persist(f);
+        this.emitWrite(f, "update");
         return true;
       }
     }

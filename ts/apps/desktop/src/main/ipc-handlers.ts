@@ -293,16 +293,12 @@ export const registerIpcHandlers = (
     // 工作区文件变更推送（onWorkspaceChange）。目录不可监听时静默跳过。
     let wsWatcher: FSWatcher | undefined;
     try {
-      wsWatcher = watch(
-        agent.workspace.config.root,
-        { persistent: false },
-        (event, filename) => {
-          send(IPC.EVT_WORKSPACE, {
-            event: event === "rename" ? "rename" : "change",
-            path: filename ? String(filename) : "",
-          });
-        },
-      );
+      wsWatcher = watch(agent.workspace.config.root, { persistent: false }, (event, filename) => {
+        send(IPC.EVT_WORKSPACE, {
+          event: event === "rename" ? "rename" : "change",
+          path: filename ? String(filename) : "",
+        });
+      });
     } catch {
       // 工作区目录不存在 / 平台不支持 watch → 不推送变更，但不影响其它能力。
     }

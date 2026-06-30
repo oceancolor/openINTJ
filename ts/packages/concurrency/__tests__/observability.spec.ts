@@ -6,10 +6,7 @@ import { describe, expect, it } from "vitest";
 import { AgentPool } from "../src/agent-pool.js";
 import { forkJoin } from "../src/fork-join.js";
 
-const collect = <E extends keyof HookEventMap>(
-  bus: HookBus,
-  event: E,
-): HookEventMap[E][] => {
+const collect = <E extends keyof HookEventMap>(bus: HookBus, event: E): HookEventMap[E][] => {
   const out: HookEventMap[E][] = [];
   bus.on(event, (ctx) => {
     out.push(ctx.payload);

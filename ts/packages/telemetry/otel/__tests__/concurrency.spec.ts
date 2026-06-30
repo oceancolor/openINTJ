@@ -46,7 +46,9 @@ afterEach(async () => {
   metrics.disable();
 });
 
-const flushMetrics = async (): Promise<Array<{ name: string; sum: number; attrs: Record<string, unknown> }>> => {
+const flushMetrics = async (): Promise<
+  Array<{ name: string; sum: number; attrs: Record<string, unknown> }>
+> => {
   await reader.forceFlush();
   const out: Array<{ name: string; sum: number; attrs: Record<string, unknown> }> = [];
   for (const rm of metricExporter.getMetrics()) {
@@ -125,7 +127,13 @@ describe("attachOtelToHooks — concurrency", () => {
     const bus = new HookBus();
     const otel = attachOtelToHooks(bus);
 
-    await bus.emit("task.enqueue", { queue: "q", taskId: "t1", priority: 5, depCount: 0, ready: true });
+    await bus.emit("task.enqueue", {
+      queue: "q",
+      taskId: "t1",
+      priority: 5,
+      depCount: 0,
+      ready: true,
+    });
     await bus.emit("task.beforeRun", { queue: "q", taskId: "t1", priority: 5 });
     await bus.emit("task.afterRun", { queue: "q", taskId: "t1", success: true, durationMs: 2 });
 
@@ -148,7 +156,9 @@ describe("attachOtelToHooks — concurrency", () => {
     await bus.emit("pool.beforeJob", { pool: "p", jobId: "leak", active: 1, pending: 0 });
     expect(otel.openSpanCount()).toBe(1);
     otel.dispose();
-    const span = spanExporter.getFinishedSpans().find((s) => s.attributes["pool.job_id"] === "leak");
+    const span = spanExporter
+      .getFinishedSpans()
+      .find((s) => s.attributes["pool.job_id"] === "leak");
     expect(span?.attributes["disposed"]).toBe(true);
   });
 });

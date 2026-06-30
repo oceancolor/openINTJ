@@ -18,6 +18,7 @@
     "@lancedb/lancedb": "^0.13.0",
     "@openintj/concurrency": "workspace:*",
     "@openintj/core": "workspace:*",
+    "@openintj/classifier": "workspace:*",
     "@openintj/dormant": "workspace:*",
     "@openintj/llm-hunyuan": "workspace:*",
     "@openintj/llm-ollama": "workspace:*",

@@ -1,4 +1,4 @@
-import type { EmbeddingProvider } from "@openintj/core";
+import type { EmbeddingProvider, HookBus } from "@openintj/core";
 import { InMemoryVectorStore, LanceDBVectorStore, type VectorStore } from "@openintj/storage-lance";
 import {
   InMemoryMetadataStore,
@@ -33,6 +33,8 @@ export interface CreatePersistentMemoryStoreOpts {
   storeConfig?: Partial<MemoryStoreConfig>;
   /** 嵌入器（默认 SimpleEmbedder via MemoryStore 构造函数）。 */
   embedder?: EmbeddingProvider;
+  /** 透传给 MemoryStore 的 HookBus（emit event.MEMORY_WRITTEN change-feed）。 */
+  hooks?: HookBus;
   /** 启动时 hydrate（默认 true）。 */
   hydrateOnInit?: boolean;
 }
@@ -107,6 +109,7 @@ export const createPersistentMemoryStore = async (
     metadataStore: backends.metadataStore,
     storeConfig: { embeddingDim: dim, ...(opts.storeConfig ?? {}) },
     ...(opts.embedder ? { embedder: opts.embedder } : {}),
+    ...(opts.hooks ? { hooks: opts.hooks } : {}),
     ...(opts.hydrateOnInit !== undefined ? { hydrateOnInit: opts.hydrateOnInit } : {}),
   });
   await store.init();

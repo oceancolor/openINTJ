@@ -19,7 +19,11 @@ export interface BenchmarkDoc {
 }
 
 export const BENCHMARK_CORPUS: BenchmarkDoc[] = [
-  { id: "db1", topic: "database", text: "postgres database indexing query optimization performance" },
+  {
+    id: "db1",
+    topic: "database",
+    text: "postgres database indexing query optimization performance",
+  },
   { id: "db2", topic: "database", text: "sql database transaction isolation level acid" },
   { id: "db3", topic: "database", text: "database schema migration rollback version control" },
   { id: "db4", topic: "database", text: "query planner join index scan database tuning" },

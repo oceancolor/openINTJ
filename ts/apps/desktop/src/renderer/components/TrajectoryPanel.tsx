@@ -47,7 +47,9 @@ const extractSearchHit = (
   if (!tr || tr.toolName !== "search") return null;
   const output = tr.output as { answer?: unknown; sources?: unknown } | undefined;
   const rawSources = Array.isArray(output?.sources) ? (output.sources as SearchSource[]) : [];
-  const sources = rawSources.filter((s) => typeof s?.url === "string" || typeof s?.title === "string");
+  const sources = rawSources.filter(
+    (s) => typeof s?.url === "string" || typeof s?.title === "string",
+  );
   const answer = typeof output?.answer === "string" ? output.answer : undefined;
   return { ...(answer ? { answer } : {}), sources };
 };
@@ -93,13 +95,14 @@ export const TrajectoryPanel: React.FC<{ entries: TrajectoryEntry[] }> = ({ entr
         <div className="text-gray-500">暂无轨迹</div>
       ) : (
         entries.map((e, i) => {
-          const searchHit =
-            e.kind === "react.observation" ? extractSearchHit(e.payload) : null;
+          const searchHit = e.kind === "react.observation" ? extractSearchHit(e.payload) : null;
           return (
             <div key={i} className="border-l-2 border-gray-700 pl-2">
               <div className={`font-semibold ${KIND_COLORS[e.kind] ?? "text-gray-400"}`}>
                 {KIND_LABELS[e.kind] ?? e.kind}
-                {searchHit ? <span className="ml-1.5 text-[10px] text-green-500">search</span> : null}
+                {searchHit ? (
+                  <span className="ml-1.5 text-[10px] text-green-500">search</span>
+                ) : null}
               </div>
               {searchHit ? (
                 <SearchObservation hit={searchHit} />

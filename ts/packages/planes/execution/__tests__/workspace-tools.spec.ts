@@ -96,7 +96,9 @@ describe("createWorkspaceTools - executeCommand", () => {
       enableCommands: true,
       allowedCommands: ["node"],
     });
-    const r = (await tools.executeCommand({ command: 'node -e "process.stdout.write(\'ok\')"' })) as {
+    const r = (await tools.executeCommand({
+      command: "node -e \"process.stdout.write('ok')\"",
+    })) as {
       stdout: string;
       exitCode: number;
     };
@@ -110,7 +112,7 @@ describe("createWorkspaceTools - executeCommand", () => {
       enableCommands: true,
       allowedCommands: ["node"],
     });
-    const r = (await tools.executeCommand({ command: "node -e \"process.exit(3)\"" })) as {
+    const r = (await tools.executeCommand({ command: 'node -e "process.exit(3)"' })) as {
       exitCode: number;
     };
     expect(r.exitCode).toBe(3);

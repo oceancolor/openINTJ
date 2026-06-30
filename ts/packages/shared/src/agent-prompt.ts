@@ -57,10 +57,7 @@ export const collectSearchSources = (
 };
 
 /** 把来源列表格式化成「参考来源」脚注（最多 max 条）。空列表返回空串。 */
-export const formatSourcesFooter = (
-  sources: ReadonlyArray<SearchSourceLike>,
-  max = 5,
-): string => {
+export const formatSourcesFooter = (sources: ReadonlyArray<SearchSourceLike>, max = 5): string => {
   if (sources.length === 0) return "";
   const lines = sources.slice(0, max).map((s, i) => {
     const label = (s.title?.trim() || s.url || `来源 ${i + 1}`).trim();

@@ -18,6 +18,7 @@
     { "path": "../../packages/llm/hunyuan" },
     { "path": "../../packages/concurrency" },
     { "path": "../../packages/taskpool" },
+    { "path": "../../packages/classifier" },
     { "path": "../../packages/dormant" }
   ]
 }

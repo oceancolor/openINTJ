@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  type TaskCase,
-  evaluateTasks,
-  judgeContainsAll,
-  judgeNonEmpty,
-} from "../src/task-eval.js";
+import { type TaskCase, evaluateTasks, judgeContainsAll, judgeNonEmpty } from "../src/task-eval.js";
 
 describe("evaluateTasks", () => {
   it("聚合完成率：部分通过", async () => {

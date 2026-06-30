@@ -150,7 +150,12 @@ describe("TaoLoop.run (single iteration)", () => {
     const tao = new TaoLoop({
       config: { ...DEFAULT_TAO_CONFIG, maxTaoIterations: 1 },
       hooks,
-      react: new ReactStateMachine({ config: DEFAULT_REACT_CONFIG, hooks, llm, toolRunner: passingRunner }),
+      react: new ReactStateMachine({
+        config: DEFAULT_REACT_CONFIG,
+        hooks,
+        llm,
+        toolRunner: passingRunner,
+      }),
       availableTools: () => [],
       systemPrompt: "STATIC_PROMPT",
       contextProvider: ({ query }) => {
@@ -191,7 +196,12 @@ describe("TaoLoop.run (single iteration)", () => {
     const tao = new TaoLoop({
       config: { ...DEFAULT_TAO_CONFIG, maxTaoIterations: 1 },
       hooks,
-      react: new ReactStateMachine({ config: DEFAULT_REACT_CONFIG, hooks, llm, toolRunner: passingRunner }),
+      react: new ReactStateMachine({
+        config: DEFAULT_REACT_CONFIG,
+        hooks,
+        llm,
+        toolRunner: passingRunner,
+      }),
       availableTools: () => [],
       systemPrompt: "FALLBACK_PROMPT",
       contextProvider: () => {

@@ -25,6 +25,15 @@ export interface ContextEngineOpts {
   retriever?: MemoryRetriever;
   /** 注入 embedder（默认用 store.embedder）。 */
   embedder?: EmbeddingProvider;
+  /**
+   * 可选候选召回器（A1.3 opt-in）：提供后 build() 用它替代默认 MemoryRetriever 做召回，
+   * 返回 RankedMemory[] 后仍走原 ShaderPipeline。用于把 session 级 HybridRetriever 接进主循环。
+   * 默认 undefined → 行为零变化。
+   */
+  candidateRetrieve?: (
+    query: string,
+    opts: { topK?: number; taskType?: TaskTypeType },
+  ) => Promise<RankedMemory[]>;
 }
 
 export interface BuildContextInput {
@@ -51,6 +60,7 @@ export class ContextEngine {
   readonly retriever: MemoryRetriever;
   readonly pipeline: ShaderPipeline;
   private readonly hooks?: HookBus;
+  private readonly candidateRetrieve?: ContextEngineOpts["candidateRetrieve"];
 
   constructor(opts: ContextEngineOpts) {
     this.store = opts.store;
@@ -59,6 +69,7 @@ export class ContextEngine {
     if (opts.embedder !== undefined) retrieverOpts.embedder = opts.embedder;
     this.retriever =
       opts.retriever ?? new MemoryRetriever(opts.store, opts.shaderConfig, retrieverOpts);
+    if (opts.candidateRetrieve !== undefined) this.candidateRetrieve = opts.candidateRetrieve;
     const pipeOpts: ConstructorParameters<typeof ShaderPipeline>[0] = {};
     if (opts.shaderConfig !== undefined) pipeOpts.config = opts.shaderConfig;
     if (opts.budget !== undefined) pipeOpts.budget = opts.budget;
@@ -70,12 +81,15 @@ export class ContextEngine {
   }
 
   async build(input: BuildContextInput): Promise<ContextWindowSnapshot> {
-    // 1) 检索（自动适配 sync / async embedder）
+    // 1) 检索（自动适配 sync / async embedder）。
+    //    注入了 candidateRetrieve（A1.3 opt-in）则走它，否则用默认 MemoryRetriever。
     const retrieveOpts: { topK?: number; taskType?: TaskTypeType } = {
       taskType: input.taskType,
     };
     if (input.topK !== undefined) retrieveOpts.topK = input.topK;
-    const ranked: RankedMemory[] = await this.retriever.retrieveAsync(input.query, retrieveOpts);
+    const ranked: RankedMemory[] = this.candidateRetrieve
+      ? await this.candidateRetrieve(input.query, retrieveOpts)
+      : await this.retriever.retrieveAsync(input.query, retrieveOpts);
 
     // 2) 着色
     const shaderOpts = input.traceId ? { traceId: input.traceId } : undefined;

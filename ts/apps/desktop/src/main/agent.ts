@@ -1,4 +1,10 @@
 import { randomUUID } from "node:crypto";
+import {
+  DEFAULT_SEEDS,
+  ReinforcingClassifier,
+  decideRoute,
+  outcomeSignal,
+} from "@openintj/classifier";
 import { type RateLimitOpts, RateLimitedLlmClient, forkJoin } from "@openintj/concurrency";
 import {
   DEFAULT_REACT_CONFIG,
@@ -8,6 +14,7 @@ import {
   ReactStateMachine,
   TaoLoop,
   type TaoResult,
+  type TaskTypeType,
 } from "@openintj/core";
 import {
   type DormantPersistenceAdapter,
@@ -21,7 +28,9 @@ import {
   Executor,
   ToolHub,
   type WorkspaceTools,
+  createWebSearchTool,
   createWorkspaceTools,
+  resolveWebSearchConfig,
 } from "@openintj/plane-execution";
 import { GovernancePlane } from "@openintj/plane-governance";
 import {
@@ -30,6 +39,7 @@ import {
   type PersistenceMode,
   type PersistentMemoryStore,
   createPersistentMemoryStore,
+  fragmentsToRanked,
 } from "@openintj/plane-memory";
 import {
   DEFAULT_AGENT_SYSTEM_PROMPT,
@@ -40,13 +50,8 @@ import {
   resolveWorkspaceConfig,
   selectConsistentAnswer,
 } from "@openintj/shared";
-import { createSqliteDormantStore } from "@openintj/storage-sqlite";
-import {
-  type HybridConfig,
-  type HybridDoc,
-  HybridRetriever,
-  type HybridScored,
-} from "@openintj/taskpool";
+import { createSqliteClassifierStore, createSqliteDormantStore } from "@openintj/storage-sqlite";
+import { type HybridConfig, type MemoryHybridHit, MemoryHybridIndex } from "@openintj/taskpool";
 import {
   type AttachOtelOpts,
   type AttachedOtel,
@@ -90,6 +95,12 @@ export interface DesktopAgentOpts {
    * 默认关闭；env OPENINTJ_SELF_CONSISTENCY=N / OPENINTJ_SELF_CONSISTENCY_STRATEGY 也可启用。
    */
   selfConsistency?: { samples: number; strategy?: SelfConsistencyStrategy };
+  /**
+   * 前端可强化分类器：开启后每次 run 先分类 → 注入 taskType + 记忆 label，高置信简单类
+   * 路由单次 LLM 降 token，收尾用 outcome 强化。real 模式自动挂 SqliteClassifierStore 持久化。
+   * 默认关（env OPENINTJ_CLASSIFIER=1 也可开）。
+   */
+  enableClassifier?: boolean;
   /**
    * 工作区根目录：read_file / write_file 被沙箱限制在此目录内（RFC-004 §8）。
    * 缺省走 env OPENINTJ_WORKSPACE_DIR，再退到 process.cwd()。
@@ -180,16 +191,8 @@ const resolveRateLimit = (opts: DesktopAgentOpts): RateLimitOpts | undefined => 
   return burst && Number.isFinite(burst) && burst > 0 ? { qps, burst } : { qps };
 };
 
-/** 桌面端的 hybrid 检索辅助 —— 与 server 端实现保持等价。 */
-export type DesktopHybridHit = HybridScored<
-  HybridDoc & {
-    metadata: {
-      memoryType: string;
-      taskTags: readonly string[];
-      importance: number;
-    };
-  }
->;
+/** 桌面端的 hybrid 检索辅助 —— 与 server 端实现保持等价（A1 起走 session 级增量索引）。 */
+export type DesktopHybridHit = MemoryHybridHit;
 
 export interface DesktopRetrieveHybridOpts {
   topK?: number;
@@ -201,38 +204,21 @@ export interface DesktopRetrieveHybridOpts {
 
 const buildHybridRetrieve = (
   store: PersistentMemoryStore,
+  hybridIndex: MemoryHybridIndex,
 ): ((q: string, opts?: DesktopRetrieveHybridOpts) => Promise<DesktopHybridHit[]>) => {
   return async (query, opts = {}) => {
-    let fragments = store.all;
-    if (opts.memoryTypes && opts.memoryTypes.length > 0) {
-      const set = new Set(opts.memoryTypes);
-      fragments = fragments.filter((f) => set.has(f.memoryType));
-    }
-    if (opts.taskTags && opts.taskTags.length > 0) {
-      const tagSet = new Set(opts.taskTags);
-      fragments = fragments.filter((f) => f.taskTags.some((t) => tagSet.has(t)));
-    }
-    if (fragments.length === 0) return [];
-    const docs: DesktopHybridHit["doc"][] = fragments.map((f) => ({
-      id: f.fragmentId,
-      text: f.content,
-      vector: f.embedding,
-      metadata: {
-        memoryType: f.memoryType,
-        taskTags: f.taskTags,
-        importance: f.importance,
-      },
-    }));
+    if (hybridIndex.size === 0) return [];
     let qVec: readonly number[] | undefined = opts.queryEmbedding;
     if (qVec === undefined) {
       const r = store.embedder.embed(query);
       qVec = r instanceof Promise ? await r : r;
     }
-    const retriever = new HybridRetriever<DesktopHybridHit["doc"]>({
+    return hybridIndex.search(query, qVec, {
+      topK: opts.topK ?? 10,
       ...(opts.config ? { config: opts.config } : {}),
+      ...(opts.memoryTypes ? { memoryTypes: opts.memoryTypes } : {}),
+      ...(opts.taskTags ? { taskTags: opts.taskTags } : {}),
     });
-    retriever.index(docs);
-    return retriever.search(query, qVec, opts.topK ?? 10);
   };
 };
 
@@ -247,6 +233,10 @@ export interface DesktopAgent {
   control: ControlPlane;
   execution: Executor;
   persistentStore: PersistentMemoryStore;
+  /** session 级增量混合检索索引（订阅 event.MEMORY_WRITTEN 自动维护）。 */
+  hybridIndex: MemoryHybridIndex;
+  /** 前端可强化分类器；仅 enableClassifier 时存在。 */
+  classifier?: ReinforcingClassifier;
   persistenceInfo: { mode: PersistenceMode; dataDir?: string };
   retrievalMode: "vector" | "hybrid";
   /** RFC-003 方向 3 蛰伏记忆学习；仅 opts.enableDormant=true 时存在。 */
@@ -333,6 +323,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     mode: persistence.mode,
     embeddingDim,
     storeConfig: { embeddingDim },
+    hooks,
   });
 
   const memory = new MemoryPlane({ hooks });
@@ -345,15 +336,41 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     writable: false,
   });
 
+  // session 级共享 HybridRetriever：开局 seed + 订阅 change-feed 增量维护。
+  const hybridIndex = new MemoryHybridIndex();
+  hybridIndex.seed(persistentStore.all);
+  hybridIndex.subscribe(hooks);
+
   const control = new ControlPlane();
+  // A1.3 opt-in：OPENINTJ_LOOP_HYBRID=1 时主循环检索改走 session 级增量 HybridRetriever。
+  const loopHybrid = process.env["OPENINTJ_LOOP_HYBRID"] === "1";
+  const candidateRetrieve = loopHybrid
+    ? async (query: string, ro: { topK?: number; taskType?: TaskTypeType }) => {
+        const e = persistentStore.embedder.embed(query);
+        const qVec = e instanceof Promise ? await e : e;
+        const hits = hybridIndex.search(query, qVec, { topK: ro.topK ?? 6 });
+        return fragmentsToRanked(
+          persistentStore,
+          hits.map((h) => ({ id: h.doc.id, score: h.score })),
+          ro.taskType ? { taskType: ro.taskType } : {},
+        );
+      }
+    : undefined;
   const contextEngine = new ContextEngine({
     store: persistentStore,
     hooks,
+    ...(candidateRetrieve ? { candidateRetrieve } : {}),
   });
   const toolHub = new ToolHub({ hooks });
   const noop = () => ({ note: "[mock]" });
-  // search 工具优先接混元联网搜索（按 rawLlm，避开速率限制包装层）；非混元则保持占位。
-  const searchHandler = rawLlm instanceof HunyuanClient ? createHunyuanSearchTool(rawLlm) : noop;
+  // search 工具优先级：外部 Web Search（Tavily/Brave，provider 中立）> 混元内建联网搜索（仅旧平台有效）> 占位。
+  // 旧混元平台搜索已随平台下线、TokenHub 改 Responses API，因此 TokenHub 用户应配 OPENINTJ_SEARCH_API_KEY 走外部搜索。
+  const webSearchCfg = resolveWebSearchConfig();
+  const searchHandler = webSearchCfg
+    ? createWebSearchTool(webSearchCfg)
+    : rawLlm instanceof HunyuanClient
+      ? createHunyuanSearchTool(rawLlm)
+      : noop;
   // 真实工作区工具：read_file / write_file 沙箱限定在 workspace 根内，execute_command 默认禁用。
   const wsConfig = resolveWorkspaceConfig(opts, process.cwd());
   const wsTools = createWorkspaceTools(wsConfig);
@@ -400,8 +417,26 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     },
   });
 
-  const retrieveHybrid = buildHybridRetrieve(persistentStore);
+  const retrieveHybrid = buildHybridRetrieve(persistentStore, hybridIndex);
   const selfConsistency = resolveSelfConsistency(opts.selfConsistency);
+
+  // 前端可强化分类器（opt-in）。real 模式挂 SqliteClassifierStore 让强化跨重启。
+  const enableClassifier = opts.enableClassifier ?? process.env["OPENINTJ_CLASSIFIER"] === "1";
+  let classifier: ReinforcingClassifier | undefined;
+  let classifierStore: Awaited<ReturnType<typeof createSqliteClassifierStore>> | undefined;
+  if (enableClassifier) {
+    if (persistence.mode === "real" && persistence.dataDir) {
+      classifierStore = await createSqliteClassifierStore({
+        dbPath: `${persistence.dataDir}/classifier.sqlite`,
+      });
+    }
+    classifier = new ReinforcingClassifier({
+      embedder: persistentStore.embedder,
+      ...(classifierStore ? { store: classifierStore } : {}),
+    });
+    await classifier.hydrate();
+    if (classifier.size === 0) await classifier.addSeeds(DEFAULT_SEEDS);
+  }
 
   return {
     hooks,
@@ -414,6 +449,8 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     control,
     execution,
     persistentStore,
+    hybridIndex,
+    ...(classifier ? { classifier } : {}),
     persistenceInfo: persistence,
     retrievalMode,
     ...(dormant ? { dormant } : {}),
@@ -423,23 +460,35 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     retrieveHybrid,
     async run(query: string) {
       if (dormant) dormant.record(query, "user", { stage: "run.input" });
+      // 前端分类器：预分类 → taskType + 降 token 路由（高置信简单类走单次 LLM）。
+      const cls = classifier ? await classifier.classify(query) : undefined;
+      const route = cls ? decideRoute(cls) : undefined;
+      const taoOpts = (traceId?: string) => ({
+        ...(cls ? { taskType: cls.label } : {}),
+        ...(route?.single ? { enableReact: false } : {}),
+        ...(traceId ? { traceId } : {}),
+      });
       // 先跑（contextProvider 会检索此前已落盘的记忆），再记录本轮 → 避免检索命中当前输入本身。
       let result: TaoResult;
       if (selfConsistency) {
         // 方向一/二：并行多采样 + 投票。forkJoin 会发 forkjoin.* 事件 → OTel span/metric。
         const { fulfilled } = await forkJoin(
           Array.from({ length: selfConsistency.samples }, (_, i) => i),
-          (i) => tao.run(query, { traceId: `${randomUUID()}-sc${i}` }),
+          (i) => tao.run(query, taoOpts(`${randomUUID()}-sc${i}`)),
           { hooks, group: "self-consistency", minSuccess: 1 },
         );
         result = selectConsistentAnswer(fulfilled, selfConsistency.strategy) ?? fulfilled[0]!;
       } else {
-        result = await tao.run(query);
+        result = await tao.run(query, taoOpts());
       }
       // 把 search 工具命中的联网来源追加到答案末尾 → 随记忆/dormant 一起入库。
       result.finalAnswer = appendSourcesFooter(result.finalAnswer, result.trajectory);
-      memory.recordUserInput(query);
-      memory.recordAssistantOutput(result.finalAnswer);
+      const labelTags = cls ? [cls.label] : [];
+      memory.recordUserInput(query, labelTags);
+      memory.recordAssistantOutput(result.finalAnswer, labelTags);
+      if (classifier && cls) {
+        await classifier.reinforce(query, cls.label, { signal: outcomeSignal(result.status) });
+      }
       if (dormant)
         dormant.record(result.finalAnswer, "agent", {
           stage: "run.output",
@@ -469,6 +518,8 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       };
     },
     async close() {
+      hybridIndex.dispose();
+      if (classifierStore) await classifierStore.close();
       if (otel) otel.dispose();
       if (dormant) await dormant.close();
       await persistentStore.close();

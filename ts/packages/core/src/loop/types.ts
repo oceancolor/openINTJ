@@ -101,6 +101,8 @@ export interface TaoResult {
   finalAnswer: string;
   iterations: number;
   reactTotalSteps: number;
+  /** 本次 run 跨所有 TAO 轮累计的 token 花费（来自各轮 ReactOutput.totalTokensSpent）。 */
+  totalTokensSpent: number;
   durationMs: number;
   trajectory: TrajectoryEntry[];
   taskType: TaskTypeType;

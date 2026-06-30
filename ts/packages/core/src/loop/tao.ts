@@ -90,7 +90,11 @@ const defaultBuilder: TaoMessageBuilder = {
   },
 };
 
-const detectTaskType = (query: string): TaskTypeType => {
+/**
+ * 关键词启发式任务分类（零 token、本地）。TaoLoop 默认分类器，
+ * 也作为 @openintj/classifier 的冷启动/低置信兜底。
+ */
+export const detectTaskType = (query: string): TaskTypeType => {
   const t = query.toLowerCase();
   if (
     t.includes("代码") ||
@@ -160,12 +164,20 @@ export class TaoLoop {
 
   async run(
     query: string,
-    opts: { imageData?: ImagePayload; traceId?: string } = {},
+    opts: {
+      imageData?: ImagePayload;
+      traceId?: string;
+      /** 外部预分类结果：提供后跳过内部 classifier（前端分类器接入点）。 */
+      taskType?: TaskTypeType;
+      /** 按本次 run 覆盖 enableReact：false 走单次 LLM 调用（降 token），不改全局配置。 */
+      enableReact?: boolean;
+    } = {},
   ): Promise<TaoResult> {
     const traceId = opts.traceId ?? randomUUID();
     const startTime = Date.now();
-    const taskType = this.classifier(query);
+    const taskType = opts.taskType ?? this.classifier(query);
     const shaderMode = this.shaderSelector(taskType);
+    const enableReact = opts.enableReact ?? this._config.enableReact;
 
     const ctx: TaoContext = {
       traceId,
@@ -178,6 +190,7 @@ export class TaoLoop {
 
     const history: ChatMessage[] = [];
     let totalReactSteps = 0;
+    let totalTokensSpent = 0;
     let status: TaoStatus = "completed";
     let failureReason: string | undefined;
 
@@ -261,12 +274,13 @@ export class TaoLoop {
 
       const reactOpts = traceId ? { traceId } : undefined;
       // enableReact=false 退化为单次 LLM 调用（不跑微循环、不下发工具）。
-      const react = this._config.enableReact
+      const react = enableReact
         ? await this._react.run(reactInput, reactOpts)
         : await this._react.runSingle(reactInput, reactOpts);
 
       ctx.trajectory.push(...react.trajectory);
       totalReactSteps += react.iterations;
+      totalTokensSpent += react.totalTokensSpent;
 
       await this._hooks.emit(
         "tao.afterAct",
@@ -326,6 +340,7 @@ export class TaoLoop {
 
     ctx.metrics["totalDurationMs"] = Date.now() - startTime;
     ctx.metrics["totalReactSteps"] = totalReactSteps;
+    ctx.metrics["totalTokensSpent"] = totalTokensSpent;
 
     await this._hooks.emit(
       "event.LOOP_ITERATION",
@@ -339,6 +354,7 @@ export class TaoLoop {
       finalAnswer: ctx.finalAnswer ?? "",
       iterations: ctx.iteration,
       reactTotalSteps: totalReactSteps,
+      totalTokensSpent,
       durationMs: Date.now() - startTime,
       trajectory: ctx.trajectory,
       taskType,

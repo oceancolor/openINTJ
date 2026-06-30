@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { Command } from "commander";
 import { loadOpenintjEnv } from "@openintj/shared";
+import { Command } from "commander";
 import kleur from "kleur";
 import { type LlmProvider, assembleAgent } from "./agent.js";
 

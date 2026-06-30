@@ -1,9 +1,9 @@
 # 下一次工作交接备忘
 
 > 本文件用于工作中断 / 多日离开后快速恢复上下文。
-> 上次更新：2026-06-30（7 项定位任务收尾：RFC-001 退化分支 + ADR-001、RFC-004 工作区/配置 IPC、
-> self-consistency、钝化 revoke/脱敏/abTest、检索可插拔基准/增量索引、governance parity、OTel route/IPC 根 span；
-> 见 [§九](#九已定位任务批量收尾2026-06-30)）
+> 上次更新：2026-06-30（**Memory Flywheel**：A1 增量检索接主循环 + A2 长跑验证 harness +
+> CLF 可强化分类器 `@openintj/classifier`，三开关默认全关；见 [§十](#十memory-flywheel增量检索--长跑验证--可强化分类器2026-06-30)。
+> 此前同日：7 项定位任务收尾，见 [§九](#九已定位任务批量收尾2026-06-30)）
 
 ---
 
@@ -508,9 +508,84 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 ### 9.8 本轮仍未做（明确留后续）
 
 - RFC-004 utility process 蒸馏 worker（`mine()` 仍在 main 跑）。
-- 增量检索索引**接进 agent**（需 fragment change-feed 把 memory 写入广播给 HybridRetriever）。
+- ~~增量检索索引**接进 agent**（需 fragment change-feed 把 memory 写入广播给 HybridRetriever）~~。✅ 2026-06-30 完成（§十 A1）
 - HybridRetriever 换 LanceDB 原生 FTS（#10 余下部分）。
 - Parity 扩展：Hooks / ContextEngine（governance 已接）。
 - `pruneEvents(olderThanTs)`（#11 dormant 事件磁盘清理）。
 - #6 打包发布（electron-builder Win/macOS + electron-updater）。
-- abTest / self-consistency 的长跑可观测验证（脚手架已就位，缺真实跑批数据）。
+- ~~abTest / self-consistency 的长跑可观测验证（脚手架已就位，缺真实跑批数据）~~。✅ 2026-06-30 longrun harness 落地（§十 A2，真实跑批仍需 `RUN_LONGRUN=1` + LLM key 手动触发）
+
+---
+
+## 十、Memory Flywheel：增量检索 + 长跑验证 + 可强化分类器（2026-06-30）
+
+> 起因：用户聚焦产品价值，要把「记忆」「检索」「分类」串成一个共享**使用反馈**的飞轮——
+> 每次 `agent.run()` 的 (query → outcome) 信号同时喂给会话级增量检索索引与可强化分类器，
+> 让两者一起「越用越好」。计划见 `.cursor/plans/memory_flywheel_*.plan.md`（A1 → A2 → CLF）。
+> 全部落地，未提交（无 tag，归 CHANGELOG `[Unreleased]`）。**三个 opt-in 开关默认全关 → 默认行为零变化。**
+
+### 10.1（A1）fragment change-feed + 会话级增量 HybridRetriever
+
+- **change-feed**：`HookEventMap` 加 `event.MEMORY_WRITTEN`（`{ fragment, op }`）。`MemoryStore`
+  在 `add*` / `remove` / 短期溢出晋升（`op:"update"`）/ 工作记忆溢出丢弃（`op:"remove"`）发事件；
+  `PersistentMemoryStore.reassignMemoryType` 补 `op:"update"`。hydrate 直推**不发**事件（用 `index()` 种子）。
+- **`MemoryHybridIndex`**（`@openintj/taskpool/src/memory-hybrid-index.ts`）：`seed()` 初始化 + `subscribe(hooks)`
+  增量 `upsert`/`remove`，`search()` 支持 `memoryTypes`/`taskTags` 过滤（有过滤时超额取再裁，保证 topK）。
+- **接主循环（opt-in）**：`ContextEngineOpts.candidateRetrieve` 注入点；三端 `OPENINTJ_LOOP_HYBRID=1`
+  时走 hybrid 候选，`fragmentsToRanked`（`plane-memory/src/retriever.ts`）转回 `RankedMemory` 仍过
+  ShaderPipeline / taskType boost / accessCount。`HybridRetriever.search` 加 per-query `configOverride`。
+- **测试**：`plane-memory/__tests__/change-feed.spec.ts`、`taskpool/__tests__/memory-hybrid-index.spec.ts`、
+  `plane-memory/__tests__/context-engine-hybrid.spec.ts`。
+
+### 10.2（A2）长跑验证「越用越好」可观测
+
+- **harness**：`@openintj/shared/src/longrun-eval.ts`——`runLongRunSession`（逐轮命中/token/judge + 改进曲线）、
+  `runLongRunAb`（多变体打分对比）、`formatLongRunRow/Turns/Ab`；`longrun-scenarios.ts` 场景 fixtures。
+- **token 指标**：`TaoLoop` 累计 `react.totalTokensSpent` → `TaoResult.totalTokensSpent` + `ctx.metrics`。
+- **OTel counter**：`attachOtelToHooks` 加 `openintj.retrieval.hit`（`event.MEMORY_LOADED` 命中 +1）与
+  `openintj.tokens.spent`（`event.LOOP_ITERATION` 累计）。
+- **真实跑批**：`apps/cli/__tests__/longrun.harness.spec.ts`（`RUN_LONGRUN=1` 门控，不进 CI）跑真实 agent +
+  classifier-on/off A/B（质量不退守护）。
+- **测试**：`shared/__tests__/longrun-eval.spec.ts`（mock agent）、`telemetry-otel/__tests__/metrics.spec.ts`。
+
+### 10.3（CLF）前端可强化分类器
+
+- **新包 `@openintj/classifier`**：`ReinforcingClassifier`（embed kNN/质心 + 软置信度；低置信/无 exemplar
+  回退 `detectTaskType` 关键词启发式——零 token；`reinforce` 升/降权 + 合并相似 + LRU 封顶；`toState`/`loadState`）。
+  种子 `seeds.ts`（`DEFAULT_SEEDS`）；路由 `routing.ts`（`decideRoute` 高置信简单类→`enableReact:false` 降 token、
+  `outcomeSignal` status→反馈信号）。
+- **持久化**：`ClassifierStore` 接口 + `InMemoryClassifierStore`（默认）+ `SqliteClassifierStore`
+  （`@openintj/storage-sqlite/src/classifier.ts`，仿 dormant）；`hydrate()`/`persist()` 接入。
+- **接 `agent.run`（三端）**：`TaoLoop.run` 加可选 `taskType`/`enableReact`；`MemoryPlane.recordUserInput/Output`
+  加 `extraTags`（带分类 label）。三端 `enableClassifier` opt（env `OPENINTJ_CLASSIFIER=1`）：预分类 → taskType +
+  降 token 路由 → 记忆带 label → 收尾 `reinforce`。real 模式自动挂 `SqliteClassifierStore`（`<dataDir>/classifier.sqlite`），
+  `close()` 关闭；CLI 在线程同步装配下用**首次 run 懒 hydrate/seed**。
+- **测试**：`classifier/__tests__/{reinforcing-classifier,store}.spec.ts`、`storage/sqlite/__tests__/classifier.spec.ts`、
+  `core/__tests__/tao.spec.ts`（taskType/enableReact 委派）。
+
+### 10.4 验证 & 装配清单
+
+- **自检**：`pnpm exec turbo run typecheck test --concurrency=1` → **58/58 task successful**（typecheck 全绿、各包 vitest 全过）。
+- **新增包**：`@openintj/classifier`（已加 `pnpm-workspace.yaml` / 根 `tsconfig.json` refs）。
+- **env 开关**（默认全关）：`OPENINTJ_LOOP_HYBRID=1`（主循环走 hybrid 候选）、`OPENINTJ_CLASSIFIER=1`（前端分类器）、
+  `RUN_LONGRUN=1`（长跑 harness）。
+- **桌面端预览验证**：TokenHub 迁移后（`hy3-preview`）实测对话链路通；旧混元平台 `hunyuan-turbos-latest`
+  已于 2026-06-22 下线，`.env.local` 改走 `HUNYUAN_BASE_URL=https://tokenhub.tencentmaas.com/v1`。
+
+### 10.5 TokenHub 迁移 + 联网搜索恢复（2026-06-30 续）
+
+- **TokenHub 迁移**：旧混元平台 `hunyuan-turbos-latest` 于 2026-06-22 下线、整个旧平台 9-30 停服。
+  `.env.local` 改走 TokenHub（OpenAI 兼容）：`HUNYUAN_BASE_URL=https://tokenhub.tencentmaas.com/v1`、
+  `HUNYUAN_MODEL=hy3-preview`。客户端 `baseUrl` 自动追加 `/chat/completions`，**只填到 `/v1`**。实测对话通。
+- **联网搜索恢复**（旧平台内建 search 随平台下线、TokenHub 改 Responses API 独立产品、参数未公开）：
+  改走 **Function Calling + 外部搜索后端**（provider 中立）。新增 `@openintj/plane-execution/src/web-search-tool.ts`：
+  `createWebSearchTool`（Tavily / Brave）+ `resolveWebSearchConfig`（env 推断 provider/key）。
+  三端 `search` 工具优先级：外部 Web Search > 混元内建（仅旧平台）> 占位。
+  env：`OPENINTJ_SEARCH_PROVIDER` + `OPENINTJ_SEARCH_API_KEY` 或 `TAVILY_API_KEY`/`BRAVE_API_KEY`（默认不配 → 零开销）。
+  测试：`plane-execution/__tests__/web-search-tool.spec.ts`（10）。
+
+### 10.6 本轮仍未做（飞轮衍生）
+
+- TokenHub **Responses API** 原生联网搜索（若想用官方 search 而非第三方；参数需从模型详情页取）。
+- 长跑 A/B 的真实跑批数据沉淀（harness 就绪，缺带 key 的批量结果）。
+- 分类器路由策略调参（`RoutingPolicy` 阈值目前是保守默认）。

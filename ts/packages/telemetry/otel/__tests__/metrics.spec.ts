@@ -200,7 +200,38 @@ describe("attachOtelToHooks — metrics", () => {
       series.filter((s) => s.name === name).reduce((a, b) => a + b.sum, 0);
 
     expect(total("openintj.memory.loaded")).toBe(10);
+    // 两次命中（count>0）→ retrieval.hit 计 2
+    expect(total("openintj.retrieval.hit")).toBe(2);
     expect(total("openintj.policy.blocked")).toBe(2);
+
+    otel.dispose();
+  });
+
+  it("counts openintj.tokens.spent from event.LOOP_ITERATION", async () => {
+    const bus = new HookBus();
+    const otel = attachOtelToHooks(bus);
+
+    await bus.emit(
+      "event.LOOP_ITERATION",
+      { taoIter: 0, metrics: { totalTokensSpent: 120, totalReactSteps: 2 } },
+      { traceId: "t-tok-1" },
+    );
+    await bus.emit(
+      "event.LOOP_ITERATION",
+      { taoIter: 0, metrics: { totalTokensSpent: 80 } },
+      { traceId: "t-tok-2" },
+    );
+    // 0 token 不计
+    await bus.emit(
+      "event.LOOP_ITERATION",
+      { taoIter: 0, metrics: { totalTokensSpent: 0 } },
+      { traceId: "t-tok-3" },
+    );
+
+    const series = await flush();
+    const total = (name: string): number =>
+      series.filter((s) => s.name === name).reduce((a, b) => a + b.sum, 0);
+    expect(total("openintj.tokens.spent")).toBe(200);
 
     otel.dispose();
   });

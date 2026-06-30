@@ -9,6 +9,7 @@
   "include": ["src/**/*"],
   "references": [
     { "path": "../../packages/concurrency" },
+    { "path": "../../packages/classifier" },
     { "path": "../../packages/core" },
     { "path": "../../packages/dormant" },
     { "path": "../../packages/shared" },
