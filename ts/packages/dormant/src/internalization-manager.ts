@@ -31,6 +31,21 @@ const setNested = (obj: Record<string, unknown>, path: string, value: unknown): 
   cur[keys[keys.length - 1]!] = value;
 };
 
+/** 删除嵌套字段；路径不存在则静默返回 false。 */
+const deleteNested = (obj: Record<string, unknown>, path: string): boolean => {
+  const keys = path.split(".");
+  let cur: Record<string, unknown> = obj;
+  for (let i = 0; i < keys.length - 1; i++) {
+    const next = cur[keys[i]!];
+    if (!next || typeof next !== "object") return false;
+    cur = next as Record<string, unknown>;
+  }
+  const last = keys[keys.length - 1]!;
+  if (!(last in cur)) return false;
+  delete cur[last];
+  return true;
+};
+
 const defaultMapToField = (
   p: DormantPattern,
 ): { targetField: string; value: unknown } | undefined => {
@@ -125,8 +140,46 @@ export class InternalizationManager {
     return p;
   }
 
+  /**
+   * 撤销一条**已批准（applied）**的内化条目：从 PersonaConfig 删除对应字段，
+   * 标记 proposal 为 `revoked`，并自增 version。仅 applied 可撤销（其余状态返回 undefined）。
+   * 用户改主意 / 误批准 / 隐私顾虑时使用，是"可解释、可回退"的人格写入闭环的一环。
+   */
+  revoke(proposalId: string): InternalizationProposal | undefined {
+    const p = this.proposals.get(proposalId);
+    if (!p || p.status !== "applied") return undefined;
+    deleteNested(this.personaConfig as unknown as Record<string, unknown>, p.targetField);
+    this.personaConfig.meta.lastUpdated = Date.now();
+    this.personaConfig.meta.version += 1;
+    p.status = "revoked";
+    p.decidedAt = Date.now();
+    return p;
+  }
+
   snapshot(): PersonaConfig {
     return PersonaConfigSchema.parse(JSON.parse(JSON.stringify(this.personaConfig)));
+  }
+
+  /**
+   * 把已批准的 PersonaConfig 渲染成可注入的 system prompt 片段（RFC-003 §3.6 "无需检索就生效"）。
+   * 无任何已批准条目时返回 ""。供 Agent 在每轮 TAO 注入到 system prompt。
+   */
+  personaSystemPrompt(): string {
+    const c = this.personaConfig;
+    const lines: string[] = [];
+    const stringify = (v: unknown): string => (typeof v === "string" ? v : JSON.stringify(v));
+    const push = (label: string, rec: Record<string, unknown>): void => {
+      for (const v of Object.values(rec)) {
+        const s = stringify(v).trim();
+        if (s.length > 0) lines.push(`- ${label}：${s}`);
+      }
+    };
+    push("偏好", c.preferences);
+    push("常用表达", c.phrases);
+    push("习惯", c.habits);
+    push("上下文", c.context);
+    if (lines.length === 0) return "";
+    return `[用户画像]（来自你已批准的长期模式，默认生效，无需检索）\n${lines.join("\n")}`;
   }
 
   /** 重置（仅测试 / 用户主动清空）。 */

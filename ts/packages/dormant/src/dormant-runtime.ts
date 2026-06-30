@@ -2,6 +2,7 @@ import { InternalizationManager, type InternalizationOpts } from "./internalizat
 import { PassiveStore } from "./passive-store.js";
 import { PatternMiner, type PatternMinerOpts } from "./pattern-miner.js";
 import type { DormantPersistenceAdapter } from "./persistence.js";
+import { type Redactor, defaultRedactor } from "./redaction.js";
 import type {
   DormantPattern,
   InternalizationProposal,
@@ -49,6 +50,12 @@ export interface DormantRuntimeOpts {
    * 与 eventRetentionMs 可叠加（先按时间清，再按条数裁）。
    */
   maxDiskEvents?: number;
+  /**
+   * 脱敏函数：record 落盘**前**对 text 做隐私打码（邮箱/电话/卡号/key 等）。
+   * - 默认 {@link defaultRedactor}（保守内置规则）。
+   * - 传 `null` 显式关闭脱敏（不推荐）。
+   */
+  redactor?: Redactor | null;
 }
 
 export interface DormantMineResult {
@@ -67,6 +74,7 @@ export class DormantRuntime {
   private eventSeq = 0;
   private readonly eventRetentionMs?: number;
   private readonly maxDiskEvents?: number;
+  private readonly redactor: Redactor;
 
   constructor(opts: DormantRuntimeOpts = {}) {
     this.passive = new PassiveStore(opts.maxPassiveEvents ?? 10_000);
@@ -79,6 +87,8 @@ export class DormantRuntime {
     if (opts.adapter) this.adapter = opts.adapter;
     if (opts.eventRetentionMs !== undefined) this.eventRetentionMs = opts.eventRetentionMs;
     if (opts.maxDiskEvents !== undefined) this.maxDiskEvents = opts.maxDiskEvents;
+    // redactor === null 显式关闭；undefined 用默认脱敏；否则用注入的。
+    this.redactor = opts.redactor === null ? (t) => t : (opts.redactor ?? defaultRedactor);
   }
 
   /**
@@ -109,7 +119,8 @@ export class DormantRuntime {
       eventId: `${this.eventIdPrefix}_${this.eventSeq}_${ts}`,
       ts,
       source,
-      text,
+      // 落盘前脱敏：敏感串不进内存缓冲、不写持久化、不参与挖掘。
+      text: this.redactor(text),
       metadata,
     };
     this.passive.record(event);
@@ -154,6 +165,14 @@ export class DormantRuntime {
     }
   }
 
+  /**
+   * 渲染当前已批准 persona 为可注入 system prompt 片段（无已批准模式时返回 ""）。
+   * Agent 在每轮 TAO 注入它 → 内化的偏好/习惯无需检索即生效（RFC-003 §3.6）。
+   */
+  personaSystemPrompt(): string {
+    return this.internalization.personaSystemPrompt();
+  }
+
   listProposals(status?: InternalizationProposal["status"]): InternalizationProposal[] {
     return this.internalization.listProposals(status);
   }
@@ -170,6 +189,19 @@ export class DormantRuntime {
   reject(proposalId: string): InternalizationProposal | undefined {
     const p = this.internalization.reject(proposalId);
     if (p) this.adapter?.upsertProposal(p);
+    return p;
+  }
+
+  /**
+   * 撤销一条已批准的内化条目：从 PersonaConfig 删除字段 + 持久化新快照。
+   * 仅 applied 可撤销；其余状态返回 undefined。
+   */
+  revoke(proposalId: string): InternalizationProposal | undefined {
+    const p = this.internalization.revoke(proposalId);
+    if (p && this.adapter) {
+      this.adapter.upsertProposal(p);
+      this.adapter.savePersona(this.internalization.snapshot());
+    }
     return p;
   }
 

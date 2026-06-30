@@ -28,6 +28,7 @@ const STATUS_BADGE: Record<DormantProposalDto["status"], string> = {
   applied: "bg-green-900 text-green-200",
   rejected: "bg-red-900 text-red-200",
   approved: "bg-blue-900 text-blue-200",
+  revoked: "bg-zinc-700 text-zinc-300",
 };
 
 const formatTime = (ts: number): string => {

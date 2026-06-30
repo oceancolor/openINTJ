@@ -1,3 +1,4 @@
+import { withRootSpan } from "@openintj/telemetry-otel";
 import { type Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
@@ -41,7 +42,11 @@ export const buildApp = (agent: ServerAgent): Hono => {
     const { query, stream } = parsed.data;
 
     if (!stream) {
-      const result = await agent.run(query);
+      const result = await withRootSpan(
+        "openintj.http.chat",
+        () => agent.run(query),
+        { attributes: { "http.route": "/api/chat", "http.stream": false } },
+      );
       return c.json({
         finalAnswer: result.finalAnswer,
         iterations: result.iterations,
@@ -80,7 +85,11 @@ export const buildApp = (agent: ServerAgent): Hono => {
         }),
       );
       try {
-        const result = await agent.run(query);
+        const result = await withRootSpan(
+          "openintj.http.chat",
+          () => agent.run(query),
+          { attributes: { "http.route": "/api/chat", "http.stream": true } },
+        );
         await send("done", {
           finalAnswer: result.finalAnswer,
           iterations: result.iterations,

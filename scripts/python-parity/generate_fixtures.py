@@ -36,6 +36,8 @@ from execution_plane import (  # noqa: E402
 )
 from framework_core import (  # noqa: E402
     AgentError,
+    Command,
+    CommandType,
     ContextBudget,
     LODLevel,
     MemoryFragment,
@@ -43,6 +45,7 @@ from framework_core import (  # noqa: E402
     ShaderMode,
     TaskType,
 )
+from governance_plane import PolicyEngine  # noqa: E402
 from memory_plane import (  # noqa: E402
     MemoryRetriever,
     MemoryStore,
@@ -58,6 +61,8 @@ OUT = {
     / "ts/packages/planes/execution/__tests__/parity/fixtures/python-v2.json",
     "memory": REPO_ROOT
     / "ts/packages/planes/memory/__tests__/parity/fixtures/python-v2.json",
+    "governance": REPO_ROOT
+    / "ts/packages/planes/governance/__tests__/parity/fixtures/python-v2.json",
 }
 
 
@@ -507,6 +512,73 @@ def gen_memory() -> dict[str, Any]:
 
 
 # ============================================================
+# 5. governance slice —— PolicyEngine.check
+# ============================================================
+
+# PolicyEngine.check 是纯函数式策略判定：whitelist→allowed/low、
+# strict&blocked→raise POLICY_BLOCKED/critical、approval→warning/high、其余→allowed/low。
+# 默认 blocked/approval/whitelist 集合与 TS 端 PolicyEngineConfigSchema 默认值一致。
+GOVERNANCE_CASES = [
+    # whitelist
+    {"commandType": "TOOL_CALL", "target": "read_file", "strictMode": True},
+    {"commandType": "TOOL_CALL", "target": "search", "strictMode": True},
+    {"commandType": "TOOL_CALL", "target": "think", "strictMode": True},
+    # blocked + strict → 阻断
+    {"commandType": "TOOL_CALL", "target": "shell-delete", "strictMode": True},
+    {"commandType": "TOOL_CALL", "target": "credential-access", "strictMode": True},
+    # blocked 但 strict=False → 不走黑名单分支，落默认 allowed
+    {"commandType": "TOOL_CALL", "target": "shell-delete", "strictMode": False},
+    # approval → warning
+    {"commandType": "TOOL_CALL", "target": "deploy-production", "strictMode": True},
+    {"commandType": "TOOL_CALL", "target": "database-migration", "strictMode": True},
+    # 未知目标 → 默认 allowed
+    {"commandType": "TOOL_CALL", "target": "some-random-tool", "strictMode": True},
+]
+
+
+def _check_policy(case: dict[str, Any]) -> dict[str, Any]:
+    engine = PolicyEngine(strict_mode=case["strictMode"])
+    command = Command(
+        command_type=CommandType(case["commandType"]),
+        target=case["target"],
+    )
+    try:
+        event = engine.check(command)
+        return {
+            **case,
+            "expected": {
+                "allowed": True,
+                "result": event.result,
+                "riskLevel": event.risk_level,
+            },
+        }
+    except AgentError as e:
+        return {
+            **case,
+            "expected": {
+                "allowed": False,
+                "result": "blocked",
+                "riskLevel": "critical",
+                "errorCode": e.code.value,
+            },
+        }
+
+
+def gen_governance() -> dict[str, Any]:
+    return {
+        "schemaVersion": 1,
+        "generatedFrom": "governance_plane.PolicyEngine.check (v2 frozen)",
+        "notes": {
+            "defaults": (
+                "blocked/approval/whitelist 默认集合与 TS PolicyEngineConfigSchema 默认值一致；"
+                "本 slice 验证 result/riskLevel/阻断行为在两端等价。"
+            ),
+        },
+        "policyChecks": [_check_policy(c) for c in GOVERNANCE_CASES],
+    }
+
+
+# ============================================================
 # 主入口
 # ============================================================
 
@@ -527,6 +599,7 @@ def main() -> None:
         "control": gen_control(),
         "execution": gen_execution(),
         "memory": gen_memory(),
+        "governance": gen_governance(),
     }
     for slice_name, path in OUT.items():
         path.parent.mkdir(parents=True, exist_ok=True)

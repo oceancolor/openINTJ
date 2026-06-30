@@ -100,6 +100,8 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
   const enableMetrics = !opts.disableMetrics;
 
   const traces = new Map<string, TraceState>();
+  /** 并发/任务/池的独立 span（不挂在 agent 的 tao 树下），key 见各 handler。 */
+  const concurrentSpans = new Map<string, Span>();
   let endedCount = 0;
 
   // ---------- 计数器（即便未注册 MeterProvider，create*Counter 返回 no-op） ----------
@@ -113,6 +115,12 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
   const cPolicyBlocked = c("openintj.policy.blocked", "Governance 拦截次数");
   const cMemoryLoaded = c("openintj.memory.loaded", "Memory 加载的 fragment 总数");
   const cSearchSources = c("openintj.search.sources", "search 工具命中的联网来源数");
+  // 并发 / 多任务 / 多 Agent（RFC-003 方向一/二）
+  const cPoolJobs = c("openintj.pool.jobs", "AgentPool job 完成次数");
+  const cForkBranches = c("openintj.forkjoin.branches", "ForkJoin 分叉子任务总数");
+  const cForkRejected = c("openintj.forkjoin.rejected", "ForkJoin 失败子任务数");
+  const cTaskEnqueued = c("openintj.task.enqueued", "TaskQueue 入队任务数");
+  const cTaskCompleted = c("openintj.task.completed", "TaskQueue 完成/失败任务数");
 
   const getTrace = (traceId: string): TraceState => {
     let st = traces.get(traceId);
@@ -377,6 +385,128 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
     ),
   );
 
+  // ---------- 并发 / 多任务 / 多 Agent ----------
+  const endConcurrentSpan = (key: string, attrs: Record<string, string | number | boolean>, error = false): void => {
+    const span = concurrentSpans.get(key);
+    if (!span) return;
+    for (const [k, v] of Object.entries(attrs)) span.setAttribute(k, v);
+    if (error) span.setStatus({ code: SpanStatusCode.ERROR });
+    span.end();
+    endedCount++;
+    concurrentSpans.delete(key);
+  };
+
+  // AgentPool：每个 job 一个 span
+  offs.push(
+    bus.on(
+      "pool.beforeJob",
+      safe<HookEventMap["pool.beforeJob"]>((payload) => {
+        if (!enableTraces) return;
+        const { span } = startSpan("openintj.pool.job");
+        span.setAttribute("pool.name", payload.pool);
+        span.setAttribute("pool.job_id", payload.jobId);
+        span.setAttribute("pool.active", payload.active);
+        span.setAttribute("pool.pending", payload.pending);
+        concurrentSpans.set(`pool:${payload.pool}:${payload.jobId}`, span);
+      }),
+    ),
+  );
+  offs.push(
+    bus.on(
+      "pool.afterJob",
+      safe<HookEventMap["pool.afterJob"]>((payload) => {
+        if (enableTraces) {
+          endConcurrentSpan(
+            `pool:${payload.pool}:${payload.jobId}`,
+            {
+              "pool.success": payload.success,
+              "pool.duration_ms": payload.durationMs,
+              "pool.completed": payload.completed,
+              "pool.failed": payload.failed,
+            },
+            !payload.success,
+          );
+        }
+        cPoolJobs?.add(1, { pool: payload.pool, success: payload.success ? "true" : "false" });
+      }),
+    ),
+  );
+
+  // ForkJoin：每次分叉一个 span
+  offs.push(
+    bus.on(
+      "forkjoin.beforeFork",
+      safe<HookEventMap["forkjoin.beforeFork"]>((payload) => {
+        if (!enableTraces) return;
+        const { span } = startSpan("openintj.forkjoin");
+        span.setAttribute("forkjoin.group", payload.group);
+        span.setAttribute("forkjoin.total", payload.total);
+        concurrentSpans.set(`fork:${payload.group}`, span);
+      }),
+    ),
+  );
+  offs.push(
+    bus.on(
+      "forkjoin.afterJoin",
+      safe<HookEventMap["forkjoin.afterJoin"]>((payload) => {
+        if (enableTraces) {
+          endConcurrentSpan(
+            `fork:${payload.group}`,
+            {
+              "forkjoin.fulfilled": payload.fulfilled,
+              "forkjoin.rejected": payload.rejected,
+              "forkjoin.duration_ms": payload.durationMs,
+            },
+            payload.fulfilled === 0 && payload.total > 0,
+          );
+        }
+        cForkBranches?.add(payload.total, { group: payload.group });
+        if (payload.rejected > 0) cForkRejected?.add(payload.rejected, { group: payload.group });
+      }),
+    ),
+  );
+
+  // TaskQueue：enqueue 计数；每个被执行的任务一个 span
+  offs.push(
+    bus.on(
+      "task.enqueue",
+      safe<HookEventMap["task.enqueue"]>((payload) => {
+        cTaskEnqueued?.add(1, { queue: payload.queue, ready: payload.ready ? "true" : "false" });
+      }),
+    ),
+  );
+  offs.push(
+    bus.on(
+      "task.beforeRun",
+      safe<HookEventMap["task.beforeRun"]>((payload) => {
+        if (!enableTraces) return;
+        const { span } = startSpan("openintj.task.run");
+        span.setAttribute("task.queue", payload.queue);
+        span.setAttribute("task.id", payload.taskId);
+        span.setAttribute("task.priority", payload.priority);
+        concurrentSpans.set(`task:${payload.queue}:${payload.taskId}`, span);
+      }),
+    ),
+  );
+  offs.push(
+    bus.on(
+      "task.afterRun",
+      safe<HookEventMap["task.afterRun"]>((payload) => {
+        if (enableTraces) {
+          endConcurrentSpan(
+            `task:${payload.queue}:${payload.taskId}`,
+            { "task.success": payload.success, "task.duration_ms": payload.durationMs },
+            !payload.success,
+          );
+        }
+        cTaskCompleted?.add(1, {
+          queue: payload.queue,
+          success: payload.success ? "true" : "false",
+        });
+      }),
+    ),
+  );
+
   return {
     dispose: () => {
       for (const off of offs) {
@@ -404,6 +534,12 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
           endedCount++;
         }
       }
+      for (const [, span] of concurrentSpans) {
+        span.setAttribute("disposed", true);
+        span.end();
+        endedCount++;
+      }
+      concurrentSpans.clear();
       traces.clear();
     },
     openSpanCount: () => {
@@ -413,7 +549,7 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
         if (st.action) n++;
         n += st.tools.size;
       }
-      return n;
+      return n + concurrentSpans.size;
     },
     endedSpanCount: () => endedCount,
   };

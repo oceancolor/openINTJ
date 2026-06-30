@@ -9,3 +9,5 @@ export * from "./shader/pipeline.js";
 export * from "./context-engine.js";
 export * from "./persistent-store.js";
 export * from "./persistence-factory.js";
+export * from "./eval/retrieval-metrics.js";
+export * from "./eval/retrieval-benchmark.js";

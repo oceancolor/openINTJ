@@ -7,6 +7,8 @@
 
 import { contextBridge, ipcRenderer } from "electron";
 import {
+  type AppConfig,
+  type AppConfigPatch,
   type ChatRequest,
   type ChatResponse,
   type DormantDecisionError,
@@ -21,6 +23,13 @@ import {
   type MemoryQueryRequest,
   type MemoryQueryResult,
   type StatusResponse,
+  type WorkspaceError,
+  type WorkspaceInfo,
+  type WorkspacePickResponse,
+  type WorkspaceReadRequest,
+  type WorkspaceReadResponse,
+  type WorkspaceWriteRequest,
+  type WorkspaceWriteResponse,
 } from "../shared/ipc-protocol.js";
 
 const onEvent = (
@@ -28,7 +37,8 @@ const onEvent = (
     | typeof IPC.EVT_TAO
     | typeof IPC.EVT_REACT
     | typeof IPC.EVT_AUDIT
-    | typeof IPC.EVT_UPDATE,
+    | typeof IPC.EVT_UPDATE
+    | typeof IPC.EVT_WORKSPACE,
   cb: (payload: unknown) => void,
 ): (() => void) => {
   const listener = (_evt: unknown, payload: unknown): void => cb(payload);
@@ -76,6 +86,12 @@ const api = {
   ): Promise<DormantDecisionResponse | DormantDecisionError> {
     return ipcRenderer.invoke(IPC.DORMANT_REJECT, req);
   },
+  /** 撤销一条已批准（applied）的 persona 条目 → 从 PersonaConfig 删除；返回 status='revoked'。 */
+  dormantRevoke(
+    req: DormantProposalDecision,
+  ): Promise<DormantDecisionResponse | DormantDecisionError> {
+    return ipcRenderer.invoke(IPC.DORMANT_REVOKE, req);
+  },
   /** 拿当前 PersonaConfig 快照。 */
   dormantPersona(): Promise<DormantPersonaResponse | DormantError> {
     return ipcRenderer.invoke(IPC.DORMANT_PERSONA);
@@ -101,6 +117,36 @@ const api = {
   /** 订阅更新状态事件（checking / available / downloading / downloaded / error）。 */
   onUpdateEvent(cb: (payload: unknown) => void): () => void {
     return onEvent(IPC.EVT_UPDATE, cb);
+  },
+  // ---------- 工作区系统能力面 (RFC-004 §8) ----------
+  /** 当前工作区配置（根目录 / 命令开关 / 白名单）。 */
+  workspaceInfo(): Promise<WorkspaceInfo> {
+    return ipcRenderer.invoke(IPC.WORKSPACE_INFO);
+  },
+  /** 读取工作区内文件（path 相对工作区根，越界 / 过大会被拒绝）。 */
+  workspaceRead(req: WorkspaceReadRequest): Promise<WorkspaceReadResponse | WorkspaceError> {
+    return ipcRenderer.invoke(IPC.WORKSPACE_READ, req);
+  },
+  /** 写入工作区内文件。 */
+  workspaceWrite(req: WorkspaceWriteRequest): Promise<WorkspaceWriteResponse | WorkspaceError> {
+    return ipcRenderer.invoke(IPC.WORKSPACE_WRITE, req);
+  },
+  /** 弹出系统目录选择对话框，选定新的工作区根。 */
+  workspacePickDir(): Promise<WorkspacePickResponse> {
+    return ipcRenderer.invoke(IPC.WORKSPACE_PICK_DIR);
+  },
+  /** 订阅工作区文件变更事件（fs.watch）。 */
+  onWorkspaceEvent(cb: (payload: unknown) => void): () => void {
+    return onEvent(IPC.EVT_WORKSPACE, cb);
+  },
+  // ---------- 应用配置面 ----------
+  /** 读取持久化的应用配置。 */
+  getConfig(): Promise<AppConfig> {
+    return ipcRenderer.invoke(IPC.CONFIG_GET);
+  },
+  /** 浅合并更新应用配置并持久化，返回合并后的完整配置。 */
+  updateConfig(patch: AppConfigPatch): Promise<AppConfig | { error: string }> {
+    return ipcRenderer.invoke(IPC.CONFIG_UPDATE, patch);
   },
 };
 

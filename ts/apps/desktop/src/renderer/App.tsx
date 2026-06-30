@@ -1,12 +1,13 @@
 import React from "react";
 import { type ChatMessage, ChatPanel } from "./components/ChatPanel.js";
 import { DormantPanel } from "./components/DormantPanel.js";
+import { MemoryPanel } from "./components/MemoryPanel.js";
 import { StatusBar, type StatusSnapshot } from "./components/StatusBar.js";
 import { type TrajectoryEntry, TrajectoryPanel } from "./components/TrajectoryPanel.js";
 import { UpdateBanner } from "./components/UpdateBanner.js";
 import "./types.js";
 
-type RightTab = "trajectory" | "dormant";
+type RightTab = "trajectory" | "memory" | "dormant";
 
 export const App = (): JSX.Element => {
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
@@ -123,6 +124,17 @@ export const App = (): JSX.Element => {
             </button>
             <button
               type="button"
+              onClick={() => setRightTab("memory")}
+              className={
+                rightTab === "memory"
+                  ? "px-3 py-2 text-gray-100 border-b-2 border-purple-500"
+                  : "px-3 py-2 text-gray-500 hover:text-gray-300"
+              }
+            >
+              记忆
+            </button>
+            <button
+              type="button"
               onClick={() => setRightTab("dormant")}
               className={
                 rightTab === "dormant"
@@ -141,6 +153,8 @@ export const App = (): JSX.Element => {
           <div className="flex-1 min-h-0">
             {rightTab === "trajectory" ? (
               <TrajectoryPanel entries={trajectory} />
+            ) : rightTab === "memory" ? (
+              <MemoryPanel />
             ) : (
               <DormantPanel enabled={dormantEnabled} />
             )}

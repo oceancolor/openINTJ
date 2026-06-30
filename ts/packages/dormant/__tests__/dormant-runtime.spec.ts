@@ -25,6 +25,62 @@ describe("DormantRuntime", () => {
     expect(r.proposals).toBeDefined();
   });
 
+  it("record 落盘前自动脱敏（默认 redactor）", async () => {
+    const rt = new DormantRuntime();
+    rt.record("我的邮箱是 bob@example.com", "user");
+    const ev = rt.passive.exportAll()[0]!;
+    expect(ev.text).toContain("[REDACTED_EMAIL]");
+    expect(ev.text).not.toContain("bob@example.com");
+  });
+
+  it("redactor=null 显式关闭脱敏", () => {
+    const rt = new DormantRuntime({ redactor: null });
+    rt.record("邮箱 bob@example.com", "user");
+    expect(rt.passive.exportAll()[0]!.text).toContain("bob@example.com");
+  });
+
+  it("revoke 撤销已批准条目 → 从 persona 删除并 version 自增", async () => {
+    const rt = new DormantRuntime({
+      minerOpts: {
+        ngramSize: 2,
+        minFrequency: 3,
+        minConfidence: 0.4,
+        llmExtract: async (ngram) => ({ description: `偏好: ${ngram}`, category: "preference" }),
+      },
+    });
+    for (let i = 0; i < 5; i++) rt.record("绿 茶 健 康", "user");
+    const r = await rt.mine();
+    const first = r.proposals[0]!;
+    rt.approve(first.proposalId);
+    expect(Object.keys(rt.snapshot().preferences).length).toBeGreaterThan(0);
+    const versionAfterApprove = rt.snapshot().meta.version;
+
+    const revoked = rt.revoke(first.proposalId);
+    expect(revoked?.status).toBe("revoked");
+    const persona = rt.snapshot();
+    expect(Object.keys(persona.preferences).length).toBe(0);
+    expect(persona.meta.version).toBe(versionAfterApprove + 1);
+
+    // 二次撤销无效（已非 applied）
+    expect(rt.revoke(first.proposalId)).toBeUndefined();
+  });
+
+  it("revoke 仅对 applied 生效：pending / 不存在返回 undefined", async () => {
+    const rt = new DormantRuntime({
+      minerOpts: {
+        ngramSize: 2,
+        minFrequency: 3,
+        minConfidence: 0.4,
+        llmExtract: async (ngram) => ({ description: ngram, category: "preference" }),
+      },
+    });
+    for (let i = 0; i < 5; i++) rt.record("a b c", "user");
+    const r = await rt.mine();
+    const pending = r.proposals[0]!;
+    expect(rt.revoke(pending.proposalId)).toBeUndefined(); // 还是 pending
+    expect(rt.revoke("ghost")).toBeUndefined();
+  });
+
   it("注入 llmExtract → proposals 落地 → approve 写入 PersonaConfig", async () => {
     const rt = new DormantRuntime({
       minerOpts: {

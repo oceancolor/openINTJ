@@ -22,8 +22,24 @@ vi.mock("electron", () => ({
   BrowserWindow: class {},
 }));
 
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { assembleDesktopAgent } from "../src/main/agent.js";
-import { registerIpcHandlers } from "../src/main/ipc-handlers.js";
+import { createConfigService } from "../src/main/config-store.js";
+import { type IpcDeps, registerIpcHandlers } from "../src/main/ipc-handlers.js";
+import {
+  WorkspaceInfoSchema,
+  WorkspaceReadResponseSchema,
+  WorkspaceWriteResponseSchema,
+} from "../src/shared/ipc-protocol.js";
+
+type Handlers = Map<string, (e: unknown, p?: unknown) => unknown>;
+const makeFakeIpc = (handlers: Handlers): Parameters<typeof registerIpcHandlers>[2] =>
+  ({
+    handle: (ch: string, cb: (e: unknown, p?: unknown) => unknown) => handlers.set(ch, cb),
+    removeHandler: () => {},
+  }) as unknown as Parameters<typeof registerIpcHandlers>[2];
 
 describe("IPC handler registration", () => {
   it("registers all openintj.* channels", async () => {
@@ -444,6 +460,72 @@ describe("IPC handler registration", () => {
     }
   });
 
+  it("DORMANT_REVOKE：approve → revoke 后 persona 清空，proposal=revoked", async () => {
+    const handlers = new Map<string, (e: unknown, p?: unknown) => unknown>();
+    const fakeIpc = {
+      handle: (ch: string, cb: (e: unknown, p?: unknown) => unknown) => handlers.set(ch, cb),
+      removeHandler: () => {},
+    } as unknown as Parameters<typeof registerIpcHandlers>[2];
+
+    const agent = await assembleDesktopAgent({
+      llmProvider: "mock",
+      enableDormant: true,
+      dormantOpts: {
+        minerOpts: {
+          ngramSize: 2,
+          minFrequency: 2,
+          minConfidence: 0.3,
+          llmExtract: async (n) => ({ description: `偏好: ${n}`, category: "preference" }),
+        },
+      },
+    });
+    registerIpcHandlers(agent, undefined, fakeIpc);
+
+    for (let i = 0; i < 4; i++) agent.dormant!.record("绿 茶", "user");
+    const mineRes = (await handlers.get(IPC.DORMANT_MINE)?.({}, undefined)) as {
+      proposals: Array<{ proposalId: string }>;
+    };
+    const id = mineRes.proposals[0]!.proposalId;
+    const approveRes = (await handlers.get(IPC.DORMANT_APPROVE)?.({}, { proposalId: id })) as {
+      status: string;
+    };
+    expect(approveRes.status).toBe("applied");
+
+    const revokeRes = (await handlers.get(IPC.DORMANT_REVOKE)?.({}, { proposalId: id })) as {
+      status?: string;
+    };
+    expect(revokeRes.status).toBe("revoked");
+
+    const persona = (await handlers.get(IPC.DORMANT_PERSONA)?.({}, undefined)) as {
+      preferences: Record<string, unknown>;
+    };
+    expect(Object.keys(persona.preferences).length).toBe(0);
+  });
+
+  it("DORMANT_REVOKE：未 applied / 不存在 → not_found_or_not_applied；未启用 → dormant_not_enabled", async () => {
+    const h1 = new Map<string, (e: unknown, p?: unknown) => unknown>();
+    const agent1 = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent1, undefined, {
+      handle: (ch: string, cb: (e: unknown, p?: unknown) => unknown) => h1.set(ch, cb),
+      removeHandler: () => {},
+    } as unknown as Parameters<typeof registerIpcHandlers>[2]);
+    const notEnabled = (await h1.get(IPC.DORMANT_REVOKE)?.({}, { proposalId: "x" })) as {
+      error?: string;
+    };
+    expect(notEnabled.error).toBe("dormant_not_enabled");
+
+    const h2 = new Map<string, (e: unknown, p?: unknown) => unknown>();
+    const agent2 = await assembleDesktopAgent({ llmProvider: "mock", enableDormant: true });
+    registerIpcHandlers(agent2, undefined, {
+      handle: (ch: string, cb: (e: unknown, p?: unknown) => unknown) => h2.set(ch, cb),
+      removeHandler: () => {},
+    } as unknown as Parameters<typeof registerIpcHandlers>[2]);
+    const ghost = (await h2.get(IPC.DORMANT_REVOKE)?.({}, { proposalId: "ghost" })) as {
+      error?: string;
+    };
+    expect(ghost.error).toBe("not_found_or_not_applied");
+  });
+
   it("APPROVE / REJECT 不存在 proposalId 时返回 not_found_or_already_decided", async () => {
     const handlers = new Map<string, (e: unknown, p?: unknown) => unknown>();
     const fakeIpc = {
@@ -482,5 +564,138 @@ describe("IPC handler registration", () => {
       error?: string;
     };
     expect(r.error).toBe("dormant_not_enabled");
+  });
+
+  // ---------- RFC-004 §8 工作区系统能力面 ----------
+
+  it("WORKSPACE_INFO 暴露沙箱根 + 命令策略，通过 schema 校验", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ointj-ws-info-"));
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock", workspaceDir: root });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
+
+    const raw = await handlers.get(IPC.WORKSPACE_INFO)?.({}, undefined);
+    const parsed = WorkspaceInfoSchema.safeParse(raw);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.root).toBe(root);
+      expect(parsed.data.enableCommands).toBe(false);
+    }
+  });
+
+  it("WORKSPACE_WRITE → WORKSPACE_READ 在沙箱内往返", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ointj-ws-rw-"));
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock", workspaceDir: root });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
+
+    const wRaw = await handlers.get(IPC.WORKSPACE_WRITE)?.(
+      {},
+      { path: "notes/a.txt", content: "hello-ws" },
+    );
+    const wParsed = WorkspaceWriteResponseSchema.safeParse(wRaw);
+    expect(wParsed.success).toBe(true);
+
+    const rRaw = await handlers.get(IPC.WORKSPACE_READ)?.({}, { path: "notes/a.txt" });
+    const rParsed = WorkspaceReadResponseSchema.safeParse(rRaw);
+    expect(rParsed.success).toBe(true);
+    if (rParsed.success) expect(rParsed.data.content).toBe("hello-ws");
+  });
+
+  it("WORKSPACE_READ 拒绝越界路径，返回 workspace_error", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ointj-ws-esc-"));
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock", workspaceDir: root });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
+
+    const r = (await handlers.get(IPC.WORKSPACE_READ)?.(
+      {},
+      { path: "../../etc/passwd" },
+    )) as { error?: string };
+    expect(r.error).toBe("workspace_error");
+  });
+
+  it("WORKSPACE_PICK_DIR：无 picker 返回 canceled；注入 picker 返回 root", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ointj-ws-pick-"));
+    const agent = await assembleDesktopAgent({ llmProvider: "mock", workspaceDir: root });
+
+    const h1: Handlers = new Map();
+    registerIpcHandlers(agent, undefined, makeFakeIpc(h1));
+    const noPick = (await h1.get(IPC.WORKSPACE_PICK_DIR)?.({}, undefined)) as {
+      canceled: boolean;
+    };
+    expect(noPick.canceled).toBe(true);
+
+    const h2: Handlers = new Map();
+    const deps: IpcDeps = { pickDirectory: async () => "C:/picked/dir" };
+    registerIpcHandlers(agent, undefined, makeFakeIpc(h2), deps);
+    const picked = (await h2.get(IPC.WORKSPACE_PICK_DIR)?.({}, undefined)) as {
+      canceled: boolean;
+      root?: string;
+    };
+    expect(picked.canceled).toBe(false);
+    expect(picked.root).toBe("C:/picked/dir");
+  });
+
+  // ---------- 应用配置面 ----------
+
+  it("CONFIG_GET / CONFIG_UPDATE 经注入的 ConfigService 往返并落盘", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ointj-cfg-"));
+    const cfgPath = join(dir, "config.json");
+    const config = createConfigService(cfgPath);
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers), { config });
+
+    const before = (await handlers.get(IPC.CONFIG_GET)?.({}, undefined)) as Record<string, unknown>;
+    expect(before).toEqual({});
+
+    const updated = (await handlers.get(IPC.CONFIG_UPDATE)?.(
+      {},
+      { retrievalMode: "hybrid", enableCommands: true },
+    )) as { retrievalMode?: string; enableCommands?: boolean };
+    expect(updated.retrievalMode).toBe("hybrid");
+    expect(updated.enableCommands).toBe(true);
+
+    // 落盘可被独立读回
+    const onDisk = JSON.parse(readFileSync(cfgPath, "utf8")) as { retrievalMode?: string };
+    expect(onDisk.retrievalMode).toBe("hybrid");
+
+    const after = (await handlers.get(IPC.CONFIG_GET)?.({}, undefined)) as {
+      retrievalMode?: string;
+    };
+    expect(after.retrievalMode).toBe("hybrid");
+  });
+
+  it("CONFIG_UPDATE 拒绝非法补丁", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ointj-cfg-bad-"));
+    const config = createConfigService(join(dir, "config.json"));
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers), { config });
+
+    const r = (await handlers.get(IPC.CONFIG_UPDATE)?.(
+      {},
+      { retrievalMode: "not-a-mode" },
+    )) as { error?: string };
+    expect(r.error).toBe("invalid_request");
+  });
+
+  it("注册了所有 workspace + config channel", async () => {
+    const handle = vi.fn();
+    const removeHandler = vi.fn();
+    const fakeIpc = { handle, removeHandler } as unknown as Parameters<
+      typeof registerIpcHandlers
+    >[2];
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    const reg = registerIpcHandlers(agent, undefined, fakeIpc);
+    const channels = handle.mock.calls.map((c) => c[0] as string);
+    expect(channels).toContain(IPC.WORKSPACE_READ);
+    expect(channels).toContain(IPC.WORKSPACE_WRITE);
+    expect(channels).toContain(IPC.WORKSPACE_INFO);
+    expect(channels).toContain(IPC.WORKSPACE_PICK_DIR);
+    expect(channels).toContain(IPC.CONFIG_GET);
+    expect(channels).toContain(IPC.CONFIG_UPDATE);
+    reg.unregister();
   });
 });

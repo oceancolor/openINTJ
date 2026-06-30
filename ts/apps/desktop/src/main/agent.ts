@@ -1,4 +1,5 @@
-import { type RateLimitOpts, RateLimitedLlmClient } from "@openintj/concurrency";
+import { randomUUID } from "node:crypto";
+import { type RateLimitOpts, RateLimitedLlmClient, forkJoin } from "@openintj/concurrency";
 import {
   DEFAULT_REACT_CONFIG,
   DEFAULT_TAO_CONFIG,
@@ -16,7 +17,12 @@ import {
 import { HunyuanClient, createHunyuanSearchTool } from "@openintj/llm-hunyuan";
 import { OllamaClient } from "@openintj/llm-ollama";
 import { ControlPlane } from "@openintj/plane-control";
-import { Executor, ToolHub } from "@openintj/plane-execution";
+import {
+  Executor,
+  ToolHub,
+  type WorkspaceTools,
+  createWorkspaceTools,
+} from "@openintj/plane-execution";
 import { GovernancePlane } from "@openintj/plane-governance";
 import {
   ContextEngine,
@@ -25,7 +31,15 @@ import {
   type PersistentMemoryStore,
   createPersistentMemoryStore,
 } from "@openintj/plane-memory";
-import { DEFAULT_AGENT_SYSTEM_PROMPT, appendSourcesFooter } from "@openintj/shared";
+import {
+  DEFAULT_AGENT_SYSTEM_PROMPT,
+  type ResolvedWorkspaceConfig,
+  type SelfConsistencyStrategy,
+  appendSourcesFooter,
+  resolveSelfConsistency,
+  resolveWorkspaceConfig,
+  selectConsistentAnswer,
+} from "@openintj/shared";
 import { createSqliteDormantStore } from "@openintj/storage-sqlite";
 import {
   type HybridConfig,
@@ -70,6 +84,21 @@ export interface DesktopAgentOpts {
   retrievalMode?: "vector" | "hybrid";
   /** RFC-003 方向 1：LLM 速率限制。env OPENINTJ_RATE_LIMIT_QPS 也启用。 */
   rateLimit?: RateLimitOpts;
+  /**
+   * RFC-003 方向一/二接入：opt-in 自一致性（并行多采样 + 投票）。
+   * samples>1 时每次 run 用 forkJoin 并行跑 N 个 tao.run，再按 strategy 选最终答案。
+   * 默认关闭；env OPENINTJ_SELF_CONSISTENCY=N / OPENINTJ_SELF_CONSISTENCY_STRATEGY 也可启用。
+   */
+  selfConsistency?: { samples: number; strategy?: SelfConsistencyStrategy };
+  /**
+   * 工作区根目录：read_file / write_file 被沙箱限制在此目录内（RFC-004 §8）。
+   * 缺省走 env OPENINTJ_WORKSPACE_DIR，再退到 process.cwd()。
+   */
+  workspaceDir?: string;
+  /** 是否允许 execute_command（默认关；env OPENINTJ_ENABLE_COMMANDS=1 也启用）。命令执行高危。 */
+  enableCommands?: boolean;
+  /** 命令白名单（按可执行文件名）；缺省走 env OPENINTJ_ALLOWED_COMMANDS（逗号分隔）。 */
+  allowedCommands?: string[];
   /**
    * Phase 3.8：把 HookBus 接到 OpenTelemetry。
    * - true：attachOtelToHooks(hooks)
@@ -226,6 +255,11 @@ export interface DesktopAgent {
   dormantPersistenceInfo?: { adapter: string; dbPath?: string };
   /** OpenTelemetry 接线状态（enableOtel 真值时存在；含 dispose 钩子）。 */
   otel?: AttachedOtel;
+  /**
+   * 工作区系统能力面（RFC-004 §8）：与 Agent 的 read_file/write_file 工具**共用同一沙箱**，
+   * 供 IPC handler 直接复用，保证 UI 直接读写与 Agent 工具读写遵循完全相同的边界。
+   */
+  workspace: { config: ResolvedWorkspaceConfig; tools: WorkspaceTools };
   /** 基于 HybridRetriever 的检索辅助；无论 retrievalMode 都可用。 */
   retrieveHybrid(query: string, opts?: DesktopRetrieveHybridOpts): Promise<DesktopHybridHit[]>;
   run(query: string): Promise<TaoResult>;
@@ -320,10 +354,13 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
   const noop = () => ({ note: "[mock]" });
   // search 工具优先接混元联网搜索（按 rawLlm，避开速率限制包装层）；非混元则保持占位。
   const searchHandler = rawLlm instanceof HunyuanClient ? createHunyuanSearchTool(rawLlm) : noop;
+  // 真实工作区工具：read_file / write_file 沙箱限定在 workspace 根内，execute_command 默认禁用。
+  const wsConfig = resolveWorkspaceConfig(opts, process.cwd());
+  const wsTools = createWorkspaceTools(wsConfig);
   toolHub.registerBuiltinTools({
-    readFile: noop,
-    writeFile: noop,
-    executeCommand: noop,
+    readFile: wsTools.readFile,
+    writeFile: wsTools.writeFile,
+    executeCommand: wsTools.executeCommand,
     search: searchHandler,
   });
   const execution = new Executor({ toolHub, hooks, registerBuiltins: false });
@@ -338,6 +375,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       callOpts?: { traceId?: string; timeoutMs?: number },
     ) => toolHub.call(name, params, callOpts ?? {}),
   });
+  const baseSystemPrompt = opts.systemPrompt ?? DEFAULT_AGENT_SYSTEM_PROMPT;
   const tao = new TaoLoop({
     config: {
       ...DEFAULT_TAO_CONFIG,
@@ -346,10 +384,24 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     hooks,
     react,
     availableTools: () => toolHub.list(),
-    systemPrompt: opts.systemPrompt ?? DEFAULT_AGENT_SYSTEM_PROMPT,
+    systemPrompt: baseSystemPrompt,
+    // 每轮注入：①已批准的钝化记忆 persona（无需检索）②检索到的 [记忆参考]。
+    contextProvider: async ({ query, history, taskType, traceId }) => {
+      const persona = dormant?.personaSystemPrompt() ?? "";
+      const snap = await contextEngine.build({
+        query,
+        history,
+        taskType,
+        systemPrompt: persona ? `${baseSystemPrompt}\n\n${persona}` : baseSystemPrompt,
+        topK: 6,
+        ...(traceId ? { traceId } : {}),
+      });
+      return snap.systemPrompt;
+    },
   });
 
   const retrieveHybrid = buildHybridRetrieve(persistentStore);
+  const selfConsistency = resolveSelfConsistency(opts.selfConsistency);
 
   return {
     hooks,
@@ -367,13 +419,26 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     ...(dormant ? { dormant } : {}),
     ...(dormantPersistenceInfo ? { dormantPersistenceInfo } : {}),
     ...(otel ? { otel } : {}),
+    workspace: { config: wsConfig, tools: wsTools },
     retrieveHybrid,
     async run(query: string) {
-      memory.recordUserInput(query);
       if (dormant) dormant.record(query, "user", { stage: "run.input" });
-      const result = await tao.run(query);
+      // 先跑（contextProvider 会检索此前已落盘的记忆），再记录本轮 → 避免检索命中当前输入本身。
+      let result: TaoResult;
+      if (selfConsistency) {
+        // 方向一/二：并行多采样 + 投票。forkJoin 会发 forkjoin.* 事件 → OTel span/metric。
+        const { fulfilled } = await forkJoin(
+          Array.from({ length: selfConsistency.samples }, (_, i) => i),
+          (i) => tao.run(query, { traceId: `${randomUUID()}-sc${i}` }),
+          { hooks, group: "self-consistency", minSuccess: 1 },
+        );
+        result = selectConsistentAnswer(fulfilled, selfConsistency.strategy) ?? fulfilled[0]!;
+      } else {
+        result = await tao.run(query);
+      }
       // 把 search 工具命中的联网来源追加到答案末尾 → 随记忆/dormant 一起入库。
       result.finalAnswer = appendSourcesFooter(result.finalAnswer, result.trajectory);
+      memory.recordUserInput(query);
       memory.recordAssistantOutput(result.finalAnswer);
       if (dormant)
         dormant.record(result.finalAnswer, "agent", {

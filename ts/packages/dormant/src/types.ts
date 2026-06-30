@@ -36,8 +36,15 @@ export const InternalizationProposalSchema = z.object({
   targetField: z.string(),
   /** 拟写入的值。 */
   value: z.unknown(),
-  /** 状态。 */
-  status: z.enum(["pending", "approved", "rejected", "applied"]).default("pending"),
+  /**
+   * 状态。
+   * - pending：待审批
+   * - applied：已批准并写入 PersonaConfig
+   * - rejected：已拒绝（从未写入）
+   * - revoked：曾 applied，后被用户撤销（已从 PersonaConfig 删除）
+   * - approved：保留位（历史兼容）
+   */
+  status: z.enum(["pending", "approved", "rejected", "applied", "revoked"]).default("pending"),
   /** 创建时间。 */
   ts: z.number(),
   /** 用户决策时间。 */

@@ -3,7 +3,7 @@
   "version": "3.0.0-alpha.0",
   "private": true,
   "type": "module",
-  "description": "RFC-003 任务池 + 对象池：SharedContext / HybridRetriever / TaskQueue / ObjectPool",
+  "description": "RFC-003 方向二原语库（仅 HybridRetriever 已接入产品；SharedContext/TaskQueue/ObjectPool 为实验性，见 README）",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

@@ -28,6 +28,23 @@ export interface TaoMessageBuilder {
   }): { messages: ChatMessage[]; systemPrompt: string };
 }
 
+/** 每轮动态构造「基础 system prompt」的入参（可据此检索并注入记忆）。 */
+export interface TaoContextInput {
+  query: string;
+  iteration: number;
+  history: ChatMessage[];
+  trajectory: TrajectoryEntry[];
+  taskType: TaskTypeType;
+  traceId: string;
+}
+
+/**
+ * 可选：每轮调用，返回注入了记忆/上下文的「基础 system prompt」。
+ * 提供后**取代**静态 `systemPrompt`（仍会再叠加 builder 的轮次提示与工具说明）。
+ * 支持异步，便于接 ContextEngine 这类需要向量检索的实现。
+ */
+export type TaoContextProvider = (input: TaoContextInput) => Promise<string> | string;
+
 export interface TaoDeps {
   config: TaoConfig;
   hooks: HookBus;
@@ -44,6 +61,11 @@ export interface TaoDeps {
   taskClassifier?: (query: string) => TaskTypeType;
   /** 用户系统提示。 */
   systemPrompt?: string;
+  /**
+   * 可选：每轮动态构造基础 system prompt（用于注入检索到的记忆）。
+   * 提供后取代静态 `systemPrompt`；不提供则回退到 `systemPrompt`。
+   */
+  contextProvider?: TaoContextProvider;
 }
 
 const defaultBuilder: TaoMessageBuilder = {
@@ -119,6 +141,7 @@ export class TaoLoop {
   private readonly builder: TaoMessageBuilder;
   private readonly classifier: (query: string) => TaskTypeType;
   private readonly systemPrompt: string;
+  private readonly contextProvider: TaoContextProvider | undefined;
 
   constructor(deps: TaoDeps) {
     this._config = deps.config;
@@ -132,6 +155,7 @@ export class TaoLoop {
     this.builder = deps.messageBuilder ?? defaultBuilder;
     this.classifier = deps.taskClassifier ?? detectTaskType;
     this.systemPrompt = deps.systemPrompt ?? "";
+    this.contextProvider = deps.contextProvider;
   }
 
   async run(
@@ -208,10 +232,25 @@ export class TaoLoop {
         taoOpts,
       );
 
+      // 基础 system prompt：优先用 contextProvider（可注入检索到的记忆），否则用静态 systemPrompt。
+      let baseSystem = this.systemPrompt;
+      if (this.contextProvider) {
+        try {
+          baseSystem = await this.contextProvider({
+            query: ctx.query,
+            iteration: ctx.iteration,
+            history,
+            trajectory: ctx.trajectory,
+            taskType,
+            traceId,
+          });
+        } catch {
+          // 记忆注入失败绝不阻断主循环，回退静态 systemPrompt。
+          baseSystem = this.systemPrompt;
+        }
+      }
       const finalSystemPrompt =
-        this.systemPrompt.length > 0
-          ? `${this.systemPrompt}\n\n${built.systemPrompt}`
-          : built.systemPrompt;
+        baseSystem.length > 0 ? `${baseSystem}\n\n${built.systemPrompt}` : built.systemPrompt;
 
       const reactInput = {
         messages: built.messages,
@@ -221,7 +260,10 @@ export class TaoLoop {
       };
 
       const reactOpts = traceId ? { traceId } : undefined;
-      const react = await this._react.run(reactInput, reactOpts);
+      // enableReact=false 退化为单次 LLM 调用（不跑微循环、不下发工具）。
+      const react = this._config.enableReact
+        ? await this._react.run(reactInput, reactOpts)
+        : await this._react.runSingle(reactInput, reactOpts);
 
       ctx.trajectory.push(...react.trajectory);
       totalReactSteps += react.iterations;

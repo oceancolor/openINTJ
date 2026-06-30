@@ -194,6 +194,17 @@ describe("RFC-003 方向 3: Dormant Memory Learning（审批回路）", () => {
     const cfg = im.snapshot();
     expect(Object.keys(cfg.preferences).length).toBeGreaterThan(0);
     expect(cfg.meta.version).toBe(1);
+
+    // RFC-003 §3.6 #2：批准后渲染成可注入的 system prompt 片段（无需检索就生效）
+    const personaPrompt = im.personaSystemPrompt();
+    expect(personaPrompt).toContain("[用户画像]");
+    const firstVal = String(Object.values(cfg.preferences)[0]);
+    expect(personaPrompt).toContain(firstVal);
+  });
+
+  it("无已批准模式时 personaSystemPrompt 为空字符串", () => {
+    const im = new InternalizationManager();
+    expect(im.personaSystemPrompt()).toBe("");
   });
 
   it("用户拒绝提案后 PersonaConfig 不变", async () => {

@@ -96,6 +96,113 @@ describe("TaoLoop.run (single iteration)", () => {
     expect(r.taskType).toBe(TaskType.QUICK_RESPONSE);
   });
 
+  it("enableReact=false 退化为单次 LLM 调用（不跑微循环、不调工具）", async () => {
+    const hooks = new HookBus({ logger: silent });
+    // 即便 LLM 输出 Action 协议，退化路径也应直接当成答案返回，不解析、不调工具。
+    const llm = makeLlm(["Action: search\nAction-Input: {}"]);
+    const toolRunner = vi.fn(passingRunner);
+    const react = new ReactStateMachine({
+      config: DEFAULT_REACT_CONFIG,
+      hooks,
+      llm,
+      toolRunner,
+    });
+    const tao = new TaoLoop({
+      config: { ...DEFAULT_TAO_CONFIG, maxTaoIterations: 1, enableReact: false },
+      hooks,
+      react,
+      availableTools: () => tools,
+    });
+    const r = await tao.run("你好世界");
+    expect(r.status).toBe("completed");
+    expect(r.finalAnswer).toBe("Action: search\nAction-Input: {}");
+    expect(r.iterations).toBe(1);
+    expect(toolRunner).not.toHaveBeenCalled();
+    // 轨迹是单个 final 节点
+    expect(r.trajectory).toHaveLength(1);
+    expect(r.trajectory[0]?.state.type).toBe("final");
+  });
+
+  it("contextProvider 覆盖静态 systemPrompt 并把记忆注入到 ReAct", async () => {
+    const hooks = new HookBus({ logger: silent });
+    let capturedSystem = "";
+    const llm: LlmClient = {
+      async chat(messages) {
+        const sys = messages.find((m) => m.role === "system");
+        capturedSystem = typeof sys?.content === "string" ? sys.content : "";
+        return "FINAL: ok";
+      },
+      async visionChat() {
+        return "v";
+      },
+      getStatus() {
+        return {
+          provider: "t",
+          model: "x",
+          available: true,
+          mode: "live",
+          status: "connected",
+          visionSupported: false,
+        };
+      },
+    };
+    const seen: string[] = [];
+    const tao = new TaoLoop({
+      config: { ...DEFAULT_TAO_CONFIG, maxTaoIterations: 1 },
+      hooks,
+      react: new ReactStateMachine({ config: DEFAULT_REACT_CONFIG, hooks, llm, toolRunner: passingRunner }),
+      availableTools: () => [],
+      systemPrompt: "STATIC_PROMPT",
+      contextProvider: ({ query }) => {
+        seen.push(query);
+        return "BASE_PROMPT\n\n[记忆参考]\n#1 用户喜欢绿茶";
+      },
+    });
+    await tao.run("我喜欢什么？");
+    expect(seen).toEqual(["我喜欢什么？"]);
+    expect(capturedSystem).toContain("BASE_PROMPT");
+    expect(capturedSystem).toContain("用户喜欢绿茶");
+    expect(capturedSystem).not.toContain("STATIC_PROMPT");
+  });
+
+  it("contextProvider 抛错时回退静态 systemPrompt，不阻断主循环", async () => {
+    const hooks = new HookBus({ logger: silent });
+    let capturedSystem = "";
+    const llm: LlmClient = {
+      async chat(messages) {
+        const sys = messages.find((m) => m.role === "system");
+        capturedSystem = typeof sys?.content === "string" ? sys.content : "";
+        return "FINAL: ok";
+      },
+      async visionChat() {
+        return "v";
+      },
+      getStatus() {
+        return {
+          provider: "t",
+          model: "x",
+          available: true,
+          mode: "live",
+          status: "connected",
+          visionSupported: false,
+        };
+      },
+    };
+    const tao = new TaoLoop({
+      config: { ...DEFAULT_TAO_CONFIG, maxTaoIterations: 1 },
+      hooks,
+      react: new ReactStateMachine({ config: DEFAULT_REACT_CONFIG, hooks, llm, toolRunner: passingRunner }),
+      availableTools: () => [],
+      systemPrompt: "FALLBACK_PROMPT",
+      contextProvider: () => {
+        throw new Error("retrieval boom");
+      },
+    });
+    const r = await tao.run("hi");
+    expect(r.status).toBe("completed");
+    expect(capturedSystem).toContain("FALLBACK_PROMPT");
+  });
+
   it("emits all 6 tao.* hooks in order", async () => {
     const hooks = new HookBus({ logger: silent });
     const events: string[] = [];

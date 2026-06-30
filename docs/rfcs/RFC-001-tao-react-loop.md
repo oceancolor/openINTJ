@@ -261,7 +261,9 @@ TAO 与 ReAct 在每个状态转换点发钩子，方便外部观察/拦截/改�
 
 ## 11. 未决问题
 
-- **Q1**：ReAct 的 `Final Answer:` 是用 prompt 模板约定还是 OpenAI function calling 协议？（推荐后者，但混元的 function calling 兼容性需在 Phase 1 验证）
+- **Q1**：~~ReAct 的 `Final Answer:` 是用 prompt 模板约定还是 OpenAI function calling 协议？~~
+  **已决（2026-06-30）：采用文本协议（Thought/Action/FINAL），见 [ADR-001](../architecture/adr-001-react-tool-protocol.md)。**
+  理由：本地优先 / 多 provider 中立、可观测、与 Python v2 parity 对齐。该 ADR 记录了代价与"何时回到 function-calling"的触发条件。
 - **Q2**：TAO 多轮时的"是否续轮"判据，是 LLM 自评还是规则（计划进度<100%）？（推荐两者皆要，规则做硬下限，LLM 做软判据）
 
 这两个问题在 Phase 1 实现前需要在 issue 中收敛。

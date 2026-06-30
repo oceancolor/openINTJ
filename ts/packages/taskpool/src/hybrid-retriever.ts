@@ -83,26 +83,114 @@ export class HybridRetriever<D extends HybridDoc = HybridDoc> {
   private docTokens: string[][] = [];
   private avgDocLen = 0;
   private docFreq = new Map<string, number>();
+  private totalLen = 0;
+  private idIndex = new Map<string, number>();
 
   constructor(opts: HybridRetrieverOpts = {}) {
     this.config = { ...DEFAULT_HYBRID_CONFIG, ...(opts.config ?? {}) };
   }
 
+  /** 当前已索引文档数。 */
+  get size(): number {
+    return this.docs.length;
+  }
+
+  /** 全量（重）建索引。等价于 clear() + 逐条 upsert，但一次性算更快。 */
   index(docs: readonly D[]): void {
     this.docs = [...docs];
     this.docTokens = this.docs.map((d) => tokenize(d.text));
-    let total = 0;
+    this.totalLen = 0;
     this.docFreq.clear();
-    for (const tokens of this.docTokens) {
-      total += tokens.length;
-      const seen = new Set<string>();
-      for (const t of tokens) {
-        if (seen.has(t)) continue;
-        seen.add(t);
-        this.docFreq.set(t, (this.docFreq.get(t) ?? 0) + 1);
-      }
+    this.idIndex.clear();
+    for (let i = 0; i < this.docs.length; i++) {
+      this.idIndex.set(this.docs[i]!.id, i);
+      this.addDocStats(this.docTokens[i]!);
     }
-    this.avgDocLen = this.docs.length > 0 ? total / this.docs.length : 0;
+    this.recomputeAvg();
+  }
+
+  /** 累加一篇文档对 BM25 统计量（docFreq / totalLen）的贡献。 */
+  private addDocStats(tokens: readonly string[]): void {
+    this.totalLen += tokens.length;
+    const seen = new Set<string>();
+    for (const t of tokens) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      this.docFreq.set(t, (this.docFreq.get(t) ?? 0) + 1);
+    }
+  }
+
+  /** 扣除一篇文档对 BM25 统计量的贡献（docFreq 归零则删除）。 */
+  private removeDocStats(tokens: readonly string[]): void {
+    this.totalLen -= tokens.length;
+    if (this.totalLen < 0) this.totalLen = 0;
+    const seen = new Set<string>();
+    for (const t of tokens) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      const next = (this.docFreq.get(t) ?? 0) - 1;
+      if (next <= 0) this.docFreq.delete(t);
+      else this.docFreq.set(t, next);
+    }
+  }
+
+  private recomputeAvg(): void {
+    this.avgDocLen = this.docs.length > 0 ? this.totalLen / this.docs.length : 0;
+  }
+
+  /**
+   * 增量插入/更新一篇文档（按 id）。已存在则替换并增量修正统计量，否则追加。
+   * 避免每次都全量 index() 重建——支撑"记忆随对话增量入库"的产品路径（roadmap #10）。
+   */
+  upsert(doc: D): void {
+    const tokens = tokenize(doc.text);
+    const pos = this.idIndex.get(doc.id);
+    if (pos !== undefined) {
+      this.removeDocStats(this.docTokens[pos]!);
+      this.docs[pos] = doc;
+      this.docTokens[pos] = tokens;
+      this.addDocStats(tokens);
+    } else {
+      this.idIndex.set(doc.id, this.docs.length);
+      this.docs.push(doc);
+      this.docTokens.push(tokens);
+      this.addDocStats(tokens);
+    }
+    this.recomputeAvg();
+  }
+
+  /** 批量增量插入/更新。 */
+  upsertBatch(docs: readonly D[]): void {
+    for (const d of docs) this.upsert(d);
+  }
+
+  /** 按 id 删除一篇文档（swap-remove，O(1) 调整 idIndex）。返回是否删除成功。 */
+  remove(id: string): boolean {
+    const pos = this.idIndex.get(id);
+    if (pos === undefined) return false;
+    this.removeDocStats(this.docTokens[pos]!);
+    const last = this.docs.length - 1;
+    if (pos !== last) {
+      const movedDoc = this.docs[last]!;
+      this.docs[pos] = movedDoc;
+      this.docTokens[pos] = this.docTokens[last]!;
+      this.idIndex.set(movedDoc.id, pos);
+    }
+    this.docs.pop();
+    this.docTokens.pop();
+    this.idIndex.delete(id);
+    this.recomputeAvg();
+    return true;
+  }
+
+  /** 清空索引。 */
+  clear(): void {
+    this.docs = [];
+    this.docTokens = [];
+    this.docFreq.clear();
+    this.idIndex.clear();
+    this.totalLen = 0;
+    this.avgDocLen = 0;
   }
 
   search(query: string, queryVector: readonly number[] | undefined, topK = 10): HybridScored<D>[] {

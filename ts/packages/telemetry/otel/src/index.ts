@@ -8,3 +8,4 @@ export {
   type BootstrappedOtel,
   bootstrapNodeOtel,
 } from "./bootstrap.js";
+export { type WithRootSpanOpts, withRootSpan } from "./root-span.js";

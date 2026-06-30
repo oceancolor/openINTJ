@@ -407,6 +407,54 @@ export class ReactStateMachine {
     return output;
   }
 
+  /**
+   * 退化路径（`TaoConfig.enableReact=false`）：跳过 ReAct 微循环，做**单次 LLM 调用**直接作答。
+   * 不下发工具说明、不解析 Thought/Action 协议——用于"纯对话 / 快速响应"等无需工具的场景，
+   * 省 token、省时延。仍发出 react.beforeThought / afterThought / onStopCondition 以保持可观测一致。
+   */
+  async runSingle(input: ReactInput, opts: ReactRunOptions = {}): Promise<ReactOutput> {
+    const traceId = opts.traceId;
+    const hookOpts = traceId ? { traceId } : undefined;
+
+    await this._hooks.emit(
+      "react.beforeThought",
+      { context: { systemPrompt: input.systemPrompt }, reactIter: 1, taoIter: input.taoIteration },
+      hookOpts,
+    );
+
+    const conversation: ChatMessage[] = [
+      { role: "system", content: input.systemPrompt },
+      ...input.messages,
+    ];
+    const t0 = Date.now();
+    const llmText = await this._llm.chat(conversation, { temperature: 0.4, maxTokens: 1024 });
+    const answer = llmText.trim();
+
+    await this._hooks.emit(
+      "react.afterThought",
+      { thought: answer, reactIter: 1, taoIter: input.taoIteration },
+      hookOpts,
+    );
+
+    const trajectory: TrajectoryEntry[] = [
+      {
+        timestamp: Date.now() / 1000,
+        state: { type: "final", answer },
+        durationMs: Date.now() - t0,
+      },
+    ];
+
+    await this._hooks.emit("react.onStopCondition", { kind: "explicitFinal", reactIter: 1 }, hookOpts);
+
+    return {
+      finalAnswer: answer,
+      trajectory,
+      iterations: 1,
+      status: "ok",
+      totalTokensSpent: estimateTokens(llmText),
+    };
+  }
+
   private hasStop(kind: ReactStopCondition["kind"]): boolean {
     return this._config.stopConditions.some((s) => stopConditionKey(s) === kind);
   }

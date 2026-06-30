@@ -1,4 +1,5 @@
 import { ConditionVariable, Mutex } from "@openintj/concurrency";
+import type { HookBus } from "@openintj/core";
 
 /**
  * Task —— DAG 任务节点。
@@ -31,30 +32,59 @@ interface InternalTask {
  * - complete(taskId, result)：标记完成，触发依赖项检查
  *
  * 此实现是单进程内 in-memory（不跨进程持久化）。
+ *
+ * 可观测性：传入 `opts.hooks` 后，submit/dequeue/complete/fail 会发出
+ * `task.enqueue` / `task.beforeRun` / `task.afterRun` 事件（在临界区外 emit，避免再入死锁）。
  */
+export interface TaskQueueOpts {
+  /** 接 HookBus 后发出 task.* 可观测事件。 */
+  hooks?: HookBus;
+  /** 队列名（写进事件）。默认 "task-queue"。 */
+  name?: string;
+}
+
 export class TaskQueue {
   private tasks = new Map<string, InternalTask>();
   private order = 0;
   private mutex = new Mutex();
   private readyCv = new ConditionVariable();
   private closed = false;
+  private readonly hooks: HookBus | undefined;
+  private readonly name: string;
+  /** taskId → 取出执行的时刻，用于算 afterRun 耗时。 */
+  private readonly runStart = new Map<string, number>();
+
+  constructor(opts: TaskQueueOpts = {}) {
+    this.hooks = opts.hooks;
+    this.name = opts.name ?? "task-queue";
+  }
 
   async submit<T>(node: TaskNode<T>): Promise<void> {
-    await this.mutex.runExclusive(() => {
+    const ready = await this.mutex.runExclusive(() => {
       if (this.tasks.has(node.id)) {
         throw new Error(`TaskQueue: duplicate task id ${node.id}`);
       }
-      const ready = node.deps.every((d) => {
+      const isReady = node.deps.every((d) => {
         const dep = this.tasks.get(d);
         return dep && dep.state === "completed";
       });
       this.tasks.set(node.id, {
         node: node as TaskNode<unknown>,
-        state: ready ? "ready" : "waiting",
+        state: isReady ? "ready" : "waiting",
         enqueueOrder: this.order++,
       });
-      if (ready) this.readyCv.notify();
+      if (isReady) this.readyCv.notify();
+      return isReady;
     });
+    if (this.hooks) {
+      await this.hooks.emit("task.enqueue", {
+        queue: this.name,
+        taskId: node.id,
+        priority: node.priority,
+        depCount: node.deps.length,
+        ready,
+      });
+    }
   }
 
   async dequeue(): Promise<InternalTask | undefined> {
@@ -72,16 +102,26 @@ export class TaskQueue {
         picked.state = "running";
         return picked;
       });
-      if (next) return next;
+      if (next) {
+        this.runStart.set(next.node.id, Date.now());
+        if (this.hooks) {
+          await this.hooks.emit("task.beforeRun", {
+            queue: this.name,
+            taskId: next.node.id,
+            priority: next.node.priority,
+          });
+        }
+        return next;
+      }
       if (this.closed && this.allDone()) return undefined;
       await this.readyCv.wait();
     }
   }
 
   async complete(taskId: string, result: unknown): Promise<void> {
-    await this.mutex.runExclusive(() => {
+    const existed = await this.mutex.runExclusive(() => {
       const t = this.tasks.get(taskId);
-      if (!t) return;
+      if (!t) return false;
       t.state = "completed";
       t.result = result;
       // 解锁依赖此任务的下游
@@ -96,13 +136,15 @@ export class TaskQueue {
         }
       }
       this.readyCv.notifyAll();
+      return true;
     });
+    await this.emitAfterRun(taskId, existed, true);
   }
 
   async fail(taskId: string, error: unknown): Promise<void> {
-    await this.mutex.runExclusive(() => {
+    const existed = await this.mutex.runExclusive(() => {
       const t = this.tasks.get(taskId);
-      if (!t) return;
+      if (!t) return false;
       t.state = "failed";
       t.error = error;
       // 失败级联：所有依赖此任务的也标 failed
@@ -118,6 +160,21 @@ export class TaskQueue {
       };
       cascade(taskId);
       this.readyCv.notifyAll();
+      return true;
+    });
+    await this.emitAfterRun(taskId, existed, false);
+  }
+
+  /** 在临界区外发出 task.afterRun（带耗时）。 */
+  private async emitAfterRun(taskId: string, existed: boolean, success: boolean): Promise<void> {
+    const startedAt = this.runStart.get(taskId);
+    this.runStart.delete(taskId);
+    if (!existed || !this.hooks) return;
+    await this.hooks.emit("task.afterRun", {
+      queue: this.name,
+      taskId,
+      success,
+      durationMs: startedAt !== undefined ? Date.now() - startedAt : 0,
     });
   }
 

@@ -2,7 +2,7 @@ import type { Command } from "../types/command-event.js";
 import type { LODLevelType, ShaderModeType } from "../types/shader.js";
 import type { ToolCallResult, ToolDescriptor } from "../types/tool.js";
 
-export type HookCategory = "lifecycle" | "tool" | "event" | "policy";
+export type HookCategory = "lifecycle" | "tool" | "event" | "policy" | "concurrency";
 
 export interface HookContext<P> {
   readonly eventName: string;
@@ -147,6 +147,53 @@ export interface HookEventMap {
     auditEvent: AuditEvent;
     reason: string;
   };
+
+  // -------- 并发 / 多任务 / 多 Agent（RFC-003 方向一/二可观测性）--------
+  /** AgentPool/worker 池：单个 job 开始。`active`/`pending` 为发出瞬间的池快照。 */
+  "pool.beforeJob": {
+    pool: string;
+    jobId: string;
+    active: number;
+    pending: number;
+  };
+  /** AgentPool/worker 池：单个 job 结束（含成功/失败、耗时与池累计统计）。 */
+  "pool.afterJob": {
+    pool: string;
+    jobId: string;
+    success: boolean;
+    durationMs: number;
+    active: number;
+    pending: number;
+    completed: number;
+    failed: number;
+  };
+  /** ForkJoin：分叉开始（total = 子任务数）。 */
+  "forkjoin.beforeFork": { group: string; total: number };
+  /** ForkJoin：合并完成（fulfilled/rejected 子任务数 + 总耗时）。 */
+  "forkjoin.afterJoin": {
+    group: string;
+    total: number;
+    fulfilled: number;
+    rejected: number;
+    durationMs: number;
+  };
+  /** TaskQueue：任务入队（DAG 依赖数 + 入队即就绪与否）。 */
+  "task.enqueue": {
+    queue: string;
+    taskId: string;
+    priority: number;
+    depCount: number;
+    ready: boolean;
+  };
+  /** TaskQueue：任务被 worker 取出开始执行（state→running）。 */
+  "task.beforeRun": { queue: string; taskId: string; priority: number };
+  /** TaskQueue：任务完成/失败（从取出到 complete/fail 的耗时）。 */
+  "task.afterRun": {
+    queue: string;
+    taskId: string;
+    success: boolean;
+    durationMs: number;
+  };
 }
 
 /** 哪些事件允许 handler 调用 ctx.cancel()。 */
@@ -162,5 +209,12 @@ export const eventCategory = (event: string): HookCategory => {
   if (event.startsWith("tool.")) return "tool";
   if (event.startsWith("event.")) return "event";
   if (event.startsWith("policy.")) return "policy";
+  if (
+    event.startsWith("pool.") ||
+    event.startsWith("forkjoin.") ||
+    event.startsWith("task.")
+  ) {
+    return "concurrency";
+  }
   return "lifecycle";
 };

@@ -1,7 +1,9 @@
 # 下一次工作交接备忘
 
 > 本文件用于工作中断 / 多日离开后快速恢复上下文。
-> 上次更新：2026-05-20（Phase 3.8 Hooks → OpenTelemetry 收官当日）
+> 上次更新：2026-06-30（7 项定位任务收尾：RFC-001 退化分支 + ADR-001、RFC-004 工作区/配置 IPC、
+> self-consistency、钝化 revoke/脱敏/abTest、检索可插拔基准/增量索引、governance parity、OTel route/IPC 根 span；
+> 见 [§九](#九已定位任务批量收尾2026-06-30)）
 
 ---
 
@@ -83,7 +85,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 |---|---|---|---|:-:|:-:|
 | 1 | ~~Python v2 ↔ TS 行为对齐测试~~ | ~~中~~ | ~~高~~ | ⭐⭐⭐ | ✅ 2026-05-20 完成（Phase 3.6） |
 | 2 | ~~真实持久化 e2e~~ | ~~中~~ | ~~高~~ | ⭐⭐⭐ | ✅ 2026-05-09 完成 |
-| 3 | **嵌入基准**：simple vs xenova vs ollama 在固定语料上的 nDCG | 低 | 中 | ⭐⭐ | 待办 |
+| 3 | **嵌入基准**：simple vs xenova vs ollama 在固定语料上的 nDCG | 低 | 中 | ⭐⭐ | 🟢 harness 落地（`benchmarkRetrieval`，三方对比 `RUN_EMBED_COMPARE=1` 可跑；见 §九） |
 | 4 | ~~Desktop E2E（Playwright + Electron）~~ | ~~中~~ | ~~中~~ | ⭐⭐ | ✅ 2026-05-20 完成（Phase 3.7） |
 | 5 | ~~RFC-003 装配进主 Agent~~ | ~~中~~ | ~~中~~ | ⭐⭐ | ✅ 2026-05-11 完成 |
 | 6 | **打包发布**：electron-builder Win/macOS + electron-updater | 高 | 中 | ⭐ | 待办 |
@@ -91,9 +93,9 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 | 8 | ~~GitHub Actions CI 工作流~~ | ~~低~~ | ~~中~~ | ⭐⭐ | ✅ 2026-05-09 完成 |
 | 9.A | ~~Dormant 持久化（SqliteDormantStore + hydrate）~~ | ~~中~~ | ~~高~~ | ⭐⭐⭐ | ✅ 2026-05-19 完成（Phase 3.4） |
 | 9.B | ~~Dormant 审批 UI（preload + DormantPanel + tab 布局）~~ | ~~中~~ | ~~中-高~~ | ⭐⭐⭐ | ✅ 2026-05-19 完成（Phase 3.5） |
-| 10 | **HybridRetriever LanceDB FTS 路径**：大规模 fragments 时换 LanceDB 原生 FTS，避免每次重建索引 | 中 | 中 | ⭐⭐ | 待办（3.3 衍生） |
+| 10 | **HybridRetriever LanceDB FTS 路径**：大规模 fragments 时换 LanceDB 原生 FTS，避免每次重建索引 | 中 | 中 | ⭐⭐ | 🟡 增量索引（upsert/remove/clear）已落，省去全量重建；原生 FTS 仍待办（见 §九） |
 | 11 | **Dormant 事件清理**：`pruneEvents(olderThanTs)` / LRU 防 `dormant_events` 无限增长 | 低 | 中 | ⭐⭐ | 待办（3.4 衍生） |
-| 12 | **Parity 扩展**：governance plane / Hooks / ContextEngine 接进 parity 网 | 中 | 中 | ⭐⭐ | 待办（3.6 衍生） |
+| 12 | **Parity 扩展**：governance plane / Hooks / ContextEngine 接进 parity 网 | 中 | 中 | ⭐⭐ | 🟡 governance plane 已接（9 tests）；Hooks/ContextEngine 仍待办（见 §九） |
 
 **默认推荐下一站**：
 
@@ -101,8 +103,8 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 - 或 **#11 dormant 事件清理**（Phase 3.4 留下的小尾巴；30 行 SQL + 几个 spec）
 - 或 **#12 parity 扩展**（顺势补 governance / Hooks / ContextEngine 进对齐网）
 - 或 **#6 打包发布**（electron-builder Win/macOS + electron-updater；体感工程量最大但收益最直观）
-- 或 **#10 HybridRetriever LanceDB FTS**（3.3 衍生；N>10k fragment 时性能升级）
-- 或 **Phase 3.8.1 OTel 扩展**：Hono route + Electron IPC 自动 span 接到 agent span 树
+- 或 **#10 HybridRetriever LanceDB FTS**（3.3 衍生；N>10k fragment 时性能升级；增量索引已落，仅差原生 FTS）
+- ~~**Phase 3.8.1 OTel 扩展**：Hono route + Electron IPC 自动 span 接到 agent span 树~~ ✅ 2026-06-30 完成（`withRootSpan`，见 §九）
 
 ## 四、上下文复盘清单
 
@@ -344,3 +346,171 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 ---
 
 **回来工作时**：直接对我说 "继续 Phase 3 的 #X" 或 "先自检一遍" 都可以，我会顺着这份备忘接下去。
+
+---
+
+## 八、RFC 设计 vs 实现全面盘点（2026-05-30）
+
+> 起因：用户反馈"重启后模型记不住上下文"。排查发现 `MemoryPlane` 只写不读——记忆持久化了但从未注入对话。
+> 已修：`TaoLoop` 新增 `contextProvider`（每轮异步构造 system prompt），desktop/server/cli 三端接 `ContextEngine.build` 注入 `[记忆参考]`；`run()` 改为先跑再记录避免自命中。
+> 借此对 RFC-001..004 做了一次完整的"设计 vs 实现"比对，结论与五项推进计划如下。
+
+### 8.1 完成度矩阵
+
+| RFC / 模块 | 设计意图 | 状态 | 缺口摘要 |
+|---|---|:-:|---|
+| RFC-001 TAO/ReAct | 双层循环 + 4 早停 + 多轮 | 🟢 基本完成 | `enableReact:false` 退化分支未实现；走文本协议而非 function-calling；无性能基准 |
+| RFC-002 Hooks | 强类型/优先级/短路/改写 | 🟢 完成 | §9 性能基准 `hook-bus-bench` 不存在 |
+| RFC-003 方向一 多线程 | Mutex/Channel/CV/Pool/ForkJoin 装配进 Agent | 🟡 原型 | 包齐全 + 21 测试，但**只在 `cli/rfc3-integration.spec.ts` 用过，未接进真实 agent** |
+| RFC-003 方向二 任务池 | SharedContext/HybridRetriever/TaskQueue/ObjectPool | 🟡 部分 | 仅 HybridRetriever 接进 server；其余仅原型；检索每次重建索引；无 nDCG 基准 |
+| RFC-003 方向三 钝化记忆 | 存→学→审批→**注入 systemPrompt** | 🟠 回路未闭合 | persona 写了但**从不注入**；无 A/B、无脱敏、无 revoke |
+| RFC-004 桌面 IPC | 安全模型 + 流式 + 系统能力 | 🟡 半 | 流式✅ 自动更新✅；**工作区文件读写 / 配置面 / utility worker 全缺** |
+| 跨 RFC 执行工具 | 治理边界下真实 fs/命令 | 🔴 mock | `readFile/writeFile/executeCommand` 全是 `noop = () => ({ note: "[mock]" })` |
+| #3 嵌入基准 | simple/xenova/ollama nDCG | 🔴 未做 | |
+
+### 8.2 重点缺口（按严重度）
+
+1. **🔴 执行平面工具是 mock**（`apps/*/src/**/agent.ts` 的 `registerBuiltinTools` 全传 `noop`，仅 `search` 真）。`ToolHub`/`Executor`/状态机/熔断器基建齐全且测试充分，但没有任何真实副作用工具接上去 → "本地优先编码 Agent" 不能真读写文件 / 跑命令。RFC-004 §4/§8 的工作区 fs IPC 也因此全缺。
+2. **🟠 钝化记忆 persona 未注入**：`DormantRuntime` 公开 `record/mine/listProposals/approve/reject/prune/hydrate`，**无 `getPersona()` 出口**；`agent.ts` 也不读 persona。RFC-003 §3.6 验收 #2「批准后无需检索就生效」不成立。`abTest`/脱敏/`revoke` 亦未实现。修复点：复用新加的 `contextProvider` 拼接 persona delta。
+3. **🟡 方向一/二并发原语只是原型**：仅 `cli/rfc3-integration.spec.ts` 使用；真实 `agent.run()` 仅经 `RateLimitedLlmClient`(rateLimit) 与 `HybridRetriever`(retrievalMode=hybrid) 接了两件。
+4. **🟡 RFC-004 系统能力面缺失**：`readWorkspaceFile/writeWorkspaceFile/pickWorkspaceDir/onWorkspaceChange/getConfig/updateConfig` 零实现；utility 蒸馏 worker 未实现（`mine()` 跑在 main）。注：§7 流式**已等价实现**（hook→IPC `EVT_TAO/EVT_REACT/EVT_AUDIT` 实时推送）。
+5. **🟢 小缺口**：`enableReact:false` 声明未实现；RFC-001 §11 Q1（function-calling vs 文本协议）事实选了文本协议但未文档化决策。
+
+### 8.3 验证 & 可观测盘点
+
+强：单测 444+ passed、Python parity、真盘持久化 e2e(`OPENINTJ_E2E`)、Desktop Playwright e2e(`OPENINTJ_PLAYWRIGHT`)、OTel trace/metric、desktop UI(StatusBar/Trajectory/Dormant/记忆Tab)、server `/api/{status,audit,memory,dormant/*}`。
+
+弱/缺：
+- 性能承诺（RFC-001 §8 / RFC-002 §9）**无基准守护**
+- 记忆召回质量**未量化**（默认 64 维 hash embedder）
+- 钝化记忆"越用越好"**无长跑/A-B 可观测验证**
+- 真实工具缺失 → 端到端"任务完成度"**无法验证**
+- OTel 默认 no-op，**无现成 dashboard**
+
+### 8.4 五项推进计划（2026-05-30 全部落地）
+
+| # | 任务 | 价值 | 状态 |
+|---|---|---|:-:|
+| 1 | **接真实工具 + 治理边界 fs** | 解锁产品核心价值 | ✅ |
+| 2 | **闭合 persona 注入** | 补 RFC-003 §3.6 最后一公里 | ✅ |
+| 3 | **检索 nDCG/recall 评测基准** | 让"记忆有效"从体感变数据 | ✅ |
+| 4 | **性能基准**（hook-bus / TAO 单步） | 守护 RFC 性能承诺 | ✅ |
+| 5 | **方向一/二：文档标注实验性** | 消除"库存能力"误读 | ✅ |
+
+**各项落地细节：**
+
+1. **真实工具**：新增 `@openintj/plane-execution` 的 `createWorkspaceTools`——`read_file`/`write_file`
+   被沙箱限定在 workspace 根内（`resolveInRoot` 拒绝 `..`/绝对路径越界），`execute_command`
+   **默认禁用**，需 `enableCommands` + 命令白名单（env `OPENINTJ_ENABLE_COMMANDS` /
+   `OPENINTJ_ALLOWED_COMMANDS`）。cli/server/desktop 三端 agent 用它替换原 `noop`；
+   desktop 默认工作区 = `Documents/OpenINTJ`。共享解析器 `resolveWorkspaceConfig`（@openintj/shared）。
+   测试：`plane-execution/__tests__/workspace-tools.spec.ts`（12）+ cli agent 往返/越界/命令禁用断言。
+2. **persona 注入**：`InternalizationManager.personaSystemPrompt()` 把已批准 PersonaConfig 渲染成
+   `[用户画像]` 片段，`DormantRuntime.personaSystemPrompt()` 暴露；desktop/server 的 `contextProvider`
+   把它拼到 baseSystemPrompt 前 → 内化偏好无需检索即生效。测试：cli rfc3-integration 补 2 断言。
+3. **检索评测**：新增 `@openintj/plane-memory` 的 `src/eval/retrieval-metrics.ts`
+   （nDCG/recall/precision/MRR + `evaluateRanker`），`retrieval-benchmark.spec.ts` 在固定主题语料上
+   守护默认检索路径基线（当前 simple@dim64：nDCG@4≈0.77 / recall≈0.71 / MRR=1.0）。
+   换 xenova/ollama embedder 复用同一 harness 对比即可。
+4. **性能基准**：`core/__tests__/perf/` 下 `hook-bus-bench`（no-handler emit ≈0.77µs/op、10-handler
+   ≈17µs/op、register ≈39µs/op）+ `tao-step-bench`（单轮 TAO 框架开销 ≈0.03ms/run）。
+   宽松阈值守护灾难性回退，实际数字打印到 CI 日志。
+5. **方向一/二定性**：`@openintj/concurrency` 与 `@openintj/taskpool` 的 index 顶部 + 新增 README
+   明确标注「已接入产品：RateLimitedLlmClient / HybridRetriever；其余为实验性原语，未接入
+   agent.run() 主路径」，并给出未来集成路线。package.json description 同步更新。
+
+**追加（2026-05-30）：并发/多任务/多 Agent 可观测性**
+- `HookEventMap` 新增 `pool.*` / `forkjoin.*` / `task.*` 事件（category=`concurrency`）。
+- `AgentPool` / `forkJoin` / `TaskQueue` 支持注入 `HookBus`（可选，不传零开销），发出生命周期事件；
+  TaskQueue 的 emit 在 mutex 临界区外，避免再入死锁。
+- `attachOtelToHooks` 把它们翻译成独立 span（`openintj.pool.job` / `openintj.forkjoin` /
+  `openintj.task.run`）+ counter（`openintj.pool.jobs` / `openintj.forkjoin.branches|rejected` /
+  `openintj.task.enqueued|completed`），dispose 兜底结束未完成 span。
+- 测试：concurrency observability（含成功/失败/向后兼容）、taskpool observability（DAG 依赖 + fail）、
+  otel concurrency（span + metric + dispose 兜底）。这样即便方向一/二仍是实验库，
+  其并发行为也已**可观测**——为日后接入主路径打底。
+
+> 上述「仍未做」清单已在 2026-06-30 批量收尾，详见 [§九](#九已定位任务批量收尾2026-06-30)。
+
+---
+
+## 九、已定位任务批量收尾（2026-06-30）
+
+> 起因：用户要求按 `3-1-5-2-4-6-7` 顺序推进 §八 末尾「仍未做」里那批**已定位、可直接做**的子项。
+> 全部落地，未提交（无 tag，归入 CHANGELOG `[Unreleased]`）。下面按完成顺序记录。
+
+### 9.1（#3）RFC-001 收尾：`enableReact:false` 退化分支 + ADR-001
+
+- `ReactStateMachine.runSingle()`：单次 LLM 调用，不跑微循环、不下发工具描述、不解析 action；
+  仍发 `react.beforeThought` / `react.afterThought` / `react.onStopCondition` 钩子保观测。
+- `TaoLoop.run()`：`enableReact===false` 时走 `runSingle`，否则原 `run`。
+- **ADR-001**（`docs/architecture/adr-001-react-tool-protocol.md`）：正式记录「ReAct 用文本协议
+  （Thought/Action/FINAL）而非 OpenAI function-calling」的决策、理由（provider 中立 / 可观测 / Python v2 parity / 简单）、
+  取舍与重评触发条件；RFC-001 §11 Q1 改为「已由 ADR-001 解决」。
+- 测试：`core/__tests__/tao.spec.ts` 加 `enableReact:false` 委派断言（不调 toolRunner、原样返回 LLM 输出）。
+
+### 9.2（#1）RFC-004 工作区 / 配置 IPC
+
+- `ipc-protocol.ts`：新增 Workspace（read/write/info/pickDir + 变更事件）与 AppConfig（get/update）schema 与 channel；
+  Dormant 状态枚举补 `revoked` + `DORMANT_REVOKE` channel。
+- `config-store.ts`（新）：`ConfigService`（get/update + Zod 校验，JSON 落 userData，小体量用同步 IO）。
+- `DesktopAgent` 暴露 `workspace.{config,tools}`；ipc-handlers 实现 WORKSPACE_*（委派 `workspace.tools`）/ CONFIG_*
+  （委派 ConfigService，依赖注入便于测试）/ DORMANT_REVOKE；`fs.watch(root)` 推 `EVT_WORKSPACE`。
+- `main/index.ts`：装配读 ConfigService 偏好（env 优先），Electron `dialog` 实现 `pickDirectory`。
+- preload 暴露 workspaceInfo/Read/Write/PickDir/onWorkspaceEvent/getConfig/updateConfig/dormantRevoke。
+- 测试：`ipc-handlers.spec.ts` 扩到 27（含越界 `..` 拒绝、配置落盘、approve→revoke 周期）。
+- ⚠️ utility process 蒸馏 worker 仍跑在 main（复杂度 + 测试成本，留后续）。
+
+### 9.3（#5）方向一/二有界接入产品路径：self-consistency
+
+- `@openintj/shared` 新增 `self-consistency.ts`：`selectConsistentAnswer`（majority / longest / first + 平票兜底）
+  + `resolveSelfConsistency`（opts/env 解析，samples 上限 8）。
+- cli/server/desktop 三端 `run()`：开启时用 `forkJoin` 并行跑多份 `tao.run`，再选一份——
+  **复用方向一的 `forkJoin` 观测**（`forkjoin.*` span/counter）把实验原语接成真实产品路径。
+- 测试：shared self-consistency 单测 + cli agent 集成（3 samples → `forkjoin.afterJoin` 3 fulfilled）。
+
+### 9.4（#2）钝化记忆：revoke + 脱敏 + abTest 脚手架
+
+- **revoke**：`InternalizationProposal.status` 加 `revoked`；`InternalizationManager.revoke()`（`deleteNested`
+  删 persona 字段 + 升 version）；`DormantRuntime.revoke()` 持久化提案与 persona 快照。
+- **脱敏**：`redaction.ts`（`createRedactor` + `defaultRedactor`，规则覆盖 email/API key/信用卡/手机号/身份证；
+  顺序上 idCard 先于 creditCard/phone 防贪婪误匹配）。`DormantRuntime.record()` 入库前脱敏。
+- **abTest**：`ab-test.ts`（`runAbTest` 纯编排：多 variant × queries 打分聚合选 winner），为「越用越好」验证打底。
+- 测试：redaction / ab-test 单测 + dormant-runtime 的 record 脱敏 / revoke 周期。
+
+### 9.5（#4）检索：可插拔 embedder 三方对比 + 增量索引 + 任务完成度评测
+
+- `retrieval-benchmark.ts`（新）：`benchmarkRetrieval(embedder)` 通用异步 harness（探维度 → 建库 → `evaluateRanker`）；
+  spec 默认跑 `SimpleEmbedder` 守基线，`RUN_EMBED_COMPARE=1` 时三方对比 simple/xenova/ollama。
+- `HybridRetriever` 增量索引：`upsert/upsertBatch/remove/clear`（增量维护 BM25 统计），替代每次全量重建；
+  接进 agent 仍需 change-feed（留后续）。
+- `@openintj/shared` 新增 `task-eval.ts`：端到端任务完成度 harness（`evaluateTasks` + `judgeContainsAll/judgeNonEmpty`）。
+- 测试：taskpool 增量索引断言、task-eval 单测、retrieval-benchmark 基线。
+
+### 9.6（#6）Parity 扩展 + OTel route/IPC 根 span
+
+- **governance parity**：`generate_fixtures.py` 加 `gen_governance()`（白名单 / 阻断 / 审批 / 未知目标 × strictMode）；
+  `plane-governance/__tests__/parity/{fixtures/python-v2.json, python-v2.spec.ts}`（9 tests）断言 TS `PolicyEngine.check`
+  与 Python 同口径（allowed/result/riskLevel/`POLICY_BLOCKED`）。Hooks/ContextEngine parity 仍待办。
+- **OTel route/IPC 根 span**：`telemetry-otel` 新增 `withRootSpan(name, fn, {attributes})`——用 `startActiveSpan`
+  把一次 HTTP/IPC 调用包成根 span，agent 内部 hook→span 因 `attach.ts` 用 `context.active()` 作父 → 自动挂到根下
+  （需进程注册带 AsyncLocalStorage 的 ContextManager，`bootstrapNodeOtel` / `NodeTracerProvider.register()` 满足）。
+  server `/api/chat`（stream/非 stream）与 desktop `IPC.CHAT` 已包裹。
+  测试：`telemetry-otel/__tests__/root-span.spec.ts`（2 tests，NodeTracerProvider 真上下文，断言 `parentSpanId` + ERROR 标记）。
+
+### 9.7（#7）回写路线表 / 文档债 + 未提交盘点
+
+- 本节即文档回写；路线表 #3/#6(OTel)/#10/#12 状态已更新。
+- **未提交盘点**（无 tag，归 `[Unreleased]`）：约 40 个文件改动 + 30 个新文件，集中在
+  core(loop/hooks)、telemetry-otel、dormant、shared、taskpool、plane-execution/memory/governance、apps(cli/server/desktop)。
+  仓库根 `.dockerignore`/`.env.example`/`deploy.sh`/`docker-compose.yml`/`nginx.conf` 仍是历史未跟踪（Python v2 部署相关，不属本阶段）。
+
+### 9.8 本轮仍未做（明确留后续）
+
+- RFC-004 utility process 蒸馏 worker（`mine()` 仍在 main 跑）。
+- 增量检索索引**接进 agent**（需 fragment change-feed 把 memory 写入广播给 HybridRetriever）。
+- HybridRetriever 换 LanceDB 原生 FTS（#10 余下部分）。
+- Parity 扩展：Hooks / ContextEngine（governance 已接）。
+- `pruneEvents(olderThanTs)`（#11 dormant 事件磁盘清理）。
+- #6 打包发布（electron-builder Win/macOS + electron-updater）。
+- abTest / self-consistency 的长跑可观测验证（脚手架已就位，缺真实跑批数据）。

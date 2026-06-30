@@ -1,10 +1,9 @@
 /**
  * Shared IPC protocol types between main and renderer.
  *
- * 严格按 RFC-004 规定：
- *  - request/response by ipcMain.handle / ipcRenderer.invoke
+ * ????RFC-004 ???? *  - request/response by ipcMain.handle / ipcRenderer.invoke
  *  - server-push events by webContents.send / ipcRenderer.on
- *  - 所有 payload 在两端都用 zod 校验
+ *  - ???payload ??????zod ??
  */
 
 import { z } from "zod";
@@ -44,16 +43,16 @@ export const StatusResponseSchema = z.object({
     }),
   }),
   tools: z.array(z.string()),
-  /** Phase 3.1 起：当前持久化模式 + 数据目录（real 模式时存在）。 */
+  /** Phase 3.1 ??????????+ ?????real ????????*/
   persistence: z
     .object({
       mode: z.enum(["memory", "real"]),
       dataDir: z.string().optional(),
     })
     .optional(),
-  /** Phase 3.3 起：默认检索模式（vector / hybrid）。 */
+  /** Phase 3.3 ?????????vector / hybrid???*/
   retrievalMode: z.enum(["vector", "hybrid"]).optional(),
-  /** Phase 3.3/3.4 起：Dormant 子系统状态（仅启用时存在）。 */
+  /** Phase 3.3/3.4 ??Dormant ???????????????*/
   dormant: z
     .object({
       enabled: z.literal(true),
@@ -73,9 +72,9 @@ export type StatusResponse = z.infer<typeof StatusResponseSchema>;
 export const MemoryQueryRequestSchema = z.object({
   query: z.string().optional(),
   topK: z.number().int().positive().max(50).default(10),
-  /** 检索模式覆盖；不传则按 agent.retrievalMode 默认。 */
+  /** ??????????? agent.retrievalMode ????*/
   mode: z.enum(["vector", "hybrid"]).optional(),
-  /** hybrid 模式下是否启用 RRF 融合。 */
+  /** hybrid ????????RRF ????*/
   rrf: z.boolean().optional(),
 });
 export type MemoryQueryRequest = z.infer<typeof MemoryQueryRequestSchema>;
@@ -89,7 +88,7 @@ export const MemoryQueryResultSchema = z.object({
 });
 export type MemoryQueryResult = z.infer<typeof MemoryQueryResultSchema>;
 
-// ---------- Dormant Memory Learning (RFC-003 方向 3) ----------
+// ---------- Dormant Memory Learning (RFC-003 ?? 3) ----------
 
 export const DormantProposalDecisionSchema = z.object({
   proposalId: z.string(),
@@ -97,16 +96,16 @@ export const DormantProposalDecisionSchema = z.object({
 export type DormantProposalDecision = z.infer<typeof DormantProposalDecisionSchema>;
 
 export const DormantListRequestSchema = z.object({
-  status: z.enum(["pending", "approved", "rejected", "applied"]).optional(),
+  status: z.enum(["pending", "approved", "rejected", "applied", "revoked"]).optional(),
 });
 export type DormantListRequest = z.infer<typeof DormantListRequestSchema>;
 
-/** 单条 proposal 在 IPC 上的精简形式（pattern 只保留 description）。 */
+/** ?? proposal ??IPC ???????pattern ????description???*/
 export const DormantProposalDtoSchema = z.object({
   proposalId: z.string(),
   targetField: z.string(),
   value: z.unknown(),
-  status: z.enum(["pending", "approved", "rejected", "applied"]),
+  status: z.enum(["pending", "approved", "rejected", "applied", "revoked"]),
   ts: z.number(),
   decidedAt: z.number().optional(),
   patternDescription: z.string(),
@@ -115,7 +114,7 @@ export const DormantProposalDtoSchema = z.object({
 });
 export type DormantProposalDto = z.infer<typeof DormantProposalDtoSchema>;
 
-/** Phase 3.3 起：未启用时所有 dormant.* channel 返回该 shape。 */
+/** Phase 3.3 ?????????dormant.* channel ????shape??*/
 export const DormantErrorSchema = z.object({
   error: z.literal("dormant_not_enabled"),
   hint: z.string().optional(),
@@ -139,7 +138,7 @@ export const DormantMineResponseSchema = z.object({
       proposalId: z.string(),
       targetField: z.string(),
       value: z.unknown(),
-      status: z.enum(["pending", "approved", "rejected", "applied"]),
+      status: z.enum(["pending", "approved", "rejected", "applied", "revoked"]),
       patternDescription: z.string(),
     }),
   ),
@@ -154,7 +153,7 @@ export type DormantListResponse = z.infer<typeof DormantListResponseSchema>;
 
 export const DormantDecisionResponseSchema = z.object({
   proposalId: z.string(),
-  status: z.enum(["pending", "approved", "rejected", "applied"]),
+  status: z.enum(["pending", "approved", "rejected", "applied", "revoked"]),
   decidedAt: z.number().optional(),
 });
 export type DormantDecisionResponse = z.infer<typeof DormantDecisionResponseSchema>;
@@ -170,7 +169,7 @@ export type DormantPersonaResponse = z.infer<typeof DormantPersonaResponseSchema
 
 // ---------- Auto Update (electron-updater, #6) ----------
 
-/** 自动更新状态事件（main → renderer 推送）。 */
+/** ?????????main ??renderer ?????*/
 export const UpdateEventSchema = z.object({
   status: z.enum([
     "checking",
@@ -181,20 +180,98 @@ export const UpdateEventSchema = z.object({
     "error",
     "disabled",
   ]),
-  /** 目标版本号（available / downloaded 时存在）。 */
+  /** ??????available / downloaded ??????*/
   version: z.string().optional(),
-  /** 下载进度百分比 0-100（downloading 时存在）。 */
+  /** ????????0-100?downloading ??????*/
   percent: z.number().optional(),
-  /** 错误或提示信息。 */
+  /** ?????????*/
   message: z.string().optional(),
 });
 export type UpdateEvent = z.infer<typeof UpdateEventSchema>;
 
-/** Phase 3.3 起：approve/reject 失败时返回的错误 shape。 */
+// ---------- Workspace ??????RFC-004 ?8??----------
+
+/** ????????path ??????????????*/
+export const WorkspaceReadRequestSchema = z.object({
+  path: z.string().min(1),
+});
+export type WorkspaceReadRequest = z.infer<typeof WorkspaceReadRequestSchema>;
+
+export const WorkspaceReadResponseSchema = z.object({
+  path: z.string(),
+  content: z.string(),
+  bytes: z.number().int().nonnegative(),
+});
+export type WorkspaceReadResponse = z.infer<typeof WorkspaceReadResponseSchema>;
+
+/** ????????path ??????????????*/
+export const WorkspaceWriteRequestSchema = z.object({
+  path: z.string().min(1),
+  content: z.string(),
+});
+export type WorkspaceWriteRequest = z.infer<typeof WorkspaceWriteRequestSchema>;
+
+export const WorkspaceWriteResponseSchema = z.object({
+  path: z.string(),
+  bytesWritten: z.number().int().nonnegative(),
+});
+export type WorkspaceWriteResponse = z.infer<typeof WorkspaceWriteResponseSchema>;
+
+/** ???????????????*/
+export const WorkspaceInfoSchema = z.object({
+  root: z.string(),
+  enableCommands: z.boolean(),
+  allowedCommands: z.array(z.string()),
+});
+export type WorkspaceInfo = z.infer<typeof WorkspaceInfoSchema>;
+
+/** pickWorkspaceDir ??????????????*/
+export const WorkspacePickResponseSchema = z.object({
+  canceled: z.boolean(),
+  root: z.string().optional(),
+});
+export type WorkspacePickResponse = z.infer<typeof WorkspacePickResponseSchema>;
+
+/** ??????????main ??renderer ????? fs.watch???*/
+export const WorkspaceChangeEventSchema = z.object({
+  event: z.enum(["rename", "change"]),
+  /** ???????????fs.watch ??????????*/
+  path: z.string(),
+});
+export type WorkspaceChangeEvent = z.infer<typeof WorkspaceChangeEventSchema>;
+
+/** ???????????? shape??*/
+export const WorkspaceErrorSchema = z.object({
+  error: z.literal("workspace_error"),
+  message: z.string(),
+});
+export type WorkspaceError = z.infer<typeof WorkspaceErrorSchema>;
+
+// ---------- ??????getConfig / updateConfig??----------
+
+/**
+ * ?????????????????updateConfig ?????? * ??????**????**??????????workspaceDir ????????fs.watch ?????? */
+export const AppConfigSchema = z.object({
+  workspaceDir: z.string().optional(),
+  llmProvider: z.enum(["ollama", "hunyuan", "mock"]).optional(),
+  retrievalMode: z.enum(["vector", "hybrid"]).optional(),
+  enableCommands: z.boolean().optional(),
+  allowedCommands: z.array(z.string()).optional(),
+  enableDormant: z.boolean().optional(),
+  autoUpdate: z.boolean().optional(),
+});
+export type AppConfig = z.infer<typeof AppConfigSchema>;
+
+/** updateConfig ???AppConfig ???????*/
+export const AppConfigPatchSchema = AppConfigSchema.partial();
+export type AppConfigPatch = z.infer<typeof AppConfigPatchSchema>;
+
+/** Phase 3.3 ??approve/reject ???????? shape??*/
 export const DormantDecisionErrorSchema = z.object({
   error: z.union([
     z.literal("dormant_not_enabled"),
     z.literal("not_found_or_already_decided"),
+    z.literal("not_found_or_not_applied"),
     z.literal("invalid_request"),
   ]),
   issues: z.array(z.unknown()).optional(),
@@ -210,20 +287,30 @@ export const IPC = {
   CHAT: "openintj:chat",
   MEMORY_QUERY: "openintj:memory.query",
   AUDIT_RECENT: "openintj:audit.recent",
-  // RFC-003 方向 3：Dormant Memory Learning
+  // RFC-003 ?? 3?Dormant Memory Learning
   DORMANT_MINE: "openintj:dormant.mine",
   DORMANT_LIST: "openintj:dormant.list",
   DORMANT_APPROVE: "openintj:dormant.approve",
   DORMANT_REJECT: "openintj:dormant.reject",
+  DORMANT_REVOKE: "openintj:dormant.revoke",
   DORMANT_PERSONA: "openintj:dormant.persona",
-  // #6 自动更新
+  // #6 ????
   UPDATE_CHECK: "openintj:update.check",
   UPDATE_INSTALL: "openintj:update.install",
+  // RFC-004 ?8 ????????
+  WORKSPACE_READ: "openintj:workspace.read",
+  WORKSPACE_WRITE: "openintj:workspace.write",
+  WORKSPACE_INFO: "openintj:workspace.info",
+  WORKSPACE_PICK_DIR: "openintj:workspace.pickDir",
+  // ??????
+  CONFIG_GET: "openintj:config.get",
+  CONFIG_UPDATE: "openintj:config.update",
   // server-push events
   EVT_TAO: "openintj:evt.tao",
   EVT_REACT: "openintj:evt.react",
   EVT_AUDIT: "openintj:evt.audit",
   EVT_UPDATE: "openintj:evt.update",
+  EVT_WORKSPACE: "openintj:evt.workspace",
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

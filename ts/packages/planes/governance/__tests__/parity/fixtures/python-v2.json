@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "generatedFrom": "governance_plane.PolicyEngine.check (v2 frozen)",
+  "notes": {
+    "defaults": "blocked/approval/whitelist 默认集合与 TS PolicyEngineConfigSchema 默认值一致；本 slice 验证 result/riskLevel/阻断行为在两端等价。"
+  },
+  "policyChecks": [
+    {
+      "commandType": "TOOL_CALL",
+      "target": "read_file",
+      "strictMode": true,
+      "expected": { "allowed": true, "result": "allowed", "riskLevel": "low" }
+    },
+    {
+      "commandType": "TOOL_CALL",
+      "target": "search",
+      "strictMode": true,
+      "expected": { "allowed": true, "result": "allowed", "riskLevel": "low" }
+    },
+    {
+      "commandType": "TOOL_CALL",
+      "target": "think",
+      "strictMode": true,
+      "expected": { "allowed": true, "result": "allowed", "riskLevel": "low" }
+    },
+    {
+      "commandType": "TOOL_CALL",
+      "target": "shell-delete",
+      "strictMode": true,
+      "expected": {
+        "allowed": false,
+        "result": "blocked",
+        "riskLevel": "critical",
+        "errorCode": "POLICY_BLOCKED"
+      }
+    },
+    {
+      "commandType": "TOOL_CALL",
+      "target": "credential-access",
+      "strictMode": true,
+      "expected": {
+        "allowed": false,
+        "result": "blocked",
+        "riskLevel": "critical",
+        "errorCode": "POLICY_BLOCKED"
+      }
+    },
+    {
+      "commandType": "TOOL_CALL",
+      "target": "shell-delete",
+      "strictMode": false,
+      "expected": { "allowed": true, "result": "allowed", "riskLevel": "low" }
+    },
+    {
+      "commandType": "TOOL_CALL",
+      "target": "deploy-production",
+      "strictMode": true,
+      "expected": { "allowed": true, "result": "warning", "riskLevel": "high" }
+    },
+    {
+      "commandType": "TOOL_CALL",
+      "target": "database-migration",
+      "strictMode": true,
+      "expected": { "allowed": true, "result": "warning", "riskLevel": "high" }
+    },
+    {
+      "commandType": "TOOL_CALL",
+      "target": "some-random-tool",
+      "strictMode": true,
+      "expected": { "allowed": true, "result": "allowed", "riskLevel": "low" }
+    }
+  ]
+}

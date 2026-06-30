@@ -7,6 +7,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { TaskType } from "@openintj/core";
 import { afterAll, describe, expect, it } from "vitest";
 import { assembleDesktopAgent } from "../src/main/agent.js";
 
@@ -58,6 +59,22 @@ describe("desktop agent (memory mode default)", () => {
     const a = await assembleDesktopAgent({ llmProvider: "mock" });
     const s = a.status();
     expect(s.persistence.mode).toBe("memory");
+    await a.close();
+  });
+
+  it("run() 记录的内容能被 contextEngine 召回并注入到 system prompt", async () => {
+    // 这正是 TaoLoop.contextProvider 走的路径：run() 落盘 → 下一轮 build() 注入。
+    const a = await assembleDesktopAgent({ llmProvider: "mock" });
+    await a.run("我最喜欢喝绿茶，记住这件事");
+    const snap = await a.contextEngine.build({
+      query: "我最喜欢喝绿茶",
+      history: [],
+      taskType: TaskType.QUICK_RESPONSE,
+      systemPrompt: "BASE",
+      topK: 6,
+    });
+    expect(snap.systemPrompt).toContain("[记忆参考]");
+    expect(snap.systemPrompt).toContain("绿茶");
     await a.close();
   });
 });

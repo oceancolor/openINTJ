@@ -1,12 +1,18 @@
+import { type FSWatcher, watch } from "node:fs";
+import { withRootSpan } from "@openintj/telemetry-otel";
 import { type IpcMain, type WebContents, ipcMain } from "electron";
 import {
+  AppConfigPatchSchema,
   ChatRequestSchema,
   DormantListRequestSchema,
   DormantProposalDecisionSchema,
   IPC,
   MemoryQueryRequestSchema,
+  WorkspaceReadRequestSchema,
+  WorkspaceWriteRequestSchema,
 } from "../shared/ipc-protocol.js";
 import type { DesktopAgent } from "./agent.js";
+import type { ConfigService } from "./config-store.js";
 
 const DORMANT_NOT_ENABLED = {
   error: "dormant_not_enabled",
@@ -17,11 +23,28 @@ export interface IpcRegistration {
   unregister(): void;
 }
 
+/** 主进程注入的可选依赖（隔离 electron 专有能力，便于单测桩替换）。 */
+export interface IpcDeps {
+  /**
+   * pickWorkspaceDir 的实现（通常注入 electron `dialog.showOpenDialog`）。
+   * 不传 → WORKSPACE_PICK_DIR 总是返回 { canceled: true }。
+   */
+  pickDirectory?: () => Promise<string | null>;
+  /** 应用配置服务；不传 → config.* channel 走内存空配置、不持久化。 */
+  config?: ConfigService;
+}
+
+const workspaceError = (e: unknown): { error: "workspace_error"; message: string } => ({
+  error: "workspace_error",
+  message: e instanceof Error ? e.message : String(e),
+});
+
 /** 注册所有 IPC channel handler，并把 hook 事件转发为 webContents.send。 */
 export const registerIpcHandlers = (
   agent: DesktopAgent,
   webContents?: WebContents,
   api: IpcMain = ipcMain,
+  deps: IpcDeps = {},
 ): IpcRegistration => {
   const offs: Array<() => void> = [];
 
@@ -34,7 +57,9 @@ export const registerIpcHandlers = (
     if (!parsed.success) {
       return { error: "invalid_request", issues: parsed.error.issues };
     }
-    const result = await agent.run(parsed.data.query);
+    const result = await withRootSpan("openintj.ipc.chat", () => agent.run(parsed.data.query), {
+      attributes: { "ipc.channel": IPC.CHAT },
+    });
     return {
       finalAnswer: result.finalAnswer,
       iterations: result.iterations,
@@ -93,6 +118,61 @@ export const registerIpcHandlers = (
       stats: agent.governance.auditTrail.getStats(),
       recent: agent.governance.auditTrail.query({ limit }),
     };
+  });
+
+  // ---------- RFC-004 §8 工作区系统能力面 ----------
+  api.handle(IPC.WORKSPACE_INFO, async () => ({
+    root: agent.workspace.config.root,
+    enableCommands: agent.workspace.config.enableCommands,
+    allowedCommands: agent.workspace.config.allowedCommands,
+  }));
+
+  api.handle(IPC.WORKSPACE_READ, async (_evt, raw: unknown) => {
+    const parsed = WorkspaceReadRequestSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    try {
+      // 复用 Agent read_file 工具的同一沙箱（路径越界 / 过大都在工具内拦截）。
+      return await agent.workspace.tools.readFile({ path: parsed.data.path });
+    } catch (e) {
+      return workspaceError(e);
+    }
+  });
+
+  api.handle(IPC.WORKSPACE_WRITE, async (_evt, raw: unknown) => {
+    const parsed = WorkspaceWriteRequestSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    try {
+      return await agent.workspace.tools.writeFile({
+        path: parsed.data.path,
+        content: parsed.data.content,
+      });
+    } catch (e) {
+      return workspaceError(e);
+    }
+  });
+
+  api.handle(IPC.WORKSPACE_PICK_DIR, async () => {
+    if (!deps.pickDirectory) return { canceled: true };
+    try {
+      const root = await deps.pickDirectory();
+      return root ? { canceled: false, root } : { canceled: true };
+    } catch (e) {
+      return workspaceError(e);
+    }
+  });
+
+  // ---------- 应用配置面 ----------
+  api.handle(IPC.CONFIG_GET, async () => (deps.config ? deps.config.get() : {}));
+
+  api.handle(IPC.CONFIG_UPDATE, async (_evt, raw: unknown) => {
+    const parsed = AppConfigPatchSchema.safeParse(raw ?? {});
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    if (!deps.config) return parsed.data;
+    try {
+      return deps.config.update(parsed.data);
+    } catch (e) {
+      return { error: "invalid_request", message: e instanceof Error ? e.message : String(e) };
+    }
   });
 
   // RFC-003 方向 3：Dormant Memory Learning IPC。
@@ -159,6 +239,16 @@ export const registerIpcHandlers = (
     return { proposalId: out.proposalId, status: out.status, decidedAt: out.decidedAt };
   });
 
+  api.handle(IPC.DORMANT_REVOKE, async (_evt, raw: unknown) => {
+    if (!agent.dormant) return DORMANT_NOT_ENABLED;
+    const parsed = DormantProposalDecisionSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    const out = agent.dormant.revoke(parsed.data.proposalId);
+    // 仅 applied 可撤销；找不到或非 applied → not_found_or_not_applied。
+    if (!out) return { error: "not_found_or_not_applied" };
+    return { proposalId: out.proposalId, status: out.status, decidedAt: out.decidedAt };
+  });
+
   api.handle(IPC.DORMANT_PERSONA, async () => {
     if (!agent.dormant) return DORMANT_NOT_ENABLED;
     return agent.dormant.snapshot();
@@ -199,6 +289,24 @@ export const registerIpcHandlers = (
       ),
     );
     offs.push(agent.hooks.on("policy.afterCheck", (ctx) => send(IPC.EVT_AUDIT, ctx.payload)));
+
+    // 工作区文件变更推送（onWorkspaceChange）。目录不可监听时静默跳过。
+    let wsWatcher: FSWatcher | undefined;
+    try {
+      wsWatcher = watch(
+        agent.workspace.config.root,
+        { persistent: false },
+        (event, filename) => {
+          send(IPC.EVT_WORKSPACE, {
+            event: event === "rename" ? "rename" : "change",
+            path: filename ? String(filename) : "",
+          });
+        },
+      );
+    } catch {
+      // 工作区目录不存在 / 平台不支持 watch → 不推送变更，但不影响其它能力。
+    }
+    if (wsWatcher) offs.push(() => wsWatcher?.close());
   }
 
   return {
@@ -208,10 +316,17 @@ export const registerIpcHandlers = (
       api.removeHandler(IPC.CHAT);
       api.removeHandler(IPC.MEMORY_QUERY);
       api.removeHandler(IPC.AUDIT_RECENT);
+      api.removeHandler(IPC.WORKSPACE_INFO);
+      api.removeHandler(IPC.WORKSPACE_READ);
+      api.removeHandler(IPC.WORKSPACE_WRITE);
+      api.removeHandler(IPC.WORKSPACE_PICK_DIR);
+      api.removeHandler(IPC.CONFIG_GET);
+      api.removeHandler(IPC.CONFIG_UPDATE);
       api.removeHandler(IPC.DORMANT_MINE);
       api.removeHandler(IPC.DORMANT_LIST);
       api.removeHandler(IPC.DORMANT_APPROVE);
       api.removeHandler(IPC.DORMANT_REJECT);
+      api.removeHandler(IPC.DORMANT_REVOKE);
       api.removeHandler(IPC.DORMANT_PERSONA);
       for (const o of offs) o();
     },

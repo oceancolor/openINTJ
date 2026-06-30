@@ -69,6 +69,47 @@ describe("HybridRetriever", () => {
     const out = r.search("dog elephant", undefined, 3);
     expect(out[0]!.doc.id).toBe("d2");
   });
+
+  it("增量 upsert 与全量 index 结果一致（BM25 统计量正确维护）", () => {
+    const full = new HybridRetriever();
+    full.index(docs);
+    const incr = new HybridRetriever();
+    for (const d of docs) incr.upsert(d);
+    expect(incr.size).toBe(3);
+
+    const q = "apple cherry";
+    const a = full.search(q, [1, 0, 0], 3);
+    const b = incr.search(q, [1, 0, 0], 3);
+    expect(b.map((x) => x.doc.id)).toEqual(a.map((x) => x.doc.id));
+    expect(b[0]!.score).toBeCloseTo(a[0]!.score, 6);
+  });
+
+  it("upsert 同 id 替换文本后命中新内容", () => {
+    const r = new HybridRetriever();
+    r.index(docs);
+    r.upsert({ id: "d2", text: "apple cherry banana", vector: [1, 0, 0] });
+    const out = r.search("cherry", undefined, 3);
+    // d1 与 d2 现在都含 cherry；至少应命中且不报错
+    expect(out.some((x) => x.doc.id === "d2")).toBe(true);
+  });
+
+  it("remove 删除文档后不再命中，统计量随之收缩", () => {
+    const r = new HybridRetriever();
+    r.index(docs);
+    expect(r.remove("d2")).toBe(true);
+    expect(r.size).toBe(2);
+    expect(r.remove("ghost")).toBe(false);
+    const out = r.search("dog elephant", undefined, 3);
+    expect(out.every((x) => x.doc.id !== "d2")).toBe(true);
+  });
+
+  it("clear 清空索引", () => {
+    const r = new HybridRetriever();
+    r.index(docs);
+    r.clear();
+    expect(r.size).toBe(0);
+    expect(r.search("apple", [1, 0, 0], 3)).toEqual([]);
+  });
 });
 
 describe("TaskQueue", () => {
