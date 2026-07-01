@@ -53,6 +53,14 @@
 - **`HybridRetriever.search` 支持 per-query `configOverride`**：会话级共享实例下仍可按查询覆盖融合参数；
   server `retrieveHybrid` / desktop `buildHybridRetrieve` 改用共享 `MemoryHybridIndex`，不再每查询重建。
 
+### Fixed
+
+- **#11 Dormant `dormant_events` 磁盘表无限增长**：自动清理此前只在 `mine()` 末尾跑，而 `mine()` 仅由用户
+  显式触发（server `POST …/dormant/mine`、desktop `DORMANT_MINE`），长会话不 mine 时磁盘表照涨。
+  `DormantRuntime` 现新增两处不依赖 mine 的兜底触发：`hydrate()` 启动末尾清一次（重启即收敛）、
+  `record()` 每累计 `autoPruneEveryNEvents` 条清一次（配了 `eventRetentionMs`/`maxDiskEvents` 时默认 256，
+  显式 `0` 关闭）。server/desktop 装配默认 `maxDiskEvents: 50_000`。`persistence.spec.ts` 补 3 例。
+
 ## [Unreleased] —— hotfix bundle #2 (2026-05-20 → 2026-05-21)
 
 > 这是 alpha.8 之后的第二批 hotfix，主要解决 Windows 真盘启动链路上的三个独立坑。

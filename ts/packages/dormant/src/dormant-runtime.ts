@@ -51,6 +51,14 @@ export interface DormantRuntimeOpts {
    */
   maxDiskEvents?: number;
   /**
+   * 按 record 触发自动清理的频率：每累计 N 条 `record()` 跑一次 {@link maybeAutoPrune}。
+   * `mine()` 可能长时间不被触发，仅靠它清理会让 `dormant_events` 在长会话中无限增长，
+   * 这里给一个不依赖 mine 的兜底。
+   * - 仅在配置了 `eventRetentionMs` / `maxDiskEvents` 时生效；此时默认 256。
+   * - 显式传 `0`（或负数）关闭按 record 触发，回退到仅 `mine()` / `hydrate()` 清理。
+   */
+  autoPruneEveryNEvents?: number;
+  /**
    * 脱敏函数：record 落盘**前**对 text 做隐私打码（邮箱/电话/卡号/key 等）。
    * - 默认 {@link defaultRedactor}（保守内置规则）。
    * - 传 `null` 显式关闭脱敏（不推荐）。
@@ -74,6 +82,8 @@ export class DormantRuntime {
   private eventSeq = 0;
   private readonly eventRetentionMs?: number;
   private readonly maxDiskEvents?: number;
+  private readonly autoPruneEveryNEvents?: number;
+  private recordsSincePrune = 0;
   private readonly redactor: Redactor;
 
   constructor(opts: DormantRuntimeOpts = {}) {
@@ -87,6 +97,10 @@ export class DormantRuntime {
     if (opts.adapter) this.adapter = opts.adapter;
     if (opts.eventRetentionMs !== undefined) this.eventRetentionMs = opts.eventRetentionMs;
     if (opts.maxDiskEvents !== undefined) this.maxDiskEvents = opts.maxDiskEvents;
+    // 配了保留策略才周期性按 record 兜底清理；默认每 256 条裁一次（显式 0/负数关闭）。
+    const hasRetention = this.eventRetentionMs !== undefined || this.maxDiskEvents !== undefined;
+    const everyN = opts.autoPruneEveryNEvents ?? (hasRetention ? 256 : undefined);
+    if (everyN !== undefined && everyN > 0) this.autoPruneEveryNEvents = everyN;
     // redactor === null 显式关闭；undefined 用默认脱敏；否则用注入的。
     this.redactor = opts.redactor === null ? (t) => t : (opts.redactor ?? defaultRedactor);
   }
@@ -102,6 +116,8 @@ export class DormantRuntime {
     this.passive.recordBulk(snap.events);
     this.internalization.restoreState(snap.proposals, snap.persona);
     this.eventSeq = snap.events.length;
+    // 启动即按保留策略裁剪一次：重启后磁盘表立刻收敛到上限，不必等首次 mine()。
+    this.maybeAutoPrune();
   }
 
   /**
@@ -125,6 +141,14 @@ export class DormantRuntime {
     };
     this.passive.record(event);
     this.adapter?.recordEvent(event);
+    // 周期性兜底清理：mine() 可能长时间不被触发，靠 record 计数防 dormant_events 无限增长。
+    if (this.autoPruneEveryNEvents !== undefined) {
+      this.recordsSincePrune += 1;
+      if (this.recordsSincePrune >= this.autoPruneEveryNEvents) {
+        this.recordsSincePrune = 0;
+        this.maybeAutoPrune();
+      }
+    }
     return event;
   }
 

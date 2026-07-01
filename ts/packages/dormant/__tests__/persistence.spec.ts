@@ -271,6 +271,43 @@ describe("DormantRuntime + adapter（hydrate / write-through）", () => {
     expect((await adapter.loadAll()).events).toHaveLength(2);
   });
 
+  it("record 累计达到 autoPruneEveryNEvents 阈值自动裁剪（不依赖 mine）", async () => {
+    const adapter = new InMemoryDormantStore();
+    const rt = new DormantRuntime({ adapter, maxDiskEvents: 3, autoPruneEveryNEvents: 4 });
+    await rt.hydrate();
+    // 前 3 条未达阈值 → 不触发清理，磁盘累计 3 条。
+    rt.record("a", "user");
+    rt.record("b", "user");
+    rt.record("c", "user");
+    expect((await adapter.loadAll()).events).toHaveLength(3);
+    // 第 4 条达到阈值 → maybeAutoPrune → 裁到 maxDiskEvents=3。
+    rt.record("d", "user");
+    expect(rt.passiveSize()).toBe(3);
+    expect((await adapter.loadAll()).events).toHaveLength(3);
+  });
+
+  it("hydrate 启动即按 maxDiskEvents 收敛磁盘表（重启兜底）", async () => {
+    const adapter = new InMemoryDormantStore();
+    for (const ts of [1, 2, 3, 4, 5]) {
+      adapter.recordEvent({ eventId: `e${ts}`, ts, source: "user", text: "x", metadata: {} });
+    }
+    const rt = new DormantRuntime({ adapter, maxDiskEvents: 2 });
+    await rt.hydrate();
+    expect(rt.passiveSize()).toBe(2);
+    expect((await adapter.loadAll()).events).toHaveLength(2);
+  });
+
+  it("autoPruneEveryNEvents=0 关闭按 record 触发（仅 mine/hydrate 清理）", async () => {
+    const adapter = new InMemoryDormantStore();
+    const rt = new DormantRuntime({ adapter, maxDiskEvents: 2, autoPruneEveryNEvents: 0 });
+    await rt.hydrate();
+    rt.record("a", "user");
+    rt.record("b", "user");
+    rt.record("c", "user");
+    // record 不再触发清理，磁盘累计 3 条；仅 mine() / 下次 hydrate() 才收敛。
+    expect((await adapter.loadAll()).events).toHaveLength(3);
+  });
+
   it("hydrate 可以多次调用安全（每次全量覆写）", async () => {
     const adapter = new InMemoryDormantStore();
     adapter.recordEvent({

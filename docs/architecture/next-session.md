@@ -94,13 +94,13 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 | 9.A | ~~Dormant 持久化（SqliteDormantStore + hydrate）~~ | ~~中~~ | ~~高~~ | ⭐⭐⭐ | ✅ 2026-05-19 完成（Phase 3.4） |
 | 9.B | ~~Dormant 审批 UI（preload + DormantPanel + tab 布局）~~ | ~~中~~ | ~~中-高~~ | ⭐⭐⭐ | ✅ 2026-05-19 完成（Phase 3.5） |
 | 10 | **HybridRetriever LanceDB FTS 路径**：大规模 fragments 时换 LanceDB 原生 FTS，避免每次重建索引 | 中 | 中 | ⭐⭐ | 🟡 增量索引（upsert/remove/clear）已落，省去全量重建；原生 FTS 仍待办（见 §九） |
-| 11 | **Dormant 事件清理**：`pruneEvents(olderThanTs)` / LRU 防 `dormant_events` 无限增长 | 低 | 中 | ⭐⭐ | 待办（3.4 衍生） |
+| 11 | ~~**Dormant 事件清理**：`pruneEvents(olderThanTs)` / LRU 防 `dormant_events` 无限增长~~ | ~~低~~ | ~~中~~ | ⭐⭐ | ✅ 2026-06-30 完成（接口/双适配器/runtime 自动清理 + hydrate/record 兜底触发；见 §10.7） |
 | 12 | **Parity 扩展**：governance plane / Hooks / ContextEngine 接进 parity 网 | 中 | 中 | ⭐⭐ | 🟡 governance plane 已接（9 tests）；Hooks/ContextEngine 仍待办（见 §九） |
 
 **默认推荐下一站**：
 
 - **#3 嵌入基准**（低成本，给默认选型一个数据支持；下一阶段顺手填）
-- 或 **#11 dormant 事件清理**（Phase 3.4 留下的小尾巴；30 行 SQL + 几个 spec）
+- ~~或 **#11 dormant 事件清理**~~（✅ 2026-06-30 完成，见 §10.7）
 - 或 **#12 parity 扩展**（顺势补 governance / Hooks / ContextEngine 进对齐网）
 - 或 **#6 打包发布**（electron-builder Win/macOS + electron-updater；体感工程量最大但收益最直观）
 - 或 **#10 HybridRetriever LanceDB FTS**（3.3 衍生；N>10k fragment 时性能升级；增量索引已落，仅差原生 FTS）
@@ -324,7 +324,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 5. **IPC 协议向后兼容**：新增字段都是 optional，旧 renderer 仍然能用；新 renderer 调旧 main 会拿到 `dormant_not_enabled` 而不是崩
 6. **Phase 3.4 装配点**：装配顺序很重要 —— `await createSqliteDormantStore` → 传入 `DormantRuntime` 的 `adapter` 槽 → `await runtime.hydrate()`。close 时**先 dormant.close 再 persistentStore.close**
 7. **Phase 3.4 `SqliteDormantConfigInput`**：`wal` 用 `z.boolean().default(true)`，input/output 类型不一致 —— 用 `z.input<>` 给装配点，`z.infer<>` 给内部
-8. **Phase 3.4 `dormant_events` 表无限增长**：当前 PassiveStore 内存有 `maxPassiveEvents` 环形上限，但磁盘表会一直累积。下个 phase 加 `pruneEvents(olderThanTs)`（#11）
+8. ~~**Phase 3.4 `dormant_events` 表无限增长**~~：✅ 2026-06-30（#11）完成。PassiveStore 内存有 `maxPassiveEvents` 环形上限；磁盘表由 `eventRetentionMs` / `maxDiskEvents` 保留策略 + 三处触发（`mine()` 末尾、`hydrate()` 启动、`record()` 每 `autoPruneEveryNEvents`≈256 条兜底）自动收敛。server/desktop 默认 `maxDiskEvents: 50_000`
 9. ~~**桌面端审批 UI 仍未接**~~：✅ Phase 3.5 完成
 10. **Phase 3.5 协议联合类型**：preload 5 个 dormant API 全部返回 `Success | Error` 联合类型 —— renderer 必须用 `'error' in r` narrow 才能拿数据。这是为了把"dormant 未启用"这类正常态从 try/catch 里剥离出来
 11. **Phase 3.5 类型对齐**：`StatusBar.tsx` 不再本地定义 `StatusSnapshot`，而是 `type StatusSnapshot = StatusResponse`（来自 protocol）。新加字段时只改 ipc-protocol.ts 即可全栈传播
@@ -511,7 +511,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 - ~~增量检索索引**接进 agent**（需 fragment change-feed 把 memory 写入广播给 HybridRetriever）~~。✅ 2026-06-30 完成（§十 A1）
 - HybridRetriever 换 LanceDB 原生 FTS（#10 余下部分）。
 - Parity 扩展：Hooks / ContextEngine（governance 已接）。
-- `pruneEvents(olderThanTs)`（#11 dormant 事件磁盘清理）。
+- ~~`pruneEvents(olderThanTs)`（#11 dormant 事件磁盘清理）~~。✅ 2026-06-30 完成（保留策略 + hydrate/record/mine 三处触发，见 §10.7）
 - #6 打包发布（electron-builder Win/macOS + electron-updater）。
 - ~~abTest / self-consistency 的长跑可观测验证（脚手架已就位，缺真实跑批数据）~~。✅ 2026-06-30 longrun harness 落地（§十 A2，真实跑批仍需 `RUN_LONGRUN=1` + LLM key 手动触发）
 
@@ -589,3 +589,17 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 - TokenHub **Responses API** 原生联网搜索（若想用官方 search 而非第三方；参数需从模型详情页取）。
 - 长跑 A/B 的真实跑批数据沉淀（harness 就绪，缺带 key 的批量结果）。
 - 分类器路由策略调参（`RoutingPolicy` 阈值目前是保守默认）。
+
+### 10.7 #11 Dormant 事件清理收尾（2026-06-30 续）
+
+防 `dormant_events` 磁盘表无限增长。接口 / 双适配器 / runtime 清理逻辑此前已落，本轮补齐
+**「不依赖 mine() 的兜底触发」**——此前自动清理只在 `mine()` 末尾跑，而 `mine()` 只由用户显式触发
+（server `POST …/dormant/mine`、desktop `DORMANT_MINE` IPC），长会话不 mine 时磁盘表照样涨。
+
+- **保留策略**（`DormantRuntimeOpts`）：`eventRetentionMs`（按时间）/ `maxDiskEvents`（LRU 条数），可叠加。
+- **三处触发**：
+  1. `mine()` 末尾 `maybeAutoPrune()`（原有）；
+  2. `hydrate()` 启动末尾 `maybeAutoPrune()`——重启即收敛磁盘表；
+  3. `record()` 每累计 `autoPruneEveryNEvents` 条触发一次（配了保留策略时默认 256；显式 `0` 关闭）。
+- **装配**：server / desktop `DormantRuntime` 默认 `maxDiskEvents: 50_000`（`dormantOpts` 可覆盖）；CLI 不挂 dormant。
+- **测试**：`dormant/__tests__/persistence.spec.ts` 新增 3 例（record 阈值触发 / hydrate 收敛 / `=0` 关闭），dormant 包 53 tests 全绿。
