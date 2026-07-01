@@ -188,13 +188,13 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
     availableTools: () => toolHub.list(),
     systemPrompt: baseSystemPrompt,
     // 每轮从记忆里检索相关片段注入 system prompt（多轮/编程式调用时也能引用历史）。
-    contextProvider: async ({ query, history, taskType, traceId }) => {
+    contextProvider: async ({ query, history, taskType, topK, traceId }) => {
       const snap = await contextEngine.build({
         query,
         history,
         taskType,
         systemPrompt: baseSystemPrompt,
-        topK: 6,
+        topK: topK ?? 6,
         ...(traceId ? { traceId } : {}),
       });
       return snap.systemPrompt;
@@ -240,6 +240,7 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
       const taoOpts = (traceId?: string) => ({
         ...(cls ? { taskType: cls.label } : {}),
         ...(route?.single ? { enableReact: false } : {}),
+        ...(route ? { topK: route.topK } : {}),
         ...(traceId ? { traceId } : {}),
       });
       let result: TaoResult;

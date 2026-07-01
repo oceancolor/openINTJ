@@ -42,13 +42,16 @@
 
 ### Changed
 
-- **`TaoLoop.run()` 新增可选 `taskType` / `enableReact` opts**：外部预分类时跳过内部分类、
-  并按路由决定是否退化为单次 LLM；`TaoResult` / `ctx.metrics` 新增 `totalTokensSpent`（跨轮累计）。
+- **`TaoLoop.run()` 新增可选 `taskType` / `enableReact` / `topK` opts**：外部预分类时跳过内部分类、
+  并按路由决定是否退化为单次 LLM；`topK` 透传给 `contextProvider`（`TaoContextInput.topK`）→
+  `ContextEngine.build` → 检索，让「高置信简单类调小 topK 降 token」真正落到检索调用（此前 `RouteDecision.topK`
+  仅计算未接入）。`TaoResult` / `ctx.metrics` 新增 `totalTokensSpent`（跨轮累计）。
   `detectTaskType` 提升为公开导出供分类器复用。
 - **`MemoryPlane.recordUserInput/Output` 接受可选 `extraTags`**：把分类 label 写进 `taskTags`，
   与 retriever 的 taskType boost 叠加、随使用复利。
 - **三端 agent 装配 + `run()`**（cli/server/desktop）：新增 `enableClassifier` opt（env `OPENINTJ_CLASSIFIER=1`）；
-  `run()` 预分类 → 注入 taskType + 降 token 路由 → 记忆带 label → 收尾 `reinforce(outcomeSignal(status))`。
+  `run()` 预分类 → 注入 taskType + 降 token 路由（`enableReact:false` 单次 LLM + `route.topK` 调小检索）→
+  记忆带 label → 收尾 `reinforce(outcomeSignal(status))`。
   real 持久化模式自动挂 `SqliteClassifierStore`（`<dataDir>/classifier.sqlite`），`close()` 关闭。
 - **`HybridRetriever.search` 支持 per-query `configOverride`**：会话级共享实例下仍可按查询覆盖融合参数；
   server `retrieveHybrid` / desktop `buildHybridRetrieve` 改用共享 `MemoryHybridIndex`，不再每查询重建。

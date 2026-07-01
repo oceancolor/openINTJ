@@ -170,6 +170,48 @@ describe("TaoLoop.run (single iteration)", () => {
     expect(capturedSystem).not.toContain("STATIC_PROMPT");
   });
 
+  it("run(opts.topK) 透传给 contextProvider（外部路由降 token 用），未传则 undefined", async () => {
+    const hooks = new HookBus({ logger: silent });
+    const llm: LlmClient = {
+      async chat() {
+        return "FINAL: ok";
+      },
+      async visionChat() {
+        return "v";
+      },
+      getStatus() {
+        return {
+          provider: "t",
+          model: "x",
+          available: true,
+          mode: "live",
+          status: "connected",
+          visionSupported: false,
+        };
+      },
+    };
+    const seenTopK: (number | undefined)[] = [];
+    const tao = new TaoLoop({
+      config: { ...DEFAULT_TAO_CONFIG, maxTaoIterations: 1 },
+      hooks,
+      react: new ReactStateMachine({
+        config: DEFAULT_REACT_CONFIG,
+        hooks,
+        llm,
+        toolRunner: passingRunner,
+      }),
+      availableTools: () => [],
+      systemPrompt: "S",
+      contextProvider: ({ topK }) => {
+        seenTopK.push(topK);
+        return "B";
+      },
+    });
+    await tao.run("q1", { topK: 3 });
+    await tao.run("q2");
+    expect(seenTopK).toEqual([3, undefined]);
+  });
+
   it("contextProvider 抛错时回退静态 systemPrompt，不阻断主循环", async () => {
     const hooks = new HookBus({ logger: silent });
     let capturedSystem = "";

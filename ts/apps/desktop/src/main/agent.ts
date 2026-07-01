@@ -403,14 +403,14 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     availableTools: () => toolHub.list(),
     systemPrompt: baseSystemPrompt,
     // 每轮注入：①已批准的钝化记忆 persona（无需检索）②检索到的 [记忆参考]。
-    contextProvider: async ({ query, history, taskType, traceId }) => {
+    contextProvider: async ({ query, history, taskType, topK, traceId }) => {
       const persona = dormant?.personaSystemPrompt() ?? "";
       const snap = await contextEngine.build({
         query,
         history,
         taskType,
         systemPrompt: persona ? `${baseSystemPrompt}\n\n${persona}` : baseSystemPrompt,
-        topK: 6,
+        topK: topK ?? 6,
         ...(traceId ? { traceId } : {}),
       });
       return snap.systemPrompt;
@@ -466,6 +466,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       const taoOpts = (traceId?: string) => ({
         ...(cls ? { taskType: cls.label } : {}),
         ...(route?.single ? { enableReact: false } : {}),
+        ...(route ? { topK: route.topK } : {}),
         ...(traceId ? { traceId } : {}),
       });
       // 先跑（contextProvider 会检索此前已落盘的记忆），再记录本轮 → 避免检索命中当前输入本身。

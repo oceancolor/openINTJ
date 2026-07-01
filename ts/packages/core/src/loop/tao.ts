@@ -36,6 +36,8 @@ export interface TaoContextInput {
   trajectory: TrajectoryEntry[];
   taskType: TaskTypeType;
   traceId: string;
+  /** 本轮建议检索 topK（外部路由降 token 时透传；不传则由 provider 自定默认）。 */
+  topK?: number;
 }
 
 /**
@@ -171,6 +173,8 @@ export class TaoLoop {
       taskType?: TaskTypeType;
       /** 按本次 run 覆盖 enableReact：false 走单次 LLM 调用（降 token），不改全局配置。 */
       enableReact?: boolean;
+      /** 本次 run 的检索 topK（外部路由降 token 时传入；透传给 contextProvider）。 */
+      topK?: number;
     } = {},
   ): Promise<TaoResult> {
     const traceId = opts.traceId ?? randomUUID();
@@ -256,6 +260,7 @@ export class TaoLoop {
             trajectory: ctx.trajectory,
             taskType,
             traceId,
+            ...(opts.topK !== undefined ? { topK: opts.topK } : {}),
           });
         } catch {
           // 记忆注入失败绝不阻断主循环，回退静态 systemPrompt。
