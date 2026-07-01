@@ -13,6 +13,7 @@
     { "path": "../../packages/core" },
     { "path": "../../packages/dormant" },
     { "path": "../../packages/shared" },
+    { "path": "../../packages/skills" },
     { "path": "../../packages/planes/control" },
     { "path": "../../packages/planes/execution" },
     { "path": "../../packages/planes/memory" },

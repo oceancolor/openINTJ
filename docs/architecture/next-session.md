@@ -1,9 +1,10 @@
 # 下一次工作交接备忘
 
 > 本文件用于工作中断 / 多日离开后快速恢复上下文。
-> 上次更新：2026-06-30（**Memory Flywheel**：A1 增量检索接主循环 + A2 长跑验证 harness +
-> CLF 可强化分类器 `@openintj/classifier`，三开关默认全关；见 [§十](#十memory-flywheel增量检索--长跑验证--可强化分类器2026-06-30)。
-> 此前同日：7 项定位任务收尾，见 [§九](#九已定位任务批量收尾2026-06-30)）
+> 上次更新：2026-07-01（**技能系统 Phase 1**：新包 `@openintj/skills`，作者能力包 `SKILL.md` +
+> 两级「目录 + 嵌入检索」按需注入，opt-in `OPENINTJ_SKILLS=1` 默认关；见 [§十一](#十一技能系统phase-1-作者能力包2026-07-01)。
+> 此前 2026-06-30：**Memory Flywheel**（A1 增量检索 + A2 长跑验证 + CLF 可强化分类器，见 [§十](#十memory-flywheel增量检索--长跑验证--可强化分类器2026-06-30)）；
+> 再前：7 项定位任务收尾，见 [§九](#九已定位任务批量收尾2026-06-30)）
 
 ---
 
@@ -604,3 +605,48 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
   3. `record()` 每累计 `autoPruneEveryNEvents` 条触发一次（配了保留策略时默认 256；显式 `0` 关闭）。
 - **装配**：server / desktop `DormantRuntime` 默认 `maxDiskEvents: 50_000`（`dormantOpts` 可覆盖）；CLI 不挂 dormant。
 - **测试**：`dormant/__tests__/persistence.spec.ts` 新增 3 例（record 阈值触发 / hydrate 收敛 / `=0` 关闭），dormant 包 53 tests 全绿。
+
+## 十一、技能系统（Phase 1 作者能力包，2026-07-01）
+
+> 起因：让 agent「越用越会用」——把可复用的做法沉淀成**能力包**，按 query 命中才注入，
+> 省 token 又不改默认行为。Phase 1 落地作者编写的 `SKILL.md`，Phase 2（仅铺垫）再加自学习蒸馏。
+> 设计记录（流程图/分阶段/风险/验证口径 + Phase 2 铺垫）见
+> [`phase-skills-design.md`](./phase-skills-design.md)（由 Cursor Plan 归档）。
+> **opt-in 开关 `OPENINTJ_SKILLS=1` 默认关 → 默认行为零变化。**
+
+### 11.1 新包 `@openintj/skills`
+
+- **`Skill` 类型 + `SkillSource` 接口 + `FsSkillSource`**（`fs-source.ts`）：`SKILL.md` frontmatter
+  `id/name/description/triggers?/taskTypes?/priority?/version?` + body 正文；极简 frontmatter 解析
+  （`frontmatter.ts`，不引 YAML 依赖）；递归发现 `SKILL.md`，非法 `taskType` 过滤、缺 description/body 跳过、
+  id 兜底目录名；同 id「后源覆盖」。`resolveSkillDirs`（内建 + `OPENINTJ_SKILLS_DIR` 分号/逗号分隔，不切盘符冒号）、
+  `builtinSkillsDir()`（用包自身 `import.meta.url`，src/dist 都指向 `../skills`）。
+- **`SkillRegistry`**（`registry.ts`）：多源载入 + 用注入 embedder 预计算「name+desc+triggers」匹配向量 + 轻量目录。
+- **`SkillSelector` + `renderSkillPrompt`**（`selector.ts`）：embed 余弦 + trigger 关键词加成 + taskType 加成，
+  过阈值（默认 0.35）取 top-k（默认 2），正文按 token 预算封顶（默认 700，至少留最高分一个）；渲染成 `[技能]` 块。
+- **共享 helper `assembleSkillContext`**（`agent-helper.ts`）：三端共用，载入 + 选择器 + 按 (taskType,query) 记忆化
+  （上限 128 清空防泄漏）+ 命中发 `event.SKILL_SELECTED`；无可用技能返回 `undefined`（调用方零注入）。
+- **种子技能**（`packages/skills/skills/`）：`code-review` / `web-research` / `debugging`，随包 `files` 发布。
+
+### 11.2 三端集成 + 可观测
+
+- **注入点**：三端 `contextProvider`（`OPENINTJ_SKILLS=1` opt-in），复用 store embedder；技能块拼在
+  **persona 之后、`[记忆参考]` 之前**（CLI 无 persona 则直接接 base）。CLI 工厂同步 → 持有 Promise 在异步 provider 里 await。
+- **事件**：`HookEventMap` 加 `event.SKILL_SELECTED`（`{ skills:{id,score}[]; query }`）；
+  `attachOtelToHooks` 加 counter `openintj.skill.hit`（每次注入的每个技能各 +1，attribute=skill）。
+
+### 11.3 验证 & 装配清单
+
+- **自检**：`turbo run typecheck --concurrency=1` → **39/39 全绿**；lint（biome）touched 文件全过；
+  各 touched 包 vitest 单 fork 全过（skills 13、core 98、telemetry-otel 20、cli 18、server 48、desktop 33）。
+  ⚠️ 本机内存吃紧，`turbo run test` 默认多线程 worker 会 OOM（`Zone Allocation failed`）——
+  用 `vitest --pool=forks --poolOptions.forks.singleFork=true` + `NODE_OPTIONS=--max-old-space-size=4096` 逐包跑即通过。
+- **新增包**：`@openintj/skills`（已加 `pnpm-workspace.yaml` / 根 `tsconfig.json` refs / 三端 `package.json` + `tsconfig.json` refs）。
+- **env 开关**（默认关）：`OPENINTJ_SKILLS=1`（启用技能注入）、`OPENINTJ_SKILLS_DIR`（追加自定义技能目录）。
+
+### 11.4 本轮仍未做（Phase 2 铺垫，见设计文档）
+
+- DB `SkillSource`（`@openintj/storage-sqlite`）承载「学习出来」的技能。
+- 从成功轨迹蒸馏候选技能 → 人审批（复用 dormant propose/approve/inject）→ 写 DB 源。
+- 用 `event.LOOP_ITERATION` / `outcomeSignal` 给技能选择加权（与 classifier 同哲学，实现「越用越好」）。
+- 工具子集/新工具绑定（Phase 1 技能只注入指令文本，不注册新工具、不做工具隔离）。

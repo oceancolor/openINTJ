@@ -4,6 +4,36 @@
 版本号沿用 [SemVer](https://semver.org/lang/zh-CN/) 与
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 
+## [Unreleased] —— 技能系统 Phase 1：作者能力包（SKILL.md）按需注入 (2026-07-01)
+
+> 把可复用的做法沉淀成**能力包**（`SKILL.md`）：每轮 query 经「目录 + 嵌入检索」两级预筛，
+> 命中才把技能全文注入 system prompt（省 token），未命中零注入。可插拔 `SkillSource` 为
+> Phase 2 自学习技能预留同一接口。opt-in 开关 `OPENINTJ_SKILLS=1` 默认关 → 默认行为零变化。
+> 详见 `docs/architecture/next-session.md` §十一 与 `docs/architecture/phase-skills-design.md`。
+
+### Added
+
+- **新包 `@openintj/skills`**：`Skill` 类型 + 可插拔 `SkillSource` 接口 + `FsSkillSource`
+  （递归发现并解析 `SKILL.md`：极简 frontmatter 解析不引 YAML 依赖，`id/name/description/triggers?/taskTypes?/priority?/version?` +
+  body 正文；非法 `taskType` 过滤、缺 description/body 跳过、id 兜底目录名、同 id 后源覆盖）。
+  `resolveSkillDirs`（内建 + `OPENINTJ_SKILLS_DIR`，分号/逗号分隔且不切 Windows 盘符）、
+  `builtinSkillsDir()`（用包自身 `import.meta.url`，src/dist 都指向 `../skills`）。
+- **`SkillRegistry` + `SkillSelector` + `renderSkillPrompt`**：注册表用注入 embedder 预计算
+  「name+desc+triggers」向量 + 轻量目录；选择器 = embed 余弦 + trigger 关键词加成 + taskType 加成，
+  过阈值（默认 0.35）取 top-k（默认 2），正文按 token 预算封顶（默认 700，至少留最高分一个）。
+- **共享装配 helper `assembleSkillContext`**：三端共用，载入 + 选择器 + 按 (taskType,query) 记忆化
+  （上限 128 清空）+ 命中发 `event.SKILL_SELECTED`；无可用技能返回 `undefined`（调用方零注入）。
+- **种子技能**（`packages/skills/skills/`，随包发布）：`code-review` / `web-research` / `debugging`。
+- **可观测**：`HookEventMap` 新增 `event.SKILL_SELECTED`（`{ skills:{id,score}[]; query }`）；
+  `attachOtelToHooks` 新增 counter `openintj.skill.hit`（每次注入的每个技能各 +1，attribute=skill）。
+- **测试**：`skills/__tests__/{fs-source,selector}.spec.ts`（13）、`telemetry-otel/__tests__/metrics.spec.ts` 加 skill.hit 例。
+
+### Changed
+
+- **三端 agent 装配 + `contextProvider`**（cli/server/desktop）：新增 `enableSkills` opt（env `OPENINTJ_SKILLS=1`）；
+  命中技能块拼在 **persona 之后、`[记忆参考]` 之前**（CLI 无 persona 则接 base），复用 store embedder，按 query 记忆化避免多轮重复 embed。
+  三端 `package.json` / `tsconfig.json` 加 `@openintj/skills` 依赖与引用；`pnpm-workspace.yaml` / 根 `tsconfig.json` 加新包。
+
 ## [Unreleased] —— Memory Flywheel: 增量检索 + 长跑验证 + 可强化分类器 (2026-06-30)
 
 > 把「记忆」「检索」「分类」串成一个共享使用反馈的飞轮：每次 `agent.run()` 的

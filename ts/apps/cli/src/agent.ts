@@ -40,6 +40,7 @@ import {
   resolveWorkspaceConfig,
   selectConsistentAnswer,
 } from "@openintj/shared";
+import { type SkillContext, assembleSkillContext } from "@openintj/skills";
 import { MemoryHybridIndex } from "@openintj/taskpool";
 
 export type LlmProvider = "auto" | "hunyuan" | "ollama" | "mock";
@@ -73,6 +74,12 @@ export interface AgentOptions {
    * 路由单次 LLM 降 token，收尾用 outcome 强化。默认关（env OPENINTJ_CLASSIFIER=1 也可开）。
    */
   enableClassifier?: boolean;
+  /**
+   * 技能系统（Phase 1 作者能力包）：开启后每轮 query 经「目录 + 嵌入检索」两级预筛，
+   * 命中的 SKILL.md 全文注入 system prompt（记忆参考之前），未命中零注入。
+   * 默认关（env OPENINTJ_SKILLS=1 也可开）；技能目录另可用 OPENINTJ_SKILLS_DIR 追加。
+   */
+  enableSkills?: boolean;
 }
 
 export interface AssembledAgent {
@@ -181,19 +188,34 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
     ) => toolHub.call(name, params, callOpts ?? {}),
   });
   const baseSystemPrompt = opts.systemPrompt ?? DEFAULT_AGENT_SYSTEM_PROMPT;
+
+  // 技能系统（opt-in）：OPENINTJ_SKILLS=1 时装配，复用 store embedder，命中才注入能力包全文。
+  // assembleAgent 为同步工厂，这里持有 Promise，在（异步的）contextProvider 里 await（只解析一次）。
+  const enableSkills = opts.enableSkills ?? process.env["OPENINTJ_SKILLS"] === "1";
+  const skillContextP: Promise<SkillContext | undefined> | undefined = enableSkills
+    ? assembleSkillContext({ embedder: memory.store.embedder, hooks })
+    : undefined;
+
   const tao = new TaoLoop({
     config: { ...DEFAULT_TAO_CONFIG, maxTaoIterations: opts.maxTaoIterations ?? 1 },
     hooks,
     react,
     availableTools: () => toolHub.list(),
     systemPrompt: baseSystemPrompt,
-    // 每轮从记忆里检索相关片段注入 system prompt（多轮/编程式调用时也能引用历史）。
+    // 每轮：命中的技能包 + 从记忆检索的相关片段注入 system prompt。
     contextProvider: async ({ query, history, taskType, topK, traceId }) => {
+      const skillContext = skillContextP ? await skillContextP : undefined;
+      const skillBlock = skillContext
+        ? await skillContext.render(query, {
+            ...(taskType ? { taskType } : {}),
+            ...(traceId ? { traceId } : {}),
+          })
+        : "";
       const snap = await contextEngine.build({
         query,
         history,
         taskType,
-        systemPrompt: baseSystemPrompt,
+        systemPrompt: skillBlock ? `${baseSystemPrompt}\n\n${skillBlock}` : baseSystemPrompt,
         topK: topK ?? 6,
         ...(traceId ? { traceId } : {}),
       });

@@ -28,6 +28,7 @@
     "@openintj/plane-governance": "workspace:*",
     "@openintj/plane-memory": "workspace:*",
     "@openintj/shared": "workspace:*",
+    "@openintj/skills": "workspace:*",
     "@openintj/storage-lance": "workspace:*",
     "@openintj/storage-sqlite": "workspace:*",
     "@openintj/taskpool": "workspace:*",

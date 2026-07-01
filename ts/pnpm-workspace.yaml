@@ -9,5 +9,6 @@ packages:
   - "packages/taskpool"
   - "packages/classifier"
   - "packages/dormant"
+  - "packages/skills"
   - "packages/shared"
   - "apps/*"

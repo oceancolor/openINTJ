@@ -236,6 +236,38 @@ describe("attachOtelToHooks — metrics", () => {
     otel.dispose();
   });
 
+  it("counts openintj.skill.hit per injected skill from event.SKILL_SELECTED", async () => {
+    const bus = new HookBus();
+    const otel = attachOtelToHooks(bus);
+
+    await bus.emit(
+      "event.SKILL_SELECTED",
+      {
+        skills: [
+          { id: "code-review", score: 0.8 },
+          { id: "debugging", score: 0.5 },
+        ],
+        query: "review this code for bugs",
+      },
+      { traceId: "t-skill-1" },
+    );
+    await bus.emit(
+      "event.SKILL_SELECTED",
+      { skills: [{ id: "code-review", score: 0.9 }], query: "another review" },
+      { traceId: "t-skill-2" },
+    );
+
+    const series = await flush();
+    const skillSeries = series.filter((s) => s.name === "openintj.skill.hit");
+    // 共 3 次注入（2 + 1）。
+    expect(skillSeries.reduce((a, b) => a + b.sum, 0)).toBe(3);
+    // 按 skill 维度：code-review 命中 2。
+    const cr = skillSeries.filter((s) => s.attrs["skill"] === "code-review");
+    expect(cr.reduce((a, b) => a + b.sum, 0)).toBe(2);
+
+    otel.dispose();
+  });
+
   it("respects disableMetrics flag", async () => {
     const bus = new HookBus();
     const otel = attachOtelToHooks(bus, { disableMetrics: true });

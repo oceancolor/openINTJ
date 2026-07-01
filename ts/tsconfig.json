@@ -20,6 +20,7 @@
     { "path": "./packages/taskpool" },
     { "path": "./packages/classifier" },
     { "path": "./packages/dormant" },
+    { "path": "./packages/skills" },
     { "path": "./apps/desktop" },
     { "path": "./apps/cli" },
     { "path": "./apps/server" }

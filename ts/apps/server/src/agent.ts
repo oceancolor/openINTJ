@@ -48,6 +48,7 @@ import {
   resolveWorkspaceConfig,
   selectConsistentAnswer,
 } from "@openintj/shared";
+import { type SkillContext, assembleSkillContext } from "@openintj/skills";
 import { createSqliteClassifierStore, createSqliteDormantStore } from "@openintj/storage-sqlite";
 import { MemoryHybridIndex } from "@openintj/taskpool";
 import {
@@ -118,6 +119,12 @@ export interface ServerAgentOpts {
    * 默认关（env OPENINTJ_CLASSIFIER=1 也可开）。
    */
   enableClassifier?: boolean;
+  /**
+   * 技能系统（Phase 1 作者能力包）：开启后每轮 query 经「目录 + 嵌入检索」两级预筛，
+   * 命中的 SKILL.md 全文注入 system prompt（persona 之后、记忆参考之前），未命中零注入。
+   * 默认关（env OPENINTJ_SKILLS=1 也可开）；技能目录另可用 OPENINTJ_SKILLS_DIR 追加。
+   */
+  enableSkills?: boolean;
   /**
    * 工作区根目录：read_file / write_file 被沙箱限制在此目录内（RFC-004 §8）。
    * 缺省走 env OPENINTJ_WORKSPACE_DIR，再退到 process.cwd()。
@@ -373,6 +380,13 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
     ) => toolHub.call(name, params, callOpts ?? {}),
   });
   const baseSystemPrompt = opts.systemPrompt ?? DEFAULT_AGENT_SYSTEM_PROMPT;
+
+  // 技能系统（opt-in）：OPENINTJ_SKILLS=1 时装配，复用 store embedder，命中才注入能力包全文。
+  const enableSkills = opts.enableSkills ?? process.env["OPENINTJ_SKILLS"] === "1";
+  const skillContext: SkillContext | undefined = enableSkills
+    ? await assembleSkillContext({ embedder: persistentStore.embedder, hooks })
+    : undefined;
+
   const tao = new TaoLoop({
     config: {
       ...DEFAULT_TAO_CONFIG,
@@ -385,11 +399,18 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
     // 每轮注入：①已批准的钝化记忆 persona（无需检索）②检索到的 [记忆参考]。
     contextProvider: async ({ query, history, taskType, topK, traceId }) => {
       const persona = dormant?.personaSystemPrompt() ?? "";
+      const skillBlock = skillContext
+        ? await skillContext.render(query, {
+            ...(taskType ? { taskType } : {}),
+            ...(traceId ? { traceId } : {}),
+          })
+        : "";
+      const prefix = [persona, skillBlock].filter((s) => s.length > 0).join("\n\n");
       const snap = await contextEngine.build({
         query,
         history,
         taskType,
-        systemPrompt: persona ? `${baseSystemPrompt}\n\n${persona}` : baseSystemPrompt,
+        systemPrompt: prefix ? `${baseSystemPrompt}\n\n${prefix}` : baseSystemPrompt,
         topK: topK ?? 6,
         ...(traceId ? { traceId } : {}),
       });

@@ -25,6 +25,7 @@
     { "path": "../../packages/storage/sqlite" },
     { "path": "../../packages/taskpool" },
     { "path": "../../packages/classifier" },
+    { "path": "../../packages/skills" },
     { "path": "../../packages/telemetry/otel" }
   ]
 }

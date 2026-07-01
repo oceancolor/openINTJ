@@ -19,6 +19,7 @@
     { "path": "../../packages/concurrency" },
     { "path": "../../packages/taskpool" },
     { "path": "../../packages/classifier" },
-    { "path": "../../packages/dormant" }
+    { "path": "../../packages/dormant" },
+    { "path": "../../packages/skills" }
   ]
 }

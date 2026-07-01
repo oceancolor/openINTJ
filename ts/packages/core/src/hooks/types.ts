@@ -145,6 +145,14 @@ export interface HookEventMap {
     taoIter: number;
     metrics: Record<string, number>;
   };
+  /**
+   * 技能命中：技能系统为本轮 query 选中并注入了 ≥1 个能力包（opt-in，OPENINTJ_SKILLS）。
+   * 消费方据此做可观测（命中 counter）或调试；未命中不发。
+   */
+  "event.SKILL_SELECTED": {
+    skills: { id: string; score: number }[];
+    query: string;
+  };
 
   // -------- Policy --------
   "policy.beforeCheck": { command: Command };
