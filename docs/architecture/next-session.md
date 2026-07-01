@@ -521,8 +521,9 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 
 > 起因：用户聚焦产品价值，要把「记忆」「检索」「分类」串成一个共享**使用反馈**的飞轮——
 > 每次 `agent.run()` 的 (query → outcome) 信号同时喂给会话级增量检索索引与可强化分类器，
-> 让两者一起「越用越好」。计划见 `.cursor/plans/memory_flywheel_*.plan.md`（A1 → A2 → CLF）。
-> 全部落地，未提交（无 tag，归 CHANGELOG `[Unreleased]`）。**三个 opt-in 开关默认全关 → 默认行为零变化。**
+> 让两者一起「越用越好」。设计记录（含流程图/分阶段/风险/验证口径）见
+> [`phase-flywheel-design.md`](./phase-flywheel-design.md)（由 Cursor Plan 归档）。
+> 已提交（`79ed788` 主体 + `d5caa63` route.topK；归 CHANGELOG `[Unreleased]`）。**三个 opt-in 开关默认全关 → 默认行为零变化。**
 
 ### 10.1（A1）fragment change-feed + 会话级增量 HybridRetriever
 
