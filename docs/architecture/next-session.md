@@ -18,6 +18,24 @@
 
 ---
 
+## 🎯 下次会话重点（用户指定 · 2026-07-08）
+
+回来后优先讨论/推进这三项（均偏设计，先定方向再动手）：
+
+1. **接入本地模型**：给 LLM 层加本地 provider（如 Ollama / llama.cpp / LM Studio，OpenAI 兼容端点）。
+   现状：`@openintj/embed-ollama` 已有本地**嵌入**；`@openintj/llm-ollama` 已有 client（见 `ts/packages/llm/ollama`），
+   需盘点其成熟度、接进三端 agent 的 provider 选择、以及与 TokenHub/云端的切换与降级策略。
+2. **如何体现 INTJ 特质**：把「INTJ」从项目名落到 agent 行为——如长期规划优先、结构化推理、
+   直言效率、对模糊需求主动澄清等。需先定义可观测/可评估的特质清单，再考虑落到 persona / system prompt /
+   规划器（ControlPlane）/ 分类器路由策略哪一层。
+3. **任务池 + 多线程 的设计与实现**：`@openintj/taskpool` 现有 `MemoryHybridIndex` 等，但「任务池」本体
+   （任务排队 / 调度 / 并发执行 / 优先级 / 依赖）尚未成型。结合已落地的 `@openintj/concurrency`
+   （forkJoin + Semaphore 已接自一致性）设计真正的多任务/多 agent 调度。参见 §11「方向一/二并发原语」。
+
+> 起手建议：先各花 10 分钟盘现状（上面的已有件），再逐项定 RFC/plan，避免直接写码。
+
+---
+
 ## 一、当前停在哪里
 
 - **Phase 3.1（真实持久化 e2e）已收官**，仓库标签：`v3.0.0-alpha.1`
