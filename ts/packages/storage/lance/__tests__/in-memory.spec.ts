@@ -107,6 +107,50 @@ describe("InMemoryVectorStore", () => {
     expect(all.map((r) => r.fragmentId).sort()).toEqual(["a", "b", "c"]);
   });
 
+  it("searchText 按 BM25 词法命中并排序", async () => {
+    const s = new InMemoryVectorStore();
+    await s.init();
+    await s.upsert([
+      mkRow("db", "postgres database index query optimization"),
+      mkRow("ck", "recipe pasta tomato garlic"),
+      mkRow("db2", "database transaction isolation"),
+    ]);
+    const out = await s.searchText("database index query", { topK: 10 });
+    expect(out.length).toBeGreaterThan(0);
+    // 词法上 "db" 命中 3 个 query 词 → 应排第一
+    expect(out[0]!.row.fragmentId).toBe("db");
+    // cooking 文档不含任何 query 词 → 不应出现
+    expect(out.some((r) => r.row.fragmentId === "ck")).toBe(false);
+  });
+
+  it("searchText 尊重 memoryTypes / taskTags 过滤", async () => {
+    const s = new InMemoryVectorStore();
+    await s.init();
+    await s.upsert([
+      mkRow("a", "database index", ["work"]),
+      mkRow("b", "database index", ["home"]),
+    ]);
+    const out = await s.searchText("database index", { topK: 10, taskTags: ["work"] });
+    expect(out).toHaveLength(1);
+    expect(out[0]!.row.fragmentId).toBe("a");
+  });
+
+  it("searchText 空查询 / 无命中返回空", async () => {
+    const s = new InMemoryVectorStore();
+    await s.init();
+    await s.upsert([mkRow("a", "database index")]);
+    expect(await s.searchText("", { topK: 5 })).toEqual([]);
+    expect(await s.searchText("astronomy telescope", { topK: 5 })).toEqual([]);
+  });
+
+  it("supportsFts=true 且 ensureFtsIndex 幂等 no-op", async () => {
+    const s = new InMemoryVectorStore();
+    await s.init();
+    expect(s.supportsFts).toBe(true);
+    await s.ensureFtsIndex();
+    await s.ensureFtsIndex();
+  });
+
   it("rejects dimension mismatch", async () => {
     const s = new InMemoryVectorStore();
     await s.init();

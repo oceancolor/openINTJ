@@ -51,4 +51,22 @@ export interface VectorStore {
   scanAll(): Promise<VectorRow[]>;
   count(): Promise<number>;
   close(): Promise<void>;
+
+  // ---------- 全文检索（FTS，roadmap #10；可选能力） ----------
+  /**
+   * 是否支持原生全文检索（`searchText`）。
+   * 大规模 fragment 时用它替代内存 BM25 全量扫描（见 `hybridVectorSearch`）。
+   */
+  readonly supportsFts?: boolean;
+  /**
+   * 在 `content` 列上确保建立 FTS 索引（幂等）。不支持时应静默 no-op（并让
+   * `supportsFts` 反映实际能力），使调用方可安全降级为纯向量检索。
+   */
+  ensureFtsIndex?(): Promise<void>;
+  /**
+   * 原生全文检索（BM25 排序）。`score` 越大越相关（BM25 分或实现自定）。
+   * 与 `search` 相同的过滤语义（memoryType / taskTags / minImportance）。
+   * 不支持 / 未建索引时返回空数组，交由 `hybridVectorSearch` 降级。
+   */
+  searchText?(query: string, opts: VectorSearchOpts): Promise<VectorSearchResult[]>;
 }

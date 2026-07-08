@@ -7,7 +7,7 @@
  *  - 全异步：兼容 sync（simple）与 async（xenova/ollama）embedder；维度自动探测。
  *  - 纯函数式产出 {@link BenchmarkResult}，调用方决定打印 / 断言 / 对比。
  */
-import type { EmbeddingProvider } from "@openintj/core";
+import { type EmbeddingProvider, cosineSimilarity } from "@openintj/core";
 import { MemoryRetriever } from "../retriever.js";
 import { MemoryStore } from "../store.js";
 import { type EvalCase, type EvalSummary, evaluateRanker } from "./retrieval-metrics.js";
@@ -94,6 +94,48 @@ export const benchmarkRetrieval = async (
 
   const summary = evaluateRanker(cases, (query) => rankingByQuery.get(query) ?? [], k);
   return { embedder: embedder.name, dimension: embeddingDim, summary };
+};
+
+/**
+ * 纯向量语义检索基准：**只**用 embedder 的 cosine 相似度对语料排序，隔离掉
+ * MemoryRetriever 的关键词重叠 / 时间衰减等混杂因子。
+ *
+ * 这是「simple vs xenova vs ollama」真正想比的东西——纯语义召回能力：
+ *  - `SimpleEmbedder`（SHA-256 词袋哈希）无真正语义 → 只能靠 query 与 doc 的词哈希碰撞，
+ *    维度大小对其质量基本无影响。
+ *  - `xenova`/`ollama` 这类神经嵌入能捕捉同义/近义 → 预期在此基准上显著优于 simple。
+ */
+export const benchmarkEmbedderCosine = async (
+  embedder: EmbeddingProvider,
+  opts: { k?: number } = {},
+): Promise<BenchmarkResult> => {
+  const k = opts.k ?? 4;
+  const embed = async (text: string): Promise<number[]> =>
+    Promise.resolve(embedder.embed(text)).then((v) => [...v]);
+
+  const docVecs = new Map<string, number[]>();
+  for (const doc of BENCHMARK_CORPUS) docVecs.set(doc.id, await embed(doc.text));
+  const dimension = docVecs.get(BENCHMARK_CORPUS[0]!.id)?.length ?? 0;
+
+  const rankingByQuery = new Map<string, string[]>();
+  for (const q of BENCHMARK_QUERIES) {
+    const qVec = await embed(q.query);
+    const ranked = BENCHMARK_CORPUS.map((doc) => ({
+      id: doc.id,
+      score: cosineSimilarity(qVec, docVecs.get(doc.id) as number[]),
+    }))
+      .sort((a, b) => b.score - a.score)
+      .map((r) => r.id);
+    rankingByQuery.set(q.query, ranked);
+  }
+
+  const cases: EvalCase[] = BENCHMARK_QUERIES.map((q) => {
+    const relevant = new Map<string, number>();
+    for (const doc of BENCHMARK_CORPUS) if (doc.topic === q.topic) relevant.set(doc.id, 1);
+    return { query: q.query, relevant };
+  });
+  const summary = evaluateRanker(cases, (query) => rankingByQuery.get(query) ?? [], k);
+  return { embedder: embedder.name, dimension, summary };
 };
 
 /** 把 {@link BenchmarkResult} 格式化成单行评分表（CI 日志 / 对比用）。 */

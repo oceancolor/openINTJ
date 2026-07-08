@@ -155,6 +155,49 @@ describe("retrieveHybrid (direct API)", () => {
     expect(hits[0]!.components.rrf).toBeDefined();
     expect(typeof hits[0]!.components.rrf).toBe("number");
   });
+
+  // ---------- #10：LanceDB 原生 FTS 路径（mock 模式下由 InMemoryVectorStore 的 FTS 覆盖） ----------
+
+  it("useLanceFts=true 走 store FTS + 向量 RRF 融合，命中精确关键词", async () => {
+    agent = await assembleServerAgent({ llmProvider: "mock" });
+    await seed(agent);
+    const hits = await retrieveHybrid(agent, "pytorch tensorflow", {
+      topK: 5,
+      useLanceFts: true,
+    });
+    expect(hits.length).toBeGreaterThan(0);
+    // "pytorch tensorflow" 是首条 ML doc 独有词 → FTS 路应把它召回并靠前
+    expect(hits.some((h) => h.doc.text.includes("pytorch tensorflow"))).toBe(true);
+    // RRF 分记进 components.rrf
+    expect(typeof hits[0]!.components.rrf).toBe("number");
+  });
+
+  it("useLanceFts=true 尊重 taskTags 过滤", async () => {
+    agent = await assembleServerAgent({ llmProvider: "mock" });
+    await seed(agent);
+    const hits = await retrieveHybrid(agent, "italian pasta", {
+      topK: 10,
+      useLanceFts: true,
+      taskTags: ["food"],
+    });
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.every((h) => h.doc.metadata.taskTags.includes("food"))).toBe(true);
+  });
+
+  it("OPENINTJ_LANCE_FTS=1 env 触发 FTS 路径", async () => {
+    const prev = process.env["OPENINTJ_LANCE_FTS"];
+    process.env["OPENINTJ_LANCE_FTS"] = "1";
+    try {
+      agent = await assembleServerAgent({ llmProvider: "mock" });
+      await seed(agent);
+      const hits = await retrieveHybrid(agent, "machine learning", { topK: 5 });
+      expect(hits.length).toBeGreaterThan(0);
+      expect(typeof hits[0]!.components.rrf).toBe("number");
+    } finally {
+      if (prev === undefined) delete process.env["OPENINTJ_LANCE_FTS"];
+      else process.env["OPENINTJ_LANCE_FTS"] = prev;
+    }
+  });
 });
 
 describe("/api/memory mode switch", () => {

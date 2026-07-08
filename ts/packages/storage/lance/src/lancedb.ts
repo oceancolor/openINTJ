@@ -17,16 +17,21 @@ export const LanceDBStoreConfigSchema = z.object({
 });
 export type LanceDBStoreConfig = z.infer<typeof LanceDBStoreConfigSchema>;
 
+interface LanceQueryBuilder {
+  limit(n: number): {
+    where(filter: string): { toArray(): Promise<unknown[]> };
+    toArray(): Promise<unknown[]>;
+  };
+}
+
 interface LanceTable {
   add(rows: VectorRow[]): Promise<void>;
   delete(predicate: string): Promise<void>;
   countRows(): Promise<number>;
-  search(vector: readonly number[]): {
-    limit(n: number): {
-      where(filter: string): { toArray(): Promise<unknown[]> };
-      toArray(): Promise<unknown[]>;
-    };
-  };
+  /** 向量检索：传 number[]。FTS 检索：传 string + queryType="fts"（LanceDB 支持）。 */
+  search(query: readonly number[] | string, queryType?: string): LanceQueryBuilder;
+  /** 建索引（含 FTS）；旧版可能没有。 */
+  createIndex?(column: string, opts?: unknown): Promise<void>;
   toArrow?: () => Promise<{ toArray(): unknown[] }>;
   query?: () => { toArray(): Promise<unknown[]> };
 }
@@ -38,8 +43,14 @@ interface LanceDB {
   tableNames(): Promise<string[]>;
 }
 
+interface LanceIndexFactory {
+  fts(opts?: unknown): unknown;
+}
+
 interface LanceModule {
   connect(uri: string): Promise<LanceDB>;
+  /** 索引工厂（含 `Index.fts()`）；旧版可能没有。 */
+  Index?: LanceIndexFactory;
 }
 
 interface ArrowField {
@@ -103,7 +114,10 @@ export class LanceDBVectorStore implements VectorStore {
   readonly config: LanceDBStoreConfig;
   private db?: LanceDB;
   private table?: LanceTable;
+  private lanceModule?: LanceModule;
   private _dimension: number;
+  /** FTS 能力探测结果：undefined=未探测，true/false=已知。 */
+  private _supportsFts?: boolean;
 
   constructor(config: LanceDBStoreConfig) {
     this.config = LanceDBStoreConfigSchema.parse(config);
@@ -115,6 +129,11 @@ export class LanceDBVectorStore implements VectorStore {
     return this._dimension;
   }
 
+  /** FTS 是否可用（未探测时按「可能支持」返回 true，交由 ensureFtsIndex 落定）。 */
+  get supportsFts(): boolean {
+    return this._supportsFts !== false;
+  }
+
   async init(): Promise<void> {
     // 通过动态字符串规避 TS 静态解析（peer dep 可能未安装）
     const moduleName = "@lancedb/lancedb";
@@ -123,6 +142,7 @@ export class LanceDBVectorStore implements VectorStore {
         `LanceDBVectorStore: failed to load @lancedb/lancedb (peer dep). Install it: pnpm add @lancedb/lancedb. Cause: ${(e as Error).message}`,
       );
     })) as unknown as LanceModule;
+    this.lanceModule = mod;
     this.db = await mod.connect(this.config.dataDir);
     const names = await this.db.tableNames();
     if (names.includes(this.config.tableName)) {
@@ -213,23 +233,35 @@ export class LanceDBVectorStore implements VectorStore {
     } else {
       raw = await q.toArray();
     }
+    return this.toResults(raw, "vector", opts.taskTags);
+  }
 
+  /**
+   * 把 LanceDB 返回的原始行解析为 VectorSearchResult。
+   * - vector 模式：score = 1 - `_distance`（cosine 距离越小越相关）。
+   * - fts 模式：score = `_score`（BM25 相关分越大越相关）。
+   */
+  private toResults(
+    raw: unknown[],
+    mode: "vector" | "fts",
+    taskTags?: readonly string[],
+  ): VectorSearchResult[] {
     const out: VectorSearchResult[] = [];
-    const tagSet = opts.taskTags ? new Set(opts.taskTags) : null;
+    const tagSet = taskTags ? new Set(taskTags) : null;
     for (const item of raw) {
-      const obj = item as Record<string, unknown> & { _distance?: number };
+      const obj = item as Record<string, unknown> & { _distance?: number; _score?: number };
       try {
         // LanceDB 返回的 embedding 可能是 TypedArray / Vector / List 子结构。
         // taskTags 可能是 Arrow Vector，需要转回普通数组。
         const embedding = normalizeEmbedding(obj["embedding"]);
-        const taskTags = normalizeStringArray(obj["taskTags"]);
+        const taskTagsArr = normalizeStringArray(obj["taskTags"]);
         const row = VectorRowSchema.parse({
           fragmentId: String(obj["fragmentId"] ?? ""),
           content: String(obj["content"] ?? ""),
           embedding,
           memoryType: obj["memoryType"] as VectorRow["memoryType"],
           importance: Number(obj["importance"] ?? 0),
-          taskTags,
+          taskTags: taskTagsArr,
           contentHash: String(obj["contentHash"] ?? ""),
           timestamp: Number(obj["timestamp"] ?? 0),
           accessCount: Number(obj["accessCount"] ?? 0),
@@ -238,8 +270,13 @@ export class LanceDBVectorStore implements VectorStore {
           summariesJson: typeof obj["summariesJson"] === "string" ? obj["summariesJson"] : "{}",
         });
         if (tagSet && !row.taskTags.some((t) => tagSet.has(t))) continue;
-        const distance = typeof obj._distance === "number" ? obj._distance : 0;
-        out.push({ row, distance, score: 1 - distance });
+        if (mode === "fts") {
+          const score = typeof obj._score === "number" ? obj._score : 0;
+          out.push({ row, distance: 0, score });
+        } else {
+          const distance = typeof obj._distance === "number" ? obj._distance : 0;
+          out.push({ row, distance, score: 1 - distance });
+        }
       } catch (e) {
         if (process.env["OPENINTJ_LANCE_DEBUG"] === "1") {
           console.warn(
@@ -252,6 +289,66 @@ export class LanceDBVectorStore implements VectorStore {
       }
     }
     return out;
+  }
+
+  /**
+   * 在 `content` 列上确保建立原生 FTS 索引（幂等）。
+   * 旧版 LanceDB 无 `createIndex` / `Index.fts` 时静默降级（`supportsFts` 置 false）。
+   */
+  async ensureFtsIndex(): Promise<void> {
+    if (this._supportsFts !== undefined) return;
+    if (!this.table) throw new Error("LanceDBVectorStore not initialized");
+    const idxFactory = this.lanceModule?.Index;
+    if (
+      !idxFactory ||
+      typeof idxFactory.fts !== "function" ||
+      typeof this.table.createIndex !== "function"
+    ) {
+      this._supportsFts = false;
+      return;
+    }
+    try {
+      await this.table.createIndex("content", { config: idxFactory.fts() });
+      this._supportsFts = true;
+    } catch (e) {
+      const msg = (e as Error).message ?? "";
+      // 索引已存在视为可用；其它错误（空表 / 版本不支持）降级为纯向量检索。
+      if (/exist/i.test(msg)) {
+        this._supportsFts = true;
+      } else {
+        this._supportsFts = false;
+        if (process.env["OPENINTJ_LANCE_DEBUG"] === "1") {
+          console.warn("[LanceDBVectorStore] FTS index unavailable, degrade to vector-only:", msg);
+        }
+      }
+    }
+  }
+
+  async searchText(query: string, opts: VectorSearchOpts): Promise<VectorSearchResult[]> {
+    if (!this.table) throw new Error("LanceDBVectorStore not initialized");
+    if (this._supportsFts === undefined) await this.ensureFtsIndex();
+    if (this._supportsFts === false) return [];
+    const filters: string[] = [];
+    if (opts.memoryTypes && opts.memoryTypes.length > 0) {
+      const list = opts.memoryTypes.map((m) => `'${m}'`).join(",");
+      filters.push(`"memoryType" IN (${list})`);
+    }
+    if (opts.minImportance !== undefined) {
+      filters.push(`importance >= ${opts.minImportance}`);
+    }
+    try {
+      const q = this.table.search(query, "fts").limit(opts.topK);
+      const raw =
+        filters.length > 0 ? await q.where(filters.join(" AND ")).toArray() : await q.toArray();
+      return this.toResults(raw, "fts", opts.taskTags);
+    } catch (e) {
+      // 查询期失败（如索引未就绪）→ 记一次并降级，避免反复抛错。
+      this._supportsFts = false;
+      if (process.env["OPENINTJ_LANCE_DEBUG"] === "1") {
+        console.warn("[LanceDBVectorStore] FTS query failed, degrade:", (e as Error).message);
+      }
+      return [];
+    }
   }
 
   async scanAll(): Promise<VectorRow[]> {
