@@ -1,8 +1,9 @@
 import { TaskType } from "@openintj/core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type CandidateSkillDraft,
   SkillLearningRuntime,
+  resolveSkillWeightHalfLifeSec,
   skillOutcomeSignal,
 } from "../src/learning-runtime.js";
 import { InMemorySkillStore } from "../src/store.js";
@@ -13,6 +14,30 @@ describe("skillOutcomeSignal", () => {
     expect(skillOutcomeSignal("failed")).toBe(-0.5);
     expect(skillOutcomeSignal("timeout")).toBe(-0.5);
     expect(skillOutcomeSignal("max_iterations")).toBeCloseTo(0.2);
+  });
+});
+
+describe("resolveSkillWeightHalfLifeSec", () => {
+  afterEach(() => {
+    delete process.env["OPENINTJ_SKILL_WEIGHT_HALFLIFE_SEC"];
+  });
+  it("默认（无 opts / 无 env）→ undefined（不衰减）", () => {
+    expect(resolveSkillWeightHalfLifeSec()).toBeUndefined();
+  });
+  it("opts.weightHalfLifeSec 透传（>0）", () => {
+    expect(resolveSkillWeightHalfLifeSec({ weightHalfLifeSec: 3600 })).toBe(3600);
+  });
+  it("非正数视为未设", () => {
+    expect(resolveSkillWeightHalfLifeSec({ weightHalfLifeSec: 0 })).toBeUndefined();
+    expect(resolveSkillWeightHalfLifeSec({ weightHalfLifeSec: -5 })).toBeUndefined();
+  });
+  it("从 env 读取", () => {
+    process.env["OPENINTJ_SKILL_WEIGHT_HALFLIFE_SEC"] = "7200";
+    expect(resolveSkillWeightHalfLifeSec()).toBe(7200);
+  });
+  it("opts 优先 env", () => {
+    process.env["OPENINTJ_SKILL_WEIGHT_HALFLIFE_SEC"] = "7200";
+    expect(resolveSkillWeightHalfLifeSec({ weightHalfLifeSec: 100 })).toBe(100);
   });
 });
 
@@ -56,6 +81,46 @@ describe("SkillLearningRuntime · 加权", () => {
     const rt = new SkillLearningRuntime();
     rt.recordOutcome("never selected", undefined, "completed");
     expect(rt.weightFor("s")).toBe(0);
+  });
+});
+
+describe("SkillLearningRuntime · 权重衰减（半衰期）", () => {
+  it("不设半衰期 → 不衰减（历史行为）", () => {
+    let now = 1_000_000_000;
+    const rt = new SkillLearningRuntime({ clock: () => now });
+    rt.noteSelected("q", undefined, ["s"]);
+    rt.recordOutcome("q", undefined, "completed");
+    expect(rt.weightFor("s")).toBe(1);
+    now += 3600 * 1000 * 24 * 30; // 30 天后
+    expect(rt.weightFor("s")).toBe(1);
+  });
+
+  it("weightFor 读时按半衰期指数衰减", () => {
+    let now = 1_000_000_000;
+    const rt = new SkillLearningRuntime({ clock: () => now, weightHalfLifeSec: 100 });
+    rt.noteSelected("q", undefined, ["s"]);
+    rt.recordOutcome("q", undefined, "completed"); // weight=1 @ now
+    expect(rt.weightFor("s")).toBe(1);
+    now += 100 * 1000; // 一个半衰期后 → 减半
+    expect(rt.weightFor("s")).toBeCloseTo(0.5, 6);
+    now += 100 * 1000; // 再一个半衰期 → 1/4
+    expect(rt.weightFor("s")).toBeCloseTo(0.25, 6);
+  });
+
+  it("reinforce 累加前先把旧权重衰减到当下（陈旧高权重不永久累积）", () => {
+    let now = 1_000_000_000;
+    const rt = new SkillLearningRuntime({ clock: () => now, weightHalfLifeSec: 100 });
+    rt.noteSelected("q", undefined, ["s"]);
+    rt.recordOutcome("q", undefined, "completed"); // weight=1
+    now += 100 * 1000; // 半衰期后旧值应视作 0.5
+    rt.noteSelected("q", undefined, ["s"]);
+    rt.recordOutcome("q", undefined, "completed"); // 0.5 + 1 = 1.5
+    expect(rt.weightFor("s")).toBeCloseTo(1.5, 6);
+  });
+
+  it("weight=0 时衰减为 no-op", () => {
+    const rt = new SkillLearningRuntime({ clock: () => 1_000_000, weightHalfLifeSec: 100 });
+    expect(rt.weightFor("missing")).toBe(0);
   });
 });
 

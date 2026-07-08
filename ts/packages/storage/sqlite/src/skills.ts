@@ -25,6 +25,7 @@ const SkillSchema = z.object({
   taskTypes: z.array(z.string()).default([]),
   priority: z.number().default(0),
   version: z.string().default("0.0.0"),
+  tools: z.array(z.string()).default([]),
   body: z.string(),
   source: z.string(),
 });

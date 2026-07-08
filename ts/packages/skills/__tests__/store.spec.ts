@@ -10,6 +10,7 @@ const mkSkill = (id: string): Skill => ({
   taskTypes: [],
   priority: 0,
   version: "1.0.0",
+  tools: [],
   body: "body",
   source: "learned:db",
 });

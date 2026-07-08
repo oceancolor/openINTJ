@@ -1,7 +1,12 @@
 import type { EmbeddingProvider, HookBus, TaskTypeType } from "@openintj/core";
 import { FsSkillSource, builtinSkillsDir, resolveSkillDirs } from "./fs-source.js";
 import { SkillRegistry } from "./registry.js";
-import { SkillSelector, type SkillSelectorOpts, renderSkillPrompt } from "./selector.js";
+import {
+  SkillSelector,
+  type SkillSelectorOpts,
+  renderSkillPrompt,
+  skillToolAllowlist,
+} from "./selector.js";
 import type { SkillSource } from "./types.js";
 
 export interface SkillContext {
@@ -32,8 +37,16 @@ export interface AssembleSkillContextOpts {
   selector?: Omit<SkillSelectorOpts, "registry" | "embedder" | "weightFor">;
   /** 强化权重供给（Phase 2 自学习）：给选择器做有界偏置，历史越用越准。 */
   weightFor?: (id: string) => number;
-  /** 命中回调（Phase 2 自学习）：render 命中后回传 (query, taskType, 命中技能 id)。 */
-  onSelected?: (query: string, taskType: TaskTypeType | undefined, ids: string[]) => void;
+  /**
+   * 命中回调（Phase 2 自学习）：render 命中后回传 (query, taskType, 命中技能 id, 工具子集并集)。
+   * `tools` 为命中技能声明的工具子集去重并集（可空）——装配方可据此做工具面收窄。
+   */
+  onSelected?: (
+    query: string,
+    taskType: TaskTypeType | undefined,
+    ids: string[],
+    tools: string[],
+  ) => void;
   /** 记忆化缓存上限，超过清空（防长会话无界增长）。默认 128。 */
   memoLimit?: number;
 }
@@ -91,7 +104,7 @@ export async function assembleSkillContext(
         );
         if (selected.length === 0) return "";
         const ids = selected.map((s) => s.skill.id);
-        opts.onSelected?.(query, renderOpts.taskType, ids);
+        opts.onSelected?.(query, renderOpts.taskType, ids, skillToolAllowlist(selected));
         if (opts.hooks) {
           await opts.hooks.emit(
             "event.SKILL_SELECTED",

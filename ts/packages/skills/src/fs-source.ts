@@ -60,6 +60,9 @@ const parseSkillFile = (raw: string, filePath: string): Skill | undefined => {
     taskTypes,
     priority,
     version: asString(data["version"], "0.0.0").trim() || "0.0.0",
+    tools: asStringArray(data["tools"])
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
     body,
     source: filePath,
   };

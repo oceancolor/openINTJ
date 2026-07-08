@@ -4,7 +4,7 @@ import type { Skill, SkillProposal, SkillWeight } from "@openintj/skills";
  * 走 `:memory:`（不触盘）；better-sqlite3 peer 未装则整段 skip。
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SqliteSkillStore, createSqliteSkillStore } from "../src/skills.js";
+import { type SqliteSkillStore, createSqliteSkillStore } from "../src/skills.js";
 
 const HAS_PEER = await (async () => {
   try {
@@ -25,6 +25,7 @@ const mkSkill = (id: string): Skill => ({
   taskTypes: [],
   priority: 1,
   version: "1.0.0",
+  tools: [],
   body: `body ${id}`,
   source: "learned:db",
 });
@@ -62,6 +63,16 @@ describeIfPeer("SqliteSkillStore (:memory:)", () => {
     expect(snap.proposals).toHaveLength(1);
     expect(snap.proposals[0]!.candidate.id).toBe("cand-p1");
     expect(snap.weights).toEqual([{ skillId: "a", weight: 2.5, lastUsed: 42 }]);
+  });
+
+  it("tools 工具子集随 JSON 往返；缺 tools 的旧行解析为 []", async () => {
+    store.upsertApprovedSkill({ ...mkSkill("t"), tools: ["readFile", "search"] });
+    const snap = await store.loadAll();
+    expect(snap.approvedSkills[0]!.tools).toEqual(["readFile", "search"]);
+    // 缺字段的旧数据（模拟历史 JSON）→ 默认 []（schema default 容错）
+    store.upsertApprovedSkill(mkSkill("nt"));
+    const snap2 = await store.loadAll();
+    expect(snap2.approvedSkills.find((s) => s.id === "nt")!.tools).toEqual([]);
   });
 
   it("upsert 覆盖同 id / proposal 状态迁移", async () => {

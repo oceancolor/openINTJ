@@ -15,6 +15,20 @@ export const skillOutcomeSignal = (status: string): number => {
   return 0.2;
 };
 
+/**
+ * 解析权重半衰期（秒）：`opts` > env `OPENINTJ_SKILL_WEIGHT_HALFLIFE_SEC` > 未设（不衰减）。
+ * 返回 undefined 表示不启用衰减。供三端 agent 装配 `SkillLearningRuntime` 时复用。
+ */
+export const resolveSkillWeightHalfLifeSec = (opts?: {
+  weightHalfLifeSec?: number;
+}): number | undefined => {
+  if (opts?.weightHalfLifeSec !== undefined && opts.weightHalfLifeSec > 0) {
+    return opts.weightHalfLifeSec;
+  }
+  const env = Number(process.env["OPENINTJ_SKILL_WEIGHT_HALFLIFE_SEC"] ?? "");
+  return Number.isFinite(env) && env > 0 ? env : undefined;
+};
+
 /** 一次成功 run 的精简（脱敏后）轨迹，进 buffer 供蒸馏。 */
 export interface TrajectorySample {
   query: string;
@@ -32,6 +46,8 @@ export interface CandidateSkillDraft {
   description: string;
   triggers?: string[];
   taskTypes?: TaskTypeType[];
+  /** 该技能建议绑定的工具子集（省略则空）。 */
+  tools?: string[];
   body: string;
 }
 
@@ -52,6 +68,12 @@ export interface SkillLearningRuntimeOpts {
   clock?: () => number;
   /** 原始权重有界区间（防溢出；选择器另做偏置封顶）。默认 min -2 / max 12。 */
   weightClamp?: { min?: number; max?: number };
+  /**
+   * 权重半衰期（秒）：设 >0 时启用**读时指数衰减**——距 `lastUsed` 每过一个半衰期，累计权重朝 0 衰减一半
+   * （`w * 0.5^(age/halfLife)`）。既作用于 `weightFor`（选择器偏置随冷却自然回落），也在 `reinforce`
+   * 累加前先把旧值衰减到当下（避免陈旧高权重长期霸榜）。不设 / <=0 → 不衰减（历史行为）。
+   */
+  weightHalfLifeSec?: number;
   /** 可选 LLM 蒸馏器；不传走启发式。 */
   llmDistill?: LlmSkillDistiller;
   /** 启发式聚类的最小样本数（低于不产候选）。默认 3。 */
@@ -163,6 +185,7 @@ export class SkillLearningRuntime {
   private readonly clock: () => number;
   private readonly wMin: number;
   private readonly wMax: number;
+  private readonly halfLifeSec?: number;
   private readonly llmDistill?: LlmSkillDistiller;
   private readonly minSamples: number;
   private readonly maxBuffer: number;
@@ -185,6 +208,9 @@ export class SkillLearningRuntime {
     this.clock = opts.clock ?? (() => Date.now());
     this.wMin = opts.weightClamp?.min ?? -2;
     this.wMax = opts.weightClamp?.max ?? 12;
+    if (opts.weightHalfLifeSec !== undefined && opts.weightHalfLifeSec > 0) {
+      this.halfLifeSec = opts.weightHalfLifeSec;
+    }
     if (opts.llmDistill) this.llmDistill = opts.llmDistill;
     this.minSamples = Math.max(1, opts.minSamplesToDistill ?? 3);
     this.maxBuffer = Math.max(1, opts.maxBufferedTrajectories ?? 500);
@@ -221,15 +247,32 @@ export class SkillLearningRuntime {
     return [...this.approved.values()];
   }
 
-  /** 某技能的当前原始权重（供选择器做有界偏置）。 */
+  private nowSec(): number {
+    return Math.floor(this.clock() / 1000);
+  }
+
+  /** 把权重按距 `lastUsedSec` 的时长做指数衰减到 `nowSec`（未启用半衰期时原样返回）。 */
+  private decayed(weight: number, lastUsedSec: number, nowSec: number): number {
+    if (this.halfLifeSec === undefined || weight === 0) return weight;
+    const ageSec = Math.max(0, nowSec - lastUsedSec);
+    if (ageSec === 0) return weight;
+    return weight * 0.5 ** (ageSec / this.halfLifeSec);
+  }
+
+  /** 某技能的当前有效权重（供选择器做有界偏置）；启用半衰期时返回读时衰减后的值。 */
   weightFor(id: string): number {
-    return this.weights.get(id)?.weight ?? 0;
+    const w = this.weights.get(id);
+    if (!w) return 0;
+    return this.decayed(w.weight, w.lastUsed, this.nowSec());
   }
 
   private reinforce(id: string, signal: number): void {
-    const prev = this.weights.get(id)?.weight ?? 0;
+    const now = this.nowSec();
+    const prevRec = this.weights.get(id);
+    // 累加前先把旧权重衰减到当下：陈旧的高权重不会永久累积。
+    const prev = prevRec ? this.decayed(prevRec.weight, prevRec.lastUsed, now) : 0;
     const weight = Math.max(this.wMin, Math.min(this.wMax, prev + signal));
-    const w: SkillWeight = { skillId: id, weight, lastUsed: Math.floor(this.clock() / 1000) };
+    const w: SkillWeight = { skillId: id, weight, lastUsed: now };
     this.weights.set(id, w);
     try {
       this.store.saveWeight(w);
@@ -282,6 +325,7 @@ export class SkillLearningRuntime {
       taskTypes: draft.taskTypes ?? [],
       priority: 0,
       version: "1.0.0",
+      tools: draft.tools ?? [],
       body: draft.body,
       source: "learned:db",
     };
@@ -324,6 +368,7 @@ export class SkillLearningRuntime {
           : `Recurring ${k} workflow (${group.length} successful runs).`,
         triggers: keywords.slice(0, 4),
         ...(taskType ? { taskTypes: [taskType] } : {}),
+        ...(tools.length ? { tools } : {}),
         body,
       });
     }

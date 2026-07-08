@@ -1,7 +1,7 @@
 import type { EmbeddingProvider } from "@openintj/core";
 import { describe, expect, it } from "vitest";
 import { SkillRegistry } from "../src/registry.js";
-import { SkillSelector, renderSkillPrompt } from "../src/selector.js";
+import { SkillSelector, renderSkillPrompt, skillToolAllowlist } from "../src/selector.js";
 import type { Skill, SkillSource } from "../src/types.js";
 
 // 确定性 bag-of-words embedder：让匹配可断言（SimpleEmbedder 是哈希向量，语义不可控）。
@@ -25,6 +25,7 @@ const mkSkill = (over: Partial<Skill> & Pick<Skill, "id">): Skill => ({
   taskTypes: [],
   priority: 0,
   version: "1.0.0",
+  tools: [],
   body: "body",
   source: "test",
   ...over,
@@ -176,5 +177,43 @@ describe("renderSkillPrompt", () => {
     expect(block).toContain("[技能]");
     expect(block).toContain("## Code Review");
     expect(block).toContain("审查步骤");
+  });
+
+  it("声明了 tools 的技能渲染出「优先使用工具」软绑定行", () => {
+    const block = renderSkillPrompt([
+      {
+        skill: mkSkill({
+          id: "cr",
+          name: "Code Review",
+          body: "审查",
+          tools: ["readFile", "search"],
+        }),
+        score: 0.9,
+      },
+    ]);
+    expect(block).toContain("建议优先使用工具：readFile, search");
+  });
+
+  it("未声明 tools 时不渲染软绑定行", () => {
+    const block = renderSkillPrompt([
+      { skill: mkSkill({ id: "cr", name: "Code Review", body: "审查" }), score: 0.9 },
+    ]);
+    expect(block).not.toContain("建议优先使用工具");
+  });
+});
+
+describe("skillToolAllowlist", () => {
+  it("命中技能工具子集并集：去重、保序", () => {
+    const allow = skillToolAllowlist([
+      { skill: mkSkill({ id: "a", tools: ["readFile", "search"] }), score: 0.9 },
+      { skill: mkSkill({ id: "b", tools: ["search", "writeFile"] }), score: 0.8 },
+      { skill: mkSkill({ id: "c" }), score: 0.7 },
+    ]);
+    expect(allow).toEqual(["readFile", "search", "writeFile"]);
+  });
+
+  it("无命中 / 均未声明 tools → 空数组", () => {
+    expect(skillToolAllowlist([])).toEqual([]);
+    expect(skillToolAllowlist([{ skill: mkSkill({ id: "a" }), score: 0.9 }])).toEqual([]);
   });
 });

@@ -25,6 +25,7 @@ const mkSkill = (id: string, description: string, source = "learned:db"): Skill 
   taskTypes: [],
   priority: 0,
   version: "1.0.0",
+  tools: [],
   body: "body",
   source,
 });
@@ -54,7 +55,9 @@ describe("DbSkillSource", () => {
 
   it("与 FsSkillSource 并列：后源（db）同 id 覆盖", async () => {
     const fs = new FakeFs([mkSkill("x", "code review", "fs")]);
-    const db = new DbSkillSource({ approvedSkills: () => [mkSkill("x", "db version", "learned:db")] });
+    const db = new DbSkillSource({
+      approvedSkills: () => [mkSkill("x", "db version", "learned:db")],
+    });
     const registry = new SkillRegistry({ sources: [fs, db], embedder: new BowEmbedder() });
     await registry.load();
     expect(registry.size).toBe(1);

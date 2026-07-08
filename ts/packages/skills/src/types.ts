@@ -24,6 +24,12 @@ export interface Skill {
   version: string;
   /** 命中后注入的指令正文（frontmatter 之后的 markdown 主体）。 */
   body: string;
+  /**
+   * 该技能建议/绑定的工具子集（工具名）。默认 []（不约束）。
+   * 文本协议下作为**软绑定**：命中时在技能块里提示「优先使用这些工具」，引导 agent 的 Action 选择；
+   * 装配方也可用 {@link import("./agent-helper.js").SkillContext} 暴露的并集做更硬的工具面收窄。
+   */
+  tools: string[];
   /** 溯源标识（文件路径 / "db" 等），便于调试与去重。 */
   source: string;
 }

@@ -6,6 +6,7 @@ triggers: [research, 调研, 搜一下, 查一下, 最新, latest, 联网, 搜�
 taskTypes: [analysis, general_chat]
 priority: 8
 version: 1.0.0
+tools: [search]
 ---
 你现在承担联网调研任务。目标是给出可信、可追溯的结论，而非单一来源的复述。
 

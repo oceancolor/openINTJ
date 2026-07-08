@@ -6,6 +6,7 @@ triggers: [bug, debug, 报错, 排查, 定位, 崩溃, error, 异常, 修复]
 taskTypes: [debugging, code_generation]
 priority: 9
 version: 1.0.0
+tools: [readFile, executeCommand, search]
 ---
 你现在承担调试任务。原则：先复现与定位，再最小化修改，避免盲改。
 

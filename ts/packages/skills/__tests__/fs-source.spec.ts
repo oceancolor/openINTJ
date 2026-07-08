@@ -67,6 +67,7 @@ describe("FsSkillSource", () => {
         "triggers: [review, pr]",
         "taskTypes: [code_generation, not_a_real_type]",
         "priority: 5",
+        "tools: [readFile, search]",
         "---",
         "审查步骤：读 diff → 找问题 → 给建议。",
       ].join("\n"),
@@ -93,7 +94,21 @@ describe("FsSkillSource", () => {
     expect(s.triggers).toEqual(["review", "pr"]);
     expect(s.taskTypes).toEqual(["code_generation"]);
     expect(s.priority).toBe(5);
+    expect(s.tools).toEqual(["readFile", "search"]);
     expect(s.body).toContain("审查步骤");
+  });
+
+  it("未声明 tools 的技能 tools 为空数组", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "openintj-skills-notools-"));
+    await mkdir(join(dir, "plain"), { recursive: true });
+    await writeFile(
+      join(dir, "plain", "SKILL.md"),
+      ["---", "description: 无工具技能", "---", "正文"].join("\n"),
+      "utf8",
+    );
+    const skills = await new FsSkillSource({ dirs: [dir] }).load();
+    expect(skills[0]?.tools).toEqual([]);
+    await rm(dir, { recursive: true, force: true });
   });
 
   it("目录不存在时返回空、不抛错", async () => {

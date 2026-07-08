@@ -6,6 +6,7 @@ triggers: [review, code review, 代码审查, 审查代码, pr, pull request, �
 taskTypes: [code_generation, analysis]
 priority: 10
 version: 1.0.0
+tools: [readFile, search]
 ---
 你现在承担代码审查任务。按以下顺序进行，并把结论组织成清单：
 

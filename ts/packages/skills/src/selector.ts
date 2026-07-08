@@ -120,6 +120,31 @@ export class SkillSelector {
  */
 export const renderSkillPrompt = (skills: readonly SelectedSkill[]): string => {
   if (skills.length === 0) return "";
-  const blocks = skills.map((s) => `## ${s.skill.name}\n${s.skill.body.trim()}`);
+  const blocks = skills.map((s) => {
+    const head = `## ${s.skill.name}`;
+    // 工具软绑定：文本协议下提示优先工具子集，引导 Action 选择。
+    const toolLine = s.skill.tools.length
+      ? `\n（建议优先使用工具：${s.skill.tools.join(", ")}）`
+      : "";
+    return `${head}${toolLine}\n${s.skill.body.trim()}`;
+  });
   return `[技能]（本轮命中的能力包，按需生效）\n${blocks.join("\n\n")}`;
+};
+
+/**
+ * 命中技能声明的工具子集并集（去重、保序）。装配方可用它做更硬的「工具面收窄」——
+ * 例如把 ToolHub 的可用工具与之取交集。空数组表示「本轮命中技能未约束工具」。
+ */
+export const skillToolAllowlist = (skills: readonly SelectedSkill[]): string[] => {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const s of skills) {
+    for (const t of s.skill.tools) {
+      if (!seen.has(t)) {
+        seen.add(t);
+        out.push(t);
+      }
+    }
+  }
+  return out;
 };
