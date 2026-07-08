@@ -204,7 +204,8 @@ export const buildApp = (agent: ServerAgent): Hono => {
       statusParam === "pending" ||
       statusParam === "approved" ||
       statusParam === "rejected" ||
-      statusParam === "applied"
+      statusParam === "applied" ||
+      statusParam === "revoked"
         ? statusParam
         : undefined;
     const list = agent.dormant!.listProposals(validStatus);
@@ -250,10 +251,24 @@ export const buildApp = (agent: ServerAgent): Hono => {
     });
   });
 
+  app.post("/api/dormant/proposals/:id/revoke", async (c) => {
+    const guard = requireDormant(c);
+    if (guard) return guard;
+    const id = c.req.param("id");
+    // 仅 applied 可撤销：从 PersonaConfig 删字段 + 持久化新快照（RFC-003 §3.6 #4 可回退）。
+    const out = agent.dormant!.revoke(id);
+    if (!out) return c.json({ error: "not_found_or_not_applied" }, 404);
+    return c.json({
+      proposalId: out.proposalId,
+      status: out.status,
+      decidedAt: out.decidedAt,
+    });
+  });
+
   app.get("/api/dormant/persona", async (c) => {
     const guard = requireDormant(c);
     if (guard) return guard;
-    return c.json(agent.dormant!.snapshot());
+    return c.json(agent.dormant!.getPersona());
   });
 
   // 技能自学习（Phase 2）：仅 enableSkillLearning=true 时可用；未启用统一 503。

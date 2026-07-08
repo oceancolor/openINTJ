@@ -6,3 +6,4 @@ export * from "./dormant-runtime.js";
 export * from "./persistence.js";
 export * from "./redaction.js";
 export * from "./ab-test.js";
+export * from "./worker-miner.js";

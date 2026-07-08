@@ -20,6 +20,7 @@ import {
   type TaoResult,
   type TaskTypeType,
 } from "@openintj/core";
+import { DormantRuntime, type DormantRuntimeOpts } from "@openintj/dormant";
 import { HunyuanClient, createHunyuanSearchTool } from "@openintj/llm-hunyuan";
 import { OllamaClient } from "@openintj/llm-ollama";
 import { ControlPlane } from "@openintj/plane-control";
@@ -36,6 +37,7 @@ import {
   DEFAULT_AGENT_SYSTEM_PROMPT,
   type SelfConsistencyStrategy,
   appendSourcesFooter,
+  resolvePersonaInjection,
   resolveSelfConsistency,
   resolveWorkspaceConfig,
   selectConsistentAnswer,
@@ -47,6 +49,7 @@ import {
   SkillLearningRuntime,
   assembleSkillContext,
   createLlmSkillDistiller,
+  resolveSkillWeightHalfLifeSec,
 } from "@openintj/skills";
 import { MemoryHybridIndex } from "@openintj/taskpool";
 
@@ -75,7 +78,11 @@ export interface AgentOptions {
    * samples>1 时每次 run 用 forkJoin 并行跑 N 个 tao.run，再按 strategy 选最终答案。
    * 默认关闭；env OPENINTJ_SELF_CONSISTENCY=N / OPENINTJ_SELF_CONSISTENCY_STRATEGY 也可启用。
    */
-  selfConsistency?: { samples: number; strategy?: SelfConsistencyStrategy };
+  selfConsistency?: {
+    samples: number;
+    strategy?: SelfConsistencyStrategy;
+    maxConcurrency?: number;
+  };
   /**
    * 前端可强化分类器：开启后每次 run 先分类 → 注入 taskType + 记忆 label，高置信简单类
    * 路由单次 LLM 降 token，收尾用 outcome 强化。默认关（env OPENINTJ_CLASSIFIER=1 也可开）。
@@ -92,6 +99,19 @@ export interface AgentOptions {
    * CLI 为内存态（InMemorySkillStore，不跨重启）。默认关（env OPENINTJ_SKILLS_LEARN=1 也可开）。
    */
   enableSkillLearning?: boolean;
+  /**
+   * RFC-003 方向 3：钝化记忆学习（默认关）。env OPENINTJ_DORMANT=1 也启用。
+   * CLI 为内存态（不挂持久化 adapter，不跨重启）：每轮 record 用户输入，
+   * 已批准 persona 每轮注入 system prompt（无需检索即生效，RFC-003 §3.6）。
+   */
+  enableDormant?: boolean;
+  /** DormantRuntime 配置（仅 enableDormant=true 时生效）。 */
+  dormantOpts?: DormantRuntimeOpts;
+  /**
+   * 是否把已批准的钝化记忆 persona 注入 system prompt（A/B 杠杆，仅 enableDormant 时有意义）。
+   * 默认开；env `OPENINTJ_PERSONA=0` 关闭 → 无 persona 基线组（RFC-003 §3.6 验收 #3）。
+   */
+  enablePersona?: boolean;
 }
 
 export interface AssembledAgent {
@@ -108,6 +128,8 @@ export interface AssembledAgent {
   classifier?: ReinforcingClassifier;
   /** 技能自学习运行时；仅 enableSkillLearning 时存在。 */
   skillLearning?: SkillLearningRuntime;
+  /** 钝化记忆运行时；仅 enableDormant 时存在（CLI 为内存态）。 */
+  dormant?: DormantRuntime;
   tao: TaoLoop;
   run(query: string): Promise<TaoResult>;
 }
@@ -204,6 +226,14 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
   });
   const baseSystemPrompt = opts.systemPrompt ?? DEFAULT_AGENT_SYSTEM_PROMPT;
 
+  // 钝化记忆（opt-in）：CLI 为内存态（无 adapter，不跨重启），无需 hydrate。
+  // 每轮 record 用户输入喂给挖掘；已批准 persona 每轮注入（受 personaEnabled A/B 杠杆控制）。
+  const enableDormant = opts.enableDormant ?? process.env["OPENINTJ_DORMANT"] === "1";
+  const dormant = enableDormant
+    ? new DormantRuntime({ eventIdPrefix: "cli", ...(opts.dormantOpts ?? {}) })
+    : undefined;
+  const personaEnabled = resolvePersonaInjection(opts);
+
   // 技能系统（opt-in）：OPENINTJ_SKILLS=1 时装配，复用 store embedder，命中才注入能力包全文。
   // assembleAgent 为同步工厂，这里持有 Promise，在（异步的）contextProvider 里 await（只解析一次）。
   // 自学习（Phase 2）：OPENINTJ_SKILLS_LEARN=1 隐含开启注入 + outcome 加权 + 蒸馏/审批闭环。
@@ -217,6 +247,9 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
     ? new SkillLearningRuntime({
         store: new InMemorySkillStore(),
         hooks,
+        ...(resolveSkillWeightHalfLifeSec()
+          ? { weightHalfLifeSec: resolveSkillWeightHalfLifeSec() as number }
+          : {}),
         llmDistill: createLlmSkillDistiller({
           generate: (prompt) => llm.chat([{ role: "user" as const, content: prompt }]),
         }),
@@ -250,8 +283,10 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
     react,
     availableTools: () => toolHub.list(),
     systemPrompt: baseSystemPrompt,
-    // 每轮：命中的技能包 + 从记忆检索的相关片段注入 system prompt。
+    // 每轮注入：①已批准的钝化记忆 persona（无需检索）②命中的技能包 ③检索到的 [记忆参考]。
+    // personaEnabled 是 A/B 杠杆：关闭即得到无 persona 基线（RFC-003 §3.6 #3）。
     contextProvider: async ({ query, history, taskType, topK, traceId }) => {
+      const persona = personaEnabled ? (dormant?.personaSystemPrompt() ?? "") : "";
       const skillContext = skillContextP ? await skillContextP : undefined;
       const skillBlock = skillContext
         ? await skillContext.render(query, {
@@ -259,11 +294,12 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
             ...(traceId ? { traceId } : {}),
           })
         : "";
+      const prefix = [persona, skillBlock].filter((s) => s.length > 0).join("\n\n");
       const snap = await contextEngine.build({
         query,
         history,
         taskType,
-        systemPrompt: skillBlock ? `${baseSystemPrompt}\n\n${skillBlock}` : baseSystemPrompt,
+        systemPrompt: prefix ? `${baseSystemPrompt}\n\n${prefix}` : baseSystemPrompt,
         topK: topK ?? 6,
         ...(traceId ? { traceId } : {}),
       });
@@ -297,8 +333,11 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
     hybridIndex,
     ...(classifier ? { classifier } : {}),
     ...(skillLearning ? { skillLearning } : {}),
+    ...(dormant ? { dormant } : {}),
     tao,
     async run(query: string) {
+      // 钝化记忆：本轮用户输入喂给被动捕获（脱敏后落库）→ 后续 mine() 挖掘长期模式。
+      if (dormant) dormant.record(query, "user", { stage: "run.input" });
       // 先跑（contextProvider 检索此前记忆），再记录本轮 → 避免检索命中当前输入本身。
       // 前端分类器：预分类 → taskType + 降 token 路由（高置信简单类走单次 LLM）。
       let cls: Awaited<ReturnType<ReinforcingClassifier["classify"]>> | undefined;
@@ -320,7 +359,14 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
         const { fulfilled } = await forkJoin(
           Array.from({ length: selfConsistency.samples }, (_, i) => i),
           (i) => tao.run(query, taoOpts(`${randomUUID()}-sc${i}`)),
-          { hooks, group: "self-consistency", minSuccess: 1 },
+          {
+            hooks,
+            group: "self-consistency",
+            minSuccess: 1,
+            ...(selfConsistency.maxConcurrency
+              ? { concurrency: selfConsistency.maxConcurrency }
+              : {}),
+          },
         );
         result = selectConsistentAnswer(fulfilled, selfConsistency.strategy) ?? fulfilled[0]!;
       } else {

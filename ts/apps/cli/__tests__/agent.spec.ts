@@ -114,4 +114,92 @@ describe("assembleAgent E2E (mock LLM)", () => {
     expect(s.mode).toBe("mock");
     expect(s.status).toBe("missing_api_key");
   });
+
+  // RFC-003 方向 3：钝化记忆 persona 注入（CLI 内存态）。
+  it("钝化记忆：批准的 persona 每轮注入 system prompt（无需检索，§3.6 #2）", async () => {
+    const agent = assembleAgent({
+      llmProvider: "mock",
+      maxTaoIterations: 1,
+      enableDormant: true,
+      // 模拟"已批准"人格（等价 approve 后落库/恢复），使注入路径可确定性断言。
+      dormantOpts: { initialPersona: { preferences: { drink: "偏好喝绿茶" } } },
+    });
+    expect(agent.dormant).toBeDefined();
+    // getPersona() 出口：返回当前已生效人格。
+    expect(agent.dormant!.getPersona().preferences["drink"]).toBe("偏好喝绿茶");
+
+    let sysPrompt = "";
+    agent.hooks.on("react.beforeThought", (ctx) => {
+      sysPrompt = (ctx.payload as { context: { systemPrompt: string } }).context.systemPrompt;
+    });
+    await agent.run("推荐点喝的");
+    expect(sysPrompt).toContain("[用户画像]");
+    expect(sysPrompt).toContain("偏好喝绿茶");
+  });
+
+  it("钝化记忆 A/B 杠杆：enablePersona=false 时不注入（无 persona 基线，§3.6 #3）", async () => {
+    const agent = assembleAgent({
+      llmProvider: "mock",
+      maxTaoIterations: 1,
+      enableDormant: true,
+      enablePersona: false,
+      dormantOpts: { initialPersona: { preferences: { drink: "偏好喝绿茶" } } },
+    });
+    let sysPrompt = "";
+    agent.hooks.on("react.beforeThought", (ctx) => {
+      sysPrompt = (ctx.payload as { context: { systemPrompt: string } }).context.systemPrompt;
+    });
+    await agent.run("推荐点喝的");
+    expect(sysPrompt).not.toContain("[用户画像]");
+    expect(sysPrompt).not.toContain("偏好喝绿茶");
+  });
+
+  it("钝化记忆：record→mine→approve 全链路写入 PersonaConfig 并注入", async () => {
+    const agent = assembleAgent({
+      llmProvider: "mock",
+      maxTaoIterations: 1,
+      enableDormant: true,
+      dormantOpts: {
+        minerOpts: {
+          ngramSize: 2,
+          minFrequency: 2,
+          minConfidence: 0.3,
+          // 注入式抽取跳过真实 LLM，给 ngram 打 preference 类别（否则默认 "other" 不建议）。
+          llmExtract: async (ngram) => ({
+            description: `用户偏好（mock）: ${ngram}`,
+            category: "preference",
+          }),
+        },
+      },
+    });
+    // run() 会把 query 喂给 dormant.record；再补几条把频次顶过 miner 阈值。
+    for (const t of [
+      "我喜欢喝绿茶",
+      "今天我喜欢喝绿茶",
+      "我喜欢喝绿茶啊",
+      "总是喜欢喝绿茶",
+      "晚饭后喜欢喝绿茶",
+      "其实我喜欢喝绿茶",
+      "你知道我喜欢喝绿茶",
+    ]) {
+      agent.dormant!.record(t, "user");
+    }
+    const { proposals } = await agent.dormant!.mine();
+    expect(proposals.length).toBeGreaterThan(0);
+    const approved = agent.dormant!.approve(proposals[0]!.proposalId);
+    expect(approved?.status).toBe("applied");
+    expect(agent.dormant!.getPersona().meta.version).toBe(1);
+    expect(agent.dormant!.personaSystemPrompt()).toContain("[用户画像]");
+  });
+
+  it("不启用 dormant 时 agent.dormant 为 undefined，且不注入 persona", async () => {
+    const agent = assembleAgent({ llmProvider: "mock", maxTaoIterations: 1 });
+    expect(agent.dormant).toBeUndefined();
+    let sysPrompt = "";
+    agent.hooks.on("react.beforeThought", (ctx) => {
+      sysPrompt = (ctx.payload as { context: { systemPrompt: string } }).context.systemPrompt;
+    });
+    await agent.run("你好");
+    expect(sysPrompt).not.toContain("[用户画像]");
+  });
 });

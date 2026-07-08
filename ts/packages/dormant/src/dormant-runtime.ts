@@ -9,6 +9,7 @@ import type {
   PassiveEvent,
   PersonaConfig,
 } from "./types.js";
+import { type OffThreadRunner, mineWithWorkerFallback } from "./worker-miner.js";
 
 /**
  * DormantRuntime —— Dormant Memory Learning 的三件套门面。
@@ -64,6 +65,13 @@ export interface DormantRuntimeOpts {
    * - 传 `null` 显式关闭脱敏（不推荐）。
    */
   redactor?: Redactor | null;
+  /**
+   * 可选：把 CPU 密集的 n-gram 挖掘下放到 worker 线程（RFC-004 §2 utility 蒸馏 worker）。
+   * - 仅当 miner **未配置 `llmExtract`** 时生效（函数无法跨 worker 边界）。
+   * - 任何失败自动回退到主线程内联挖掘（{@link mineWithWorkerFallback}）。
+   * - 不传 → 始终内联（零行为变化）。装配层通常传 `runMineInWorker`。
+   */
+  mineRunner?: OffThreadRunner;
 }
 
 export interface DormantMineResult {
@@ -85,6 +93,9 @@ export class DormantRuntime {
   private readonly autoPruneEveryNEvents?: number;
   private recordsSincePrune = 0;
   private readonly redactor: Redactor;
+  private readonly mineRunner?: OffThreadRunner;
+  /** 最近一次 mine 是否真的走了 worker（可观测 / 测试）；未配 mineRunner 恒 false。 */
+  lastMineUsedWorker = false;
 
   constructor(opts: DormantRuntimeOpts = {}) {
     this.passive = new PassiveStore(opts.maxPassiveEvents ?? 10_000);
@@ -103,6 +114,7 @@ export class DormantRuntime {
     if (everyN !== undefined && everyN > 0) this.autoPruneEveryNEvents = everyN;
     // redactor === null 显式关闭；undefined 用默认脱敏；否则用注入的。
     this.redactor = opts.redactor === null ? (t) => t : (opts.redactor ?? defaultRedactor);
+    if (opts.mineRunner) this.mineRunner = opts.mineRunner;
   }
 
   /**
@@ -155,7 +167,22 @@ export class DormantRuntime {
   /** 触发一次挖掘 + 提案生成。末尾按配置自动清理被动事件（防磁盘表无限增长）。 */
   async mine(): Promise<DormantMineResult> {
     const events = this.passive.exportAll();
-    const patterns = await this.miner.mine(events);
+    // 有 mineRunner 且未配 llmExtract → 把 CPU 密集的挖掘下放 worker（失败自动回退内联）。
+    // 带 llmExtract 时函数无法跨 worker 边界，必须内联跑（LLM 客户端在主线程）。
+    let patterns: DormantPattern[];
+    if (this.mineRunner && !this.miner.opts.llmExtract) {
+      const { ngramSize, minFrequency, minConfidence } = this.miner.opts;
+      const r = await mineWithWorkerFallback(
+        events,
+        { ngramSize, minFrequency, minConfidence },
+        { runner: this.mineRunner },
+      );
+      patterns = r.patterns;
+      this.lastMineUsedWorker = r.usedWorker;
+    } else {
+      patterns = await this.miner.mine(events);
+      this.lastMineUsedWorker = false;
+    }
     const proposals = this.internalization.proposeBatch(patterns.map((p) => ({ ...p })));
     for (const p of proposals) this.adapter?.upsertProposal(p);
     this.maybeAutoPrune();
@@ -230,6 +257,15 @@ export class DormantRuntime {
   }
 
   snapshot(): PersonaConfig {
+    return this.internalization.snapshot();
+  }
+
+  /**
+   * 当前已批准的用户画像（PersonaConfig）出口。语义等同 {@link snapshot}，
+   * 是给装配层/UI 读取「已生效人格」的规范入口名（RFC-003 §3.6 附录 A：
+   * "任意 agent 启动读取 PersonaConfig 并注入 systemPrompt"）。
+   */
+  getPersona(): PersonaConfig {
     return this.internalization.snapshot();
   }
 

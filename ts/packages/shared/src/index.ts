@@ -15,6 +15,7 @@ export * from "./env.js";
 export * from "./agent-prompt.js";
 export * from "./workspace-config.js";
 export * from "./self-consistency.js";
+export * from "./persona-config.js";
 export * from "./task-eval.js";
 export * from "./longrun-eval.js";
 export * from "./longrun-scenarios.js";

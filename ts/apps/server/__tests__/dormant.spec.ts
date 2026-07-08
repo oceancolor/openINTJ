@@ -149,6 +149,52 @@ describe("dormant memory learning (enabled)", () => {
     expect(r1.status).toBe(404);
   });
 
+  it("revoke 已 applied 的条目：从 persona 删字段 + version++ + 状态转 revoked（§3.6 #4）", async () => {
+    const app = buildApp(agent);
+    for (let i = 0; i < 5; i++) {
+      agent.dormant!.record("绿 茶 健 康", "user", { iter: i });
+    }
+    await app.request("/api/dormant/mine", { method: "POST" });
+    const listBody = (await (
+      await app.request("/api/dormant/proposals?status=pending")
+    ).json()) as { proposals: Array<{ proposalId: string }> };
+    const id = listBody.proposals[0]!.proposalId;
+
+    // approve → persona 有内容、version=1
+    await app.request(`/api/dormant/proposals/${id}/approve`, { method: "POST" });
+    const afterApprove = (await (await app.request("/api/dormant/persona")).json()) as {
+      preferences: Record<string, unknown>;
+      meta: { version: number };
+    };
+    expect(Object.keys(afterApprove.preferences).length).toBeGreaterThan(0);
+
+    // revoke → 200 + status=revoked
+    const revokeRes = await app.request(`/api/dormant/proposals/${id}/revoke`, { method: "POST" });
+    expect(revokeRes.status).toBe(200);
+    expect(((await revokeRes.json()) as { status: string }).status).toBe("revoked");
+
+    // persona 字段被删除、version 再 +1
+    const afterRevoke = (await (await app.request("/api/dormant/persona")).json()) as {
+      preferences: Record<string, unknown>;
+      meta: { version: number };
+    };
+    expect(Object.keys(afterRevoke.preferences).length).toBe(0);
+    expect(afterRevoke.meta.version).toBe(afterApprove.meta.version + 1);
+
+    // revoked 状态可被 list 过滤出来
+    const revokedList = (await (
+      await app.request("/api/dormant/proposals?status=revoked")
+    ).json()) as { proposals: Array<{ proposalId: string; status: string }> };
+    expect(revokedList.proposals.some((p) => p.proposalId === id)).toBe(true);
+  });
+
+  it("revoke 不存在 / 非 applied 的 proposalId 返回 404", async () => {
+    const app = buildApp(agent);
+    const r = await app.request("/api/dormant/proposals/nope/revoke", { method: "POST" });
+    expect(r.status).toBe(404);
+    expect(((await r.json()) as { error: string }).error).toBe("not_found_or_not_applied");
+  });
+
   it("reject 流程不污染 persona", async () => {
     const app = buildApp(agent);
     for (let i = 0; i < 3; i++) {

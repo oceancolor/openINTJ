@@ -4,8 +4,9 @@
  * 工作流程：
  *  1. 用户点击 [mine] 触发分析 → 产出待审批 proposals
  *  2. 列表里每条 proposal 显示 pattern 描述 / 目标字段 / 置信度 / 频次
- *  3. 用户点击 ✓ / ✗ → IPC 调 approve / reject → 列表自动刷新
- *  4. 顶部 status filter 切换 pending / applied / rejected / all
+ *  3. pending → 用户点 ✓ 应用（写入 PersonaConfig）/ ✗ 拒绝
+ *     applied → 用户点「撤销」把该字段从 PersonaConfig 删除（可回退，RFC-003 §3.6 #4）
+ *  4. 顶部 status filter 切换 pending / applied / rejected / revoked / all
  *  5. 底部"当前 Persona"折叠区显示 snapshot
  *
  * Dormant 未启用时（agent.dormant === undefined）：
@@ -14,12 +15,13 @@
 import React from "react";
 import type { DormantPersonaResponse, DormantProposalDto } from "../../shared/ipc-protocol.js";
 
-type StatusFilter = "pending" | "applied" | "rejected" | "all";
+type StatusFilter = "pending" | "applied" | "rejected" | "revoked" | "all";
 
 const STATUS_TABS: Array<{ key: StatusFilter; label: string }> = [
   { key: "pending", label: "待审批" },
   { key: "applied", label: "已应用" },
   { key: "rejected", label: "已拒绝" },
+  { key: "revoked", label: "已撤销" },
   { key: "all", label: "全部" },
 ];
 
@@ -132,7 +134,7 @@ export const DormantPanel: React.FC<DormantPanelProps> = ({ enabled }) => {
 
   const handleDecision = async (
     proposalId: string,
-    decision: "approve" | "reject",
+    decision: "approve" | "reject" | "revoke",
   ): Promise<void> => {
     const api = window.openintj;
     if (!api) return;
@@ -142,13 +144,15 @@ export const DormantPanel: React.FC<DormantPanelProps> = ({ enabled }) => {
       const r =
         decision === "approve"
           ? await api.dormantApprove({ proposalId })
-          : await api.dormantReject({ proposalId });
+          : decision === "reject"
+            ? await api.dormantReject({ proposalId })
+            : await api.dormantRevoke({ proposalId });
       if (isError(r)) {
         setError(r.error);
         return;
       }
       await refreshList(filter);
-      if (decision === "approve" && showPersona) {
+      if ((decision === "approve" || decision === "revoke") && showPersona) {
         await refreshPersona();
       }
     } catch (e) {
@@ -268,6 +272,22 @@ export const DormantPanel: React.FC<DormantPanelProps> = ({ enabled }) => {
                   >
                     ✗ 拒绝
                   </button>
+                </div>
+              ) : p.status === "applied" ? (
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => void handleDecision(p.proposalId, "revoke")}
+                    disabled={busy === `revoke:${p.proposalId}`}
+                    className="px-2 py-0.5 text-xs rounded bg-orange-800 hover:bg-orange-700 disabled:bg-gray-700 text-white"
+                  >
+                    撤销
+                  </button>
+                  {p.decidedAt ? (
+                    <span className="text-gray-500 text-[10px]">
+                      应用于 {formatTime(p.decidedAt)}
+                    </span>
+                  ) : null}
                 </div>
               ) : p.decidedAt ? (
                 <div className="text-gray-500 text-[10px]">决策于 {formatTime(p.decidedAt)}</div>
