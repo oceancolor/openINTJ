@@ -40,7 +40,14 @@ import {
   resolveWorkspaceConfig,
   selectConsistentAnswer,
 } from "@openintj/shared";
-import { type SkillContext, assembleSkillContext } from "@openintj/skills";
+import {
+  DbSkillSource,
+  InMemorySkillStore,
+  type SkillContext,
+  SkillLearningRuntime,
+  assembleSkillContext,
+  createLlmSkillDistiller,
+} from "@openintj/skills";
 import { MemoryHybridIndex } from "@openintj/taskpool";
 
 export type LlmProvider = "auto" | "hunyuan" | "ollama" | "mock";
@@ -80,6 +87,11 @@ export interface AgentOptions {
    * 默认关（env OPENINTJ_SKILLS=1 也可开）；技能目录另可用 OPENINTJ_SKILLS_DIR 追加。
    */
   enableSkills?: boolean;
+  /**
+   * 技能自学习闭环（Phase 2，在 enableSkills 之上）：outcome 加权 + 成功轨迹蒸馏候选技能 → 人审批。
+   * CLI 为内存态（InMemorySkillStore，不跨重启）。默认关（env OPENINTJ_SKILLS_LEARN=1 也可开）。
+   */
+  enableSkillLearning?: boolean;
 }
 
 export interface AssembledAgent {
@@ -94,6 +106,8 @@ export interface AssembledAgent {
   hybridIndex: MemoryHybridIndex;
   /** 前端可强化分类器；仅 enableClassifier 时存在。 */
   classifier?: ReinforcingClassifier;
+  /** 技能自学习运行时；仅 enableSkillLearning 时存在。 */
+  skillLearning?: SkillLearningRuntime;
   tao: TaoLoop;
   run(query: string): Promise<TaoResult>;
 }
@@ -191,9 +205,42 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
 
   // 技能系统（opt-in）：OPENINTJ_SKILLS=1 时装配，复用 store embedder，命中才注入能力包全文。
   // assembleAgent 为同步工厂，这里持有 Promise，在（异步的）contextProvider 里 await（只解析一次）。
-  const enableSkills = opts.enableSkills ?? process.env["OPENINTJ_SKILLS"] === "1";
+  // 自学习（Phase 2）：OPENINTJ_SKILLS_LEARN=1 隐含开启注入 + outcome 加权 + 蒸馏/审批闭环。
+  const enableSkillLearning =
+    opts.enableSkillLearning ?? process.env["OPENINTJ_SKILLS_LEARN"] === "1";
+  const enableSkills =
+    (opts.enableSkills ?? process.env["OPENINTJ_SKILLS"] === "1") || enableSkillLearning;
+
+  // CLI 内存态：InMemorySkillStore，同步构造 runtime（fresh store 无需 hydrate）。
+  const skillLearning = enableSkillLearning
+    ? new SkillLearningRuntime({
+        store: new InMemorySkillStore(),
+        hooks,
+        llmDistill: createLlmSkillDistiller({
+          generate: (prompt) => llm.chat([{ role: "user" as const, content: prompt }]),
+        }),
+        onSkillsChanged: async () => {
+          const ctx = skillContextP ? await skillContextP : undefined;
+          await ctx?.reload();
+        },
+      })
+    : undefined;
+
   const skillContextP: Promise<SkillContext | undefined> | undefined = enableSkills
-    ? assembleSkillContext({ embedder: memory.store.embedder, hooks })
+    ? assembleSkillContext({
+        embedder: memory.store.embedder,
+        hooks,
+        ...(skillLearning
+          ? {
+              extraSources: [
+                new DbSkillSource({ approvedSkills: () => skillLearning.listApproved() }),
+              ],
+              weightFor: (id: string) => skillLearning.weightFor(id),
+              onSelected: (query, taskType, ids) =>
+                skillLearning.noteSelected(query, taskType, ids),
+            }
+          : {}),
+      })
     : undefined;
 
   const tao = new TaoLoop({
@@ -248,6 +295,7 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
     contextEngine,
     hybridIndex,
     ...(classifier ? { classifier } : {}),
+    ...(skillLearning ? { skillLearning } : {}),
     tao,
     async run(query: string) {
       // 先跑（contextProvider 检索此前记忆），再记录本轮 → 避免检索命中当前输入本身。
@@ -285,6 +333,23 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
       // 收尾反馈：用 outcome 强化分类器（与记忆写入同一收尾点）。
       if (classifier && cls) {
         await classifier.reinforce(query, cls.label, { signal: outcomeSignal(result.status) });
+      }
+      if (skillLearning) {
+        const toolsUsed = [
+          ...new Set(
+            result.trajectory
+              .map((e) => {
+                const st = (e as { state?: { toolResult?: { toolName?: unknown } } }).state;
+                const name = st?.toolResult?.toolName;
+                return typeof name === "string" ? name : undefined;
+              })
+              .filter((n): n is string => Boolean(n)),
+          ),
+        ];
+        skillLearning.recordOutcome(query, cls?.label, result.status, {
+          finalAnswer: result.finalAnswer,
+          toolsUsed,
+        });
       }
       return result;
     },

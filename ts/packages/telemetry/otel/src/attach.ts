@@ -90,6 +90,7 @@ interface TraceState {
  * - `openintj.policy.blocked` (count, attribute=reason)
  * - `openintj.memory.loaded` (count, attribute= — 累加 payload.count)
  * - `openintj.skill.hit` (count, attribute=skill — 每次注入的每个技能各计 1)
+ * - `openintj.skill.proposed` (count, attribute=skill — 自学习每蒸馏出一个候选技能计 1)
  */
 export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): AttachedOtel => {
   const tracerName = opts.tracerName ?? SCOPE_NAME;
@@ -117,6 +118,10 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
   const cMemoryLoaded = c("openintj.memory.loaded", "Memory 加载的 fragment 总数");
   const cRetrievalHit = c("openintj.retrieval.hit", "检索命中（返回≥1 片段）的次数");
   const cSkillHit = c("openintj.skill.hit", "技能命中次数（按被注入的技能计，attribute=skill）");
+  const cSkillProposed = c(
+    "openintj.skill.proposed",
+    "技能提案次数（自学习蒸馏产出候选，attribute=skill）",
+  );
   const cTokensSpent = c("openintj.tokens.spent", "TAO run 累计 token 花费");
   const cSearchSources = c("openintj.search.sources", "search 工具命中的联网来源数");
   // 并发 / 多任务 / 多 Agent（RFC-003 方向一/二）
@@ -396,6 +401,16 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
       "event.SKILL_SELECTED",
       safe<HookEventMap["event.SKILL_SELECTED"]>((payload) => {
         for (const s of payload.skills) cSkillHit?.add(1, { skill: s.id });
+      }),
+    ),
+  );
+
+  // 技能提案：自学习每蒸馏出一个候选技能计 1（attribute=skill），便于提醒去审批。
+  offs.push(
+    bus.on(
+      "event.SKILL_PROPOSED",
+      safe<HookEventMap["event.SKILL_PROPOSED"]>((payload) => {
+        cSkillProposed?.add(1, { skill: payload.skillId });
       }),
     ),
   );

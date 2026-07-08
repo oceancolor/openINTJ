@@ -8,6 +8,8 @@ import {
   DormantProposalDecisionSchema,
   IPC,
   MemoryQueryRequestSchema,
+  SkillListRequestSchema,
+  SkillProposalDecisionSchema,
   WorkspaceReadRequestSchema,
   WorkspaceWriteRequestSchema,
 } from "../shared/ipc-protocol.js";
@@ -17,6 +19,11 @@ import type { ConfigService } from "./config-store.js";
 const DORMANT_NOT_ENABLED = {
   error: "dormant_not_enabled",
   hint: "Pass { enableDormant: true } to assembleDesktopAgent or set OPENINTJ_DORMANT=1",
+};
+
+const SKILLS_LEARNING_NOT_ENABLED = {
+  error: "skills_learning_not_enabled",
+  hint: "Pass { enableSkillLearning: true } to assembleDesktopAgent or set OPENINTJ_SKILLS_LEARN=1",
 };
 
 export interface IpcRegistration {
@@ -252,6 +259,78 @@ export const registerIpcHandlers = (
   api.handle(IPC.DORMANT_PERSONA, async () => {
     if (!agent.dormant) return DORMANT_NOT_ENABLED;
     return agent.dormant.snapshot();
+  });
+
+  // 技能自学习 Phase 2：蒸馏 / 列表 / 审批。未启用统一返回 skills_learning_not_enabled。
+  const skillProposalView = (p: {
+    proposalId: string;
+    candidate: { id: string; name: string; description: string };
+    evidence: { queries: string[]; taskType?: string; count: number };
+    status: string;
+    ts: number;
+    decidedAt?: number;
+  }) => ({
+    proposalId: p.proposalId,
+    skillId: p.candidate.id,
+    name: p.candidate.name,
+    description: p.candidate.description,
+    status: p.status,
+    ts: p.ts,
+    decidedAt: p.decidedAt,
+    evidence: p.evidence,
+  });
+
+  api.handle(IPC.SKILLS_DISTILL, async () => {
+    if (!agent.skillLearning) return SKILLS_LEARNING_NOT_ENABLED;
+    const produced = await agent.skillLearning.distill();
+    return { produced: produced.length, proposals: produced.map(skillProposalView) };
+  });
+
+  api.handle(IPC.SKILLS_LIST, async (_evt, raw: unknown) => {
+    if (!agent.skillLearning) return SKILLS_LEARNING_NOT_ENABLED;
+    const parsed = SkillListRequestSchema.safeParse(raw ?? {});
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    const list = agent.skillLearning.listProposals(parsed.data.status);
+    return { total: list.length, proposals: list.map(skillProposalView) };
+  });
+
+  api.handle(IPC.SKILLS_APPROVE, async (_evt, raw: unknown) => {
+    if (!agent.skillLearning) return SKILLS_LEARNING_NOT_ENABLED;
+    const parsed = SkillProposalDecisionSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    const out = await agent.skillLearning.approve(parsed.data.proposalId);
+    if (!out) return { error: "not_found_or_already_decided" };
+    return { proposalId: out.proposalId, status: out.status, decidedAt: out.decidedAt };
+  });
+
+  api.handle(IPC.SKILLS_REJECT, async (_evt, raw: unknown) => {
+    if (!agent.skillLearning) return SKILLS_LEARNING_NOT_ENABLED;
+    const parsed = SkillProposalDecisionSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    const out = agent.skillLearning.reject(parsed.data.proposalId);
+    if (!out) return { error: "not_found_or_already_decided" };
+    return { proposalId: out.proposalId, status: out.status, decidedAt: out.decidedAt };
+  });
+
+  api.handle(IPC.SKILLS_REVOKE, async (_evt, raw: unknown) => {
+    if (!agent.skillLearning) return SKILLS_LEARNING_NOT_ENABLED;
+    const parsed = SkillProposalDecisionSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    const out = await agent.skillLearning.revoke(parsed.data.proposalId);
+    if (!out) return { error: "not_found_or_not_approved" };
+    return { proposalId: out.proposalId, status: out.status, decidedAt: out.decidedAt };
+  });
+
+  api.handle(IPC.SKILLS_ACTIVE, async () => {
+    if (!agent.skillLearning) return SKILLS_LEARNING_NOT_ENABLED;
+    const skills = agent.skillLearning.listApproved().map((s) => ({
+      id: s.id,
+      name: s.name,
+      description: s.description,
+      source: s.source,
+      weight: agent.skillLearning!.weightFor(s.id),
+    }));
+    return { total: skills.length, skills };
   });
 
   // 把核心 hooks 推送给 renderer

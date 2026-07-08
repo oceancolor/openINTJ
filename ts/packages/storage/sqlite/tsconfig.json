@@ -11,6 +11,7 @@
     { "path": "../../core" },
     { "path": "../../shared" },
     { "path": "../../dormant" },
-    { "path": "../../classifier" }
+    { "path": "../../classifier" },
+    { "path": "../../skills" }
   ]
 }

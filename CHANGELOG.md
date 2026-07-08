@@ -4,6 +4,55 @@
 版本号沿用 [SemVer](https://semver.org/lang/zh-CN/) 与
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 
+## [Unreleased] —— 技能系统 Phase 2：自学习闭环（outcome 加权 + 轨迹蒸馏 + 人审批 + DB 源） (2026-07-07)
+
+> 把 Phase 1 的「静态作者能力包」升级为「越用越好 + 会长出新技能」：每次 `agent.run()` 的
+> outcome 反馈给命中技能加权（现有技能越用越准），成功轨迹蒸馏成候选技能提案（pending），
+> 人审批（HTTP/IPC）通过后写入 DB 源并**立即重载注册表**生效。复用飞轮既有模式——加权抄
+> classifier `reinforce(outcomeSignal)`、蒸馏/审批抄 dormant `propose→approve→inject`、持久化抄
+> storage-sqlite「接口在领域包、实现在 storage 包」。opt-in 分级 `OPENINTJ_SKILLS_LEARN=1`
+> （隐含 `OPENINTJ_SKILLS`）默认关 → 默认行为零变化。详见 `docs/architecture/next-session.md` §十一
+> 与 `docs/architecture/phase-skills-design.md`。
+
+### Added
+
+- **`@openintj/skills` 自学习核**：
+  - `SkillStore` 接口 + `InMemorySkillStore`（`loadAll`/`upsertProposal`/`upsertApprovedSkill`/
+    `removeApprovedSkill`/`saveWeight`/`clearAll`/`close`）；新类型 `SkillProposal`、`SkillWeight`。
+  - `SkillLearningRuntime` 门面：`hydrate` / `noteSelected` / `recordOutcome`（对命中技能
+    `reinforce(skillOutcomeSignal(status))`，有界 clamp、写穿 store）/ `weightFor` /
+    `distill`（LLM 或启发式聚类产候选，跨次按 candidate id 去重）/ `listProposals`/`approve`/
+    `reject`/`revoke`（approve/revoke 触发 `onSkillsChanged` 重载）/ `listApproved` / `close`。
+    `skillOutcomeSignal` 与 classifier 同映射（本地实现，不反向依赖 classifier）。
+  - `DbSkillSource`：把已审批技能供给 `SkillRegistry`，与 `FsSkillSource` 并列（后源同 id 覆盖）。
+  - `createLlmSkillDistiller`：用 agent LLM 把成功轨迹蒸馏成 `SKILL.md` 草案（JSON 容错解析，
+    失败自动回退启发式）。
+- **`SqliteSkillStore` + `createSqliteSkillStore`**（`@openintj/storage-sqlite`）：`skill_approved` /
+  `skill_proposals` / `skill_weights` / `skill_schema_version` 表，better-sqlite3 动态 import + WAL +
+  版本化迁移 v1 + upsert 写穿 + zod 校验 `loadAll`；默认库 `<dataDir>/skills.sqlite`。
+- **可观测**：`HookEventMap` 新增 `event.SKILL_PROPOSED`（`{ proposalId, skillId, evidenceCount }`）；
+  `attachOtelToHooks` 新增 counter `openintj.skill.proposed`（每蒸馏一个候选 +1，attribute=skill）。
+- **审批入口**：server HTTP `POST /api/skills/distill`、`GET /api/skills/proposals?status=`、
+  `POST /api/skills/proposals/:id/{approve,reject,revoke}`、`GET /api/skills`（生效技能 + 权重）；
+  desktop IPC 镜像（`SKILLS_DISTILL`/`LIST`/`APPROVE`/`REJECT`/`REVOKE`/`ACTIVE` + preload）。
+  未启用统一返回 `skills_learning_not_enabled`（HTTP 503）。**桌面审批 UI 面板本期不做**（后续抄 `DormantPanel`）。
+- **测试**：`skills/__tests__/{store,learning-runtime,db-source}.spec.ts` + 扩 `selector.spec.ts`
+  （weight 偏置改排序 + 封顶）；`storage-sqlite/__tests__/skills.spec.ts`（`:memory:` 往返）；
+  `telemetry-otel/__tests__/metrics.spec.ts` 加 skill.proposed 例；`server/__tests__/skills-learning-wiring.spec.ts`
+  （默认关 503 / 蒸馏→审批→生效链路 / env 开关）。
+
+### Changed
+
+- **`SkillSelector`**：`SkillSelectorOpts` 新增可选 `weightFor` + `weightGain`（默认 0.05）+
+  `weightBiasCap`（默认 0.3）；最终分加**有界权重偏置**（语义余弦仍主导，权重不压过相关度）。
+- **`assembleSkillContext`**：新增 `extraSources`（接 `DbSkillSource`）/ `weightFor` / `onSelected`
+  回调，`SkillContext` 新增 `reload()`（重载来源 + 重嵌入 + 清空命中缓存，供 approve/revoke 后立即生效）。
+- **三端 agent 装配**（cli/server/desktop）：新增 `enableSkillLearning` opt（env `OPENINTJ_SKILLS_LEARN=1`，
+  隐含开启 `enableSkills`）；real 模式挂 `SqliteSkillStore` 否则 `InMemorySkillStore`；构建
+  `SkillLearningRuntime` → `hydrate` → 注册表加 `DbSkillSource` + 传 `weightFor`/`onSelected`/`onSkillsChanged`；
+  `run()` 收尾（classifier.reinforce 旁）加 `skillLearning.recordOutcome`；`close()` 关 store。
+  `@openintj/storage-sqlite` 新增对 `@openintj/skills` 的依赖与项目引用。
+
 ## [Unreleased] —— 技能系统 Phase 1：作者能力包（SKILL.md）按需注入 (2026-07-01)
 
 > 把可复用的做法沉淀成**能力包**（`SKILL.md`）：每轮 query 经「目录 + 嵌入检索」两级预筛，

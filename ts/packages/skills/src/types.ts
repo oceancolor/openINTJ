@@ -44,3 +44,35 @@ export interface SelectedSkill {
   /** 0-1 融合得分（嵌入余弦 + 关键词/任务类型加成，封顶 1）。 */
   score: number;
 }
+
+/**
+ * 技能选择的强化权重（Phase 2，与 classifier exemplar 权重同哲学）。
+ * `recordOutcome` 时对本轮命中的技能按 outcome 信号累加，选择器据此做有界偏置。
+ */
+export interface SkillWeight {
+  skillId: string;
+  /** 累计权重（成功加、失败减；runtime 侧 clamp 到有界区间防溢出）。 */
+  weight: number;
+  /** 最近一次强化时间（秒），便于调试/未来 LRU。 */
+  lastUsed: number;
+}
+
+/**
+ * 从成功轨迹蒸馏出的候选技能提案（Phase 2，抄 dormant 的 InternalizationProposal 语义）。
+ * 只进 `pending`，人审批（approve）才写入活跃 DB 源；永不自动生效。
+ */
+export interface SkillProposal {
+  proposalId: string;
+  /** 候选技能全文（审批通过后原样成为 DB 源里的 Skill）。 */
+  candidate: Skill;
+  /** 证据：支撑该候选的成功轨迹信息。 */
+  evidence: {
+    queries: string[];
+    taskType?: TaskTypeType;
+    count: number;
+  };
+  /** pending 待审 / approved 已批准生效 / rejected 拒绝 / revoked 批准后撤销。 */
+  status: "pending" | "approved" | "rejected" | "revoked";
+  ts: number;
+  decidedAt?: number;
+}

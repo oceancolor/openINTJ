@@ -118,6 +118,44 @@ describe("SkillSelector", () => {
     expect(hit[0]!.skill.id).toBe("top");
   });
 
+  it("weightFor 偏置能改并列项排序，且封顶不压过语义", async () => {
+    const skills = [
+      mkSkill({ id: "a", description: "code review" }),
+      mkSkill({ id: "b", description: "code review" }),
+    ];
+    const { registry, embedder } = await buildRegistry(skills);
+    // 两者语义相同（同 description，query "code review bug" 下余弦 ~0.82 未封顶）；
+    // 给 b 正权重偏置应把 b 抬到最前。
+    const sel = new SkillSelector({
+      registry,
+      embedder,
+      topK: 2,
+      minScore: 0.1,
+      weightFor: (id) => (id === "b" ? 6 : 0),
+      weightGain: 0.05,
+    });
+    const hit = await sel.select("code review bug");
+    expect(hit[0]!.skill.id).toBe("b");
+
+    // 封顶：即便权重巨大，偏置也被 cap 到 0.3，不会让低语义项越过高语义项。
+    const skills2 = [
+      mkSkill({ id: "strong", description: "code review bug" }), // 语义命中
+      mkSkill({ id: "weak", description: "weather travel" }), // 语义不相关
+    ];
+    const { registry: r2, embedder: e2 } = await buildRegistry(skills2);
+    const sel2 = new SkillSelector({
+      registry: r2,
+      embedder: e2,
+      topK: 1,
+      minScore: 0.1,
+      weightFor: (id) => (id === "weak" ? 1000 : 0),
+      weightGain: 0.05,
+      weightBiasCap: 0.3,
+    });
+    const hit2 = await sel2.select("code review bug");
+    expect(hit2[0]!.skill.id).toBe("strong");
+  });
+
   it("空查询 / 空注册表 → 空结果", async () => {
     const { registry, embedder } = await buildRegistry([]);
     const sel = new SkillSelector({ registry, embedder });

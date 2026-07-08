@@ -1,8 +1,10 @@
 # 下一次工作交接备忘
 
 > 本文件用于工作中断 / 多日离开后快速恢复上下文。
-> 上次更新：2026-07-01（**技能系统 Phase 1**：新包 `@openintj/skills`，作者能力包 `SKILL.md` +
-> 两级「目录 + 嵌入检索」按需注入，opt-in `OPENINTJ_SKILLS=1` 默认关；见 [§十一](#十一技能系统phase-1-作者能力包2026-07-01)。
+> 上次更新：2026-07-07（**技能系统 Phase 2**：自学习闭环——outcome 给命中技能加权 + 成功轨迹蒸馏
+> 候选技能 → 人审批 → 写 DB 源并立即重载生效，opt-in `OPENINTJ_SKILLS_LEARN=1` 默认关；见 §11.4）。
+> 此前 2026-07-01：**技能系统 Phase 1**（新包 `@openintj/skills`，作者能力包 `SKILL.md` +
+> 两级「目录 + 嵌入检索」按需注入，opt-in `OPENINTJ_SKILLS=1` 默认关；见 [§十一](#十一技能系统phase-1-作者能力包2026-07-01)）。
 > 此前 2026-06-30：**Memory Flywheel**（A1 增量检索 + A2 长跑验证 + CLF 可强化分类器，见 [§十](#十memory-flywheel增量检索--长跑验证--可强化分类器2026-06-30)）；
 > 再前：7 项定位任务收尾，见 [§九](#九已定位任务批量收尾2026-06-30)）
 
@@ -644,9 +646,34 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 - **新增包**：`@openintj/skills`（已加 `pnpm-workspace.yaml` / 根 `tsconfig.json` refs / 三端 `package.json` + `tsconfig.json` refs）。
 - **env 开关**（默认关）：`OPENINTJ_SKILLS=1`（启用技能注入）、`OPENINTJ_SKILLS_DIR`（追加自定义技能目录）。
 
-### 11.4 本轮仍未做（Phase 2 铺垫，见设计文档）
+### 11.4 Phase 2 —— 自学习闭环（2026-07-07，已实现）
 
-- DB `SkillSource`（`@openintj/storage-sqlite`）承载「学习出来」的技能。
-- 从成功轨迹蒸馏候选技能 → 人审批（复用 dormant propose/approve/inject）→ 写 DB 源。
-- 用 `event.LOOP_ITERATION` / `outcomeSignal` 给技能选择加权（与 classifier 同哲学，实现「越用越好」）。
-- 工具子集/新工具绑定（Phase 1 技能只注入指令文本，不注册新工具、不做工具隔离）。
+> opt-in 分级：`OPENINTJ_SKILLS_LEARN=1`（隐含 `OPENINTJ_SKILLS`）默认关 → 默认行为零变化。
+> 加权抄 classifier `reinforce(outcomeSignal)`、蒸馏/审批抄 dormant `propose→approve→inject`、
+> 持久化抄 storage-sqlite「接口在领域包、实现在 storage 包」。
+
+- **加权核 `SkillLearningRuntime`**（`skills/src/learning-runtime.ts`）：`hydrate` 载 store；
+  `noteSelected(query,taskType,ids)`（由 `assembleSkillContext.onSelected` 驱动，记本轮命中）；
+  `recordOutcome(query,taskType,status,{finalAnswer,toolsUsed})` → 命中技能 `reinforce(skillOutcomeSignal(status))`
+  （completed +1 / failed|timeout −0.5 / else +0.2，有界 clamp、写穿 store）+ 成功轨迹进 buffer；`weightFor`。
+  `SkillSelector` 加**有界权重偏置**（`weightFor`×`weightGain=0.05`，`weightBiasCap=0.3` 封顶，语义仍主导）。
+- **蒸馏/审批**：`distill()` 用户触发——`createLlmSkillDistiller`（接 agent LLM，JSON 容错，失败回退启发式）
+  或启发式（按 taskType 聚类 + 高频 query 词 + 模板 body）产 `SkillProposal(pending)`，跨次按 candidate id 去重；
+  `listProposals`/`approve`/`reject`/`revoke`——`approve` 写 `store.upsertApprovedSkill` + `onSkillsChanged`
+  触发 `SkillContext.reload()`（重嵌入，新技能立即可选中）。
+- **DB 源 + 持久化**：`DbSkillSource`（读 `runtime.listApproved()`，与 `FsSkillSource` 并列进注册表）；
+  `SqliteSkillStore`/`createSqliteSkillStore`（`skill_approved`/`skill_proposals`/`skill_weights` + 迁移 v1，
+  默认 `<dataDir>/skills.sqlite`；real 模式挂它，否则 `InMemorySkillStore`）。
+- **可观测 + 审批入口**：`event.SKILL_PROPOSED` + counter `openintj.skill.proposed`；server HTTP
+  `/api/skills/distill|proposals|proposals/:id/{approve,reject,revoke}|(GET)/api/skills`，desktop IPC 镜像
+  （`SKILLS_*` + preload）；未启用统一 `skills_learning_not_enabled`(503)。**桌面审批 UI 面板暂缓**（后续抄 `DormantPanel`）。
+- **验证**：`turbo run typecheck --concurrency=1` → **39/39 全绿**；lint touched 全过；单 fork vitest
+  skills 32 / storage-sqlite 31 / telemetry-otel 21 / server 55(+8 skip) / cli 18 全过。
+- **env 开关**（默认关）：`OPENINTJ_SKILLS_LEARN=1`。
+
+### 11.5 仍未做（技能系统后续）
+
+- 桌面「技能审批」UI 面板（IPC/preload 已就绪，抄 `DormantPanel` 即可）。
+- 蒸馏质量：启发式 body 偏模板化，真价值靠 `llmDistill` 接 agent LLM；可加候选相似度去重（当前按 id）。
+- 工具子集/新工具绑定（技能目前只注入指令文本，不注册新工具、不做工具隔离）。
+- 权重衰减 / LRU（当前只累加+clamp，无时间衰减）。

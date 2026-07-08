@@ -153,6 +153,15 @@ export interface HookEventMap {
     skills: { id: string; score: number }[];
     query: string;
   };
+  /**
+   * 技能提案：自学习闭环从成功轨迹蒸馏出一个候选技能并写入 pending（opt-in，OPENINTJ_SKILLS_LEARN）。
+   * 消费方据此做可观测（提案 counter）或提醒用户去审批；只在 `distill()` 产出新提案时发。
+   */
+  "event.SKILL_PROPOSED": {
+    proposalId: string;
+    skillId: string;
+    evidenceCount: number;
+  };
 
   // -------- Policy --------
   "policy.beforeCheck": { command: Command };

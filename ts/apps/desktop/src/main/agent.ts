@@ -50,8 +50,20 @@ import {
   resolveWorkspaceConfig,
   selectConsistentAnswer,
 } from "@openintj/shared";
-import { type SkillContext, assembleSkillContext } from "@openintj/skills";
-import { createSqliteClassifierStore, createSqliteDormantStore } from "@openintj/storage-sqlite";
+import {
+  DbSkillSource,
+  InMemorySkillStore,
+  type SkillContext,
+  SkillLearningRuntime,
+  type SkillStore,
+  assembleSkillContext,
+  createLlmSkillDistiller,
+} from "@openintj/skills";
+import {
+  createSqliteClassifierStore,
+  createSqliteDormantStore,
+  createSqliteSkillStore,
+} from "@openintj/storage-sqlite";
 import { type HybridConfig, type MemoryHybridHit, MemoryHybridIndex } from "@openintj/taskpool";
 import {
   type AttachOtelOpts,
@@ -108,6 +120,12 @@ export interface DesktopAgentOpts {
    * 默认关（env OPENINTJ_SKILLS=1 也可开）；技能目录另可用 OPENINTJ_SKILLS_DIR 追加。
    */
   enableSkills?: boolean;
+  /**
+   * 技能自学习闭环（Phase 2，在 enableSkills 之上）：outcome 加权 + 成功轨迹蒸馏候选技能 → 人审批。
+   * real 模式挂 SqliteSkillStore 跨重启；否则 InMemorySkillStore。
+   * 默认关（env OPENINTJ_SKILLS_LEARN=1 也可开，隐含开启 enableSkills）。
+   */
+  enableSkillLearning?: boolean;
   /**
    * 工作区根目录：read_file / write_file 被沙箱限制在此目录内（RFC-004 §8）。
    * 缺省走 env OPENINTJ_WORKSPACE_DIR，再退到 process.cwd()。
@@ -244,6 +262,8 @@ export interface DesktopAgent {
   hybridIndex: MemoryHybridIndex;
   /** 前端可强化分类器；仅 enableClassifier 时存在。 */
   classifier?: ReinforcingClassifier;
+  /** 技能自学习运行时；仅 enableSkillLearning 时存在（供审批 IPC 使用）。 */
+  skillLearning?: SkillLearningRuntime;
   persistenceInfo: { mode: PersistenceMode; dataDir?: string };
   retrievalMode: "vector" | "hybrid";
   /** RFC-003 方向 3 蛰伏记忆学习；仅 opts.enableDormant=true 时存在。 */
@@ -402,9 +422,47 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
   const baseSystemPrompt = opts.systemPrompt ?? DEFAULT_AGENT_SYSTEM_PROMPT;
 
   // 技能系统（opt-in）：OPENINTJ_SKILLS=1 时装配，复用 store embedder，命中才注入能力包全文。
-  const enableSkills = opts.enableSkills ?? process.env["OPENINTJ_SKILLS"] === "1";
+  // 自学习（Phase 2）：OPENINTJ_SKILLS_LEARN=1 隐含开启注入 + outcome 加权 + 蒸馏/审批闭环。
+  const enableSkillLearning =
+    opts.enableSkillLearning ?? process.env["OPENINTJ_SKILLS_LEARN"] === "1";
+  const enableSkills =
+    (opts.enableSkills ?? process.env["OPENINTJ_SKILLS"] === "1") || enableSkillLearning;
+
+  let skillLearning: SkillLearningRuntime | undefined;
+  if (enableSkillLearning) {
+    const skillStore: SkillStore =
+      persistence.mode === "real" && persistence.dataDir
+        ? await createSqliteSkillStore({ dbPath: `${persistence.dataDir}/skills.sqlite` })
+        : new InMemorySkillStore();
+    skillLearning = new SkillLearningRuntime({
+      store: skillStore,
+      hooks,
+      llmDistill: createLlmSkillDistiller({
+        generate: (prompt) => llm.chat([{ role: "user" as const, content: prompt }]),
+      }),
+      // skillContext 在下方构建，approve/revoke 仅装配完成后触发，故此处前向引用安全。
+      onSkillsChanged: async () => {
+        await skillContext?.reload();
+      },
+    });
+    await skillLearning.hydrate();
+  }
+
   const skillContext: SkillContext | undefined = enableSkills
-    ? await assembleSkillContext({ embedder: persistentStore.embedder, hooks })
+    ? await assembleSkillContext({
+        embedder: persistentStore.embedder,
+        hooks,
+        ...(skillLearning
+          ? {
+              extraSources: [
+                new DbSkillSource({ approvedSkills: () => skillLearning!.listApproved() }),
+              ],
+              weightFor: (id: string) => skillLearning!.weightFor(id),
+              onSelected: (query, taskType, ids) =>
+                skillLearning!.noteSelected(query, taskType, ids),
+            }
+          : {}),
+      })
     : undefined;
 
   const tao = new TaoLoop({
@@ -472,6 +530,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     persistentStore,
     hybridIndex,
     ...(classifier ? { classifier } : {}),
+    ...(skillLearning ? { skillLearning } : {}),
     persistenceInfo: persistence,
     retrievalMode,
     ...(dormant ? { dormant } : {}),
@@ -511,6 +570,23 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       if (classifier && cls) {
         await classifier.reinforce(query, cls.label, { signal: outcomeSignal(result.status) });
       }
+      if (skillLearning) {
+        const toolsUsed = [
+          ...new Set(
+            result.trajectory
+              .map((e) => {
+                const st = (e as { state?: { toolResult?: { toolName?: unknown } } }).state;
+                const name = st?.toolResult?.toolName;
+                return typeof name === "string" ? name : undefined;
+              })
+              .filter((n): n is string => Boolean(n)),
+          ),
+        ];
+        skillLearning.recordOutcome(query, cls?.label, result.status, {
+          finalAnswer: result.finalAnswer,
+          toolsUsed,
+        });
+      }
       if (dormant)
         dormant.record(result.finalAnswer, "agent", {
           stage: "run.output",
@@ -542,6 +618,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     async close() {
       hybridIndex.dispose();
       if (classifierStore) await classifierStore.close();
+      if (skillLearning) await skillLearning.close();
       if (otel) otel.dispose();
       if (dormant) await dormant.close();
       await persistentStore.close();

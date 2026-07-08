@@ -1,12 +1,12 @@
-# 技能系统设计 — Phase 1 作者能力包（SKILL.md）+ Phase 2 自学习铺垫
+# 技能系统设计 — Phase 1 作者能力包（SKILL.md）+ Phase 2 自学习闭环
 
-> 更新时间：2026-07-01
-> 状态：✅ Phase 1 已实现（新包 `@openintj/skills` + 三端 opt-in 注入 + 可观测；提交后回填 commit）
-> 相关：落地总览与验证口径见 [`next-session.md` §十一](./next-session.md) ·
+> 更新时间：2026-07-07
+> 状态：✅ Phase 1 已实现（作者能力包注入）· ✅ Phase 2 已实现（自学习闭环：加权 + 蒸馏 + 审批 + DB 源）
+> 相关：落地总览与验证口径见 [`next-session.md` §十一 / §11.4](./next-session.md) ·
 > 变更清单见 [CHANGELOG](../../CHANGELOG.md) · 与飞轮同哲学（使用反馈）见 [`phase-flywheel-design.md`](./phase-flywheel-design.md)
 
 > 本文由 Cursor Plan 模式的实现计划整理归档而来（原文件为 IDE 用户级产物，不在仓库内）。
-> Phase 1 已全部实现，此处作为**设计记录**保留：意图、分阶段拆解、拍板默认、风险缓解与验证口径；Phase 2 仅铺垫。
+> Phase 1 与 Phase 2 均已实现，此处作为**设计记录**保留：意图、分阶段拆解、拍板默认、风险缓解与验证口径。
 
 ## 目标与拍板
 
@@ -86,12 +86,31 @@ flowchart LR
 - 自检：`turbo run typecheck --concurrency=1` 全绿；touched 包 vitest 单 fork 全过；biome 全过。
   ⚠️ 本机内存吃紧，`turbo run test` 默认多线程 worker 会 OOM（`Zone Allocation failed`）——需 `--pool=forks --poolOptions.forks.singleFork=true` + 调大 `--max-old-space-size` 逐包跑。
 
-## Phase 2（本次仅铺垫，不落地）
+## Phase 2 —— 自学习闭环（✅ 2026-07-07 已实现）
 
-- 新增 DB `SkillSource`（`@openintj/storage-sqlite`）承载「学习出来」的技能，接口与 Phase 1 一致（注入点/选择器不变）。
-- 从成功轨迹蒸馏候选技能 → 人审批（复用 dormant 的 propose/approve/inject 模式）→ 写入 DB 源。
-- 用 `event.LOOP_ITERATION` / `outcomeSignal` 给技能选择加权重（与 classifier 同哲学），实现「越用越好」。
-- 工具子集 / 技能绑定新工具（Phase 1 只注入指令文本，不动 `ToolHub`）。
+> opt-in 分级：`OPENINTJ_SKILLS_LEARN=1`（隐含 `OPENINTJ_SKILLS`）默认关 → 默认行为零变化。
+> 落点：`skills/src/{store,learning-runtime,db-source,llm-distill}.ts`、`storage-sqlite/src/skills.ts`、
+> 三端 agent + server routes / desktop IPC；总览见 [`next-session.md` §11.4](./next-session.md)。
+
+- **加权（现有技能越用越准）**：`SkillLearningRuntime.recordOutcome` 对本轮命中技能
+  `reinforce(skillOutcomeSignal(status))`（与 classifier `outcomeSignal` 同映射，本地实现不反向依赖），
+  有界 clamp、写穿 `SkillStore`；`SkillSelector` 用 `weightFor` 做**有界偏置**（`weightGain`×clamp，
+  `weightBiasCap` 封顶，语义余弦仍主导）。命中由 `assembleSkillContext.onSelected` → `noteSelected` 记录。
+- **蒸馏 → 审批 → 注入**：成功轨迹进 buffer；`distill()` 用 `createLlmSkillDistiller`（接 agent LLM，
+  JSON 容错解析，失败回退启发式）或启发式（taskType 聚类）产 `SkillProposal(pending)`，跨次按 candidate id 去重；
+  `approve` → `store.upsertApprovedSkill` + `onSkillsChanged` 触发 `SkillContext.reload()` 重嵌入立即生效；
+  `reject`/`revoke` 对应。**只进 pending、人审批才生效**，永不自动写活跃技能。
+- **DB 源 + 持久化**：`DbSkillSource`（读 `runtime.listApproved()`，与 `FsSkillSource` 并列，后源同 id 覆盖）；
+  `SqliteSkillStore`/`createSqliteSkillStore`（`skill_approved`/`skill_proposals`/`skill_weights` 表 + 迁移 v1 +
+  WAL + better-sqlite3 动态 import + zod 校验，默认 `<dataDir>/skills.sqlite`；否则 `InMemorySkillStore`）。
+- **可观测 + 审批入口**：`event.SKILL_PROPOSED` + counter `openintj.skill.proposed`；server HTTP `/api/skills/*`
+  与 desktop IPC 镜像，未启用 `skills_learning_not_enabled`(503)。
+
+### Phase 2 仍未做（后续）
+
+- 桌面「技能审批」UI 面板（IPC/preload 已就绪，抄 `DormantPanel`）。
+- 工具子集 / 技能绑定新工具（当前只注入指令文本，不动 `ToolHub`）。
+- 权重时间衰减 / LRU（当前只累加 + clamp）；候选相似度去重（当前按 id）。
 
 ## 风险与缓解
 

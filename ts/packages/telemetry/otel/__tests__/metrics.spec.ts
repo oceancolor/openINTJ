@@ -268,6 +268,35 @@ describe("attachOtelToHooks — metrics", () => {
     otel.dispose();
   });
 
+  it("counts openintj.skill.proposed per distilled candidate from event.SKILL_PROPOSED", async () => {
+    const bus = new HookBus();
+    const otel = attachOtelToHooks(bus);
+
+    await bus.emit("event.SKILL_PROPOSED", {
+      proposalId: "p1",
+      skillId: "learned-coding",
+      evidenceCount: 3,
+    });
+    await bus.emit("event.SKILL_PROPOSED", {
+      proposalId: "p2",
+      skillId: "learned-coding",
+      evidenceCount: 4,
+    });
+    await bus.emit("event.SKILL_PROPOSED", {
+      proposalId: "p3",
+      skillId: "learned-research",
+      evidenceCount: 2,
+    });
+
+    const series = await flush();
+    const proposed = series.filter((s) => s.name === "openintj.skill.proposed");
+    expect(proposed.reduce((a, b) => a + b.sum, 0)).toBe(3);
+    const coding = proposed.filter((s) => s.attrs["skill"] === "learned-coding");
+    expect(coding.reduce((a, b) => a + b.sum, 0)).toBe(2);
+
+    otel.dispose();
+  });
+
   it("respects disableMetrics flag", async () => {
     const bus = new HookBus();
     const otel = attachOtelToHooks(bus, { disableMetrics: true });

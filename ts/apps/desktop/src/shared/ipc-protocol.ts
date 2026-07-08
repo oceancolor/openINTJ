@@ -100,6 +100,18 @@ export const DormantListRequestSchema = z.object({
 });
 export type DormantListRequest = z.infer<typeof DormantListRequestSchema>;
 
+// ---------- Skill Learning (技能自学习 Phase 2) ----------
+
+export const SkillProposalDecisionSchema = z.object({
+  proposalId: z.string(),
+});
+export type SkillProposalDecision = z.infer<typeof SkillProposalDecisionSchema>;
+
+export const SkillListRequestSchema = z.object({
+  status: z.enum(["pending", "approved", "rejected", "revoked"]).optional(),
+});
+export type SkillListRequest = z.infer<typeof SkillListRequestSchema>;
+
 /** ?? proposal ??IPC ???????pattern ????description???*/
 export const DormantProposalDtoSchema = z.object({
   proposalId: z.string(),
@@ -294,6 +306,13 @@ export const IPC = {
   DORMANT_REJECT: "openintj:dormant.reject",
   DORMANT_REVOKE: "openintj:dormant.revoke",
   DORMANT_PERSONA: "openintj:dormant.persona",
+  // 技能自学习 Phase 2
+  SKILLS_DISTILL: "openintj:skills.distill",
+  SKILLS_LIST: "openintj:skills.list",
+  SKILLS_APPROVE: "openintj:skills.approve",
+  SKILLS_REJECT: "openintj:skills.reject",
+  SKILLS_REVOKE: "openintj:skills.revoke",
+  SKILLS_ACTIVE: "openintj:skills.active",
   // #6 ????
   UPDATE_CHECK: "openintj:update.check",
   UPDATE_INSTALL: "openintj:update.install",

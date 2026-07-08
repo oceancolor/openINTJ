@@ -641,6 +641,9 @@ importers:
       '@openintj/shared':
         specifier: workspace:*
         version: link:../../shared
+      '@openintj/skills':
+        specifier: workspace:*
+        version: link:../../skills
       better-sqlite3:
         specifier: ^11.0.0
         version: 11.10.0

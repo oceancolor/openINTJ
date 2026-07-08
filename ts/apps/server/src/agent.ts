@@ -48,8 +48,20 @@ import {
   resolveWorkspaceConfig,
   selectConsistentAnswer,
 } from "@openintj/shared";
-import { type SkillContext, assembleSkillContext } from "@openintj/skills";
-import { createSqliteClassifierStore, createSqliteDormantStore } from "@openintj/storage-sqlite";
+import {
+  DbSkillSource,
+  InMemorySkillStore,
+  type SkillContext,
+  SkillLearningRuntime,
+  type SkillStore,
+  assembleSkillContext,
+  createLlmSkillDistiller,
+} from "@openintj/skills";
+import {
+  createSqliteClassifierStore,
+  createSqliteDormantStore,
+  createSqliteSkillStore,
+} from "@openintj/storage-sqlite";
 import { MemoryHybridIndex } from "@openintj/taskpool";
 import {
   type AttachOtelOpts,
@@ -126,6 +138,14 @@ export interface ServerAgentOpts {
    */
   enableSkills?: boolean;
   /**
+   * 技能自学习闭环（Phase 2）：在 enableSkills 之上再开。
+   * - outcome 反馈给技能选择加权（现有技能越用越准）
+   * - 成功轨迹蒸馏候选技能 → 人审批（HTTP 路由）→ 写 DB 源并注入
+   * real 模式挂 SqliteSkillStore 跨重启；否则 InMemorySkillStore。
+   * 默认关（env OPENINTJ_SKILLS_LEARN=1 也可开，隐含开启 enableSkills）。
+   */
+  enableSkillLearning?: boolean;
+  /**
    * 工作区根目录：read_file / write_file 被沙箱限制在此目录内（RFC-004 §8）。
    * 缺省走 env OPENINTJ_WORKSPACE_DIR，再退到 process.cwd()。
    */
@@ -156,6 +176,8 @@ export interface ServerAgent {
   hybridIndex: MemoryHybridIndex;
   /** 前端可强化分类器；仅 enableClassifier 时存在。 */
   classifier?: ReinforcingClassifier;
+  /** 技能自学习运行时；仅 enableSkillLearning 时存在（供审批 HTTP 路由使用）。 */
+  skillLearning?: SkillLearningRuntime;
   governance: GovernancePlane;
   contextEngine: ContextEngine;
   tao: TaoLoop;
@@ -382,9 +404,49 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
   const baseSystemPrompt = opts.systemPrompt ?? DEFAULT_AGENT_SYSTEM_PROMPT;
 
   // 技能系统（opt-in）：OPENINTJ_SKILLS=1 时装配，复用 store embedder，命中才注入能力包全文。
-  const enableSkills = opts.enableSkills ?? process.env["OPENINTJ_SKILLS"] === "1";
+  // 自学习（Phase 2）：OPENINTJ_SKILLS_LEARN=1 隐含开启注入 + outcome 加权 + 蒸馏/审批闭环。
+  const enableSkillLearning =
+    opts.enableSkillLearning ?? process.env["OPENINTJ_SKILLS_LEARN"] === "1";
+  const enableSkills =
+    (opts.enableSkills ?? process.env["OPENINTJ_SKILLS"] === "1") || enableSkillLearning;
+
+  // 学习运行时先于 skillContext 构建：hydrate 出已批准技能供 DbSkillSource、权重供选择器。
+  let skillLearning: SkillLearningRuntime | undefined;
+  if (enableSkillLearning) {
+    const skillStore: SkillStore =
+      persistence.mode === "real" && persistence.dataDir
+        ? await createSqliteSkillStore({ dbPath: `${persistence.dataDir}/skills.sqlite` })
+        : new InMemorySkillStore();
+    skillLearning = new SkillLearningRuntime({
+      store: skillStore,
+      hooks,
+      // llmDistill 接 agent LLM（解析失败 runtime 自动回退启发式）。
+      llmDistill: createLlmSkillDistiller({
+        generate: (prompt) => llm.chat([{ role: "user" as const, content: prompt }]),
+      }),
+      // approve/revoke 后重载技能注册表（skillContext 在下方构建，仅装配完成后才会触发）。
+      onSkillsChanged: async () => {
+        await skillContext?.reload();
+      },
+    });
+    await skillLearning.hydrate();
+  }
+
   const skillContext: SkillContext | undefined = enableSkills
-    ? await assembleSkillContext({ embedder: persistentStore.embedder, hooks })
+    ? await assembleSkillContext({
+        embedder: persistentStore.embedder,
+        hooks,
+        ...(skillLearning
+          ? {
+              extraSources: [
+                new DbSkillSource({ approvedSkills: () => skillLearning!.listApproved() }),
+              ],
+              weightFor: (id: string) => skillLearning!.weightFor(id),
+              onSelected: (query, taskType, ids) =>
+                skillLearning!.noteSelected(query, taskType, ids),
+            }
+          : {}),
+      })
     : undefined;
 
   const tao = new TaoLoop({
@@ -448,6 +510,7 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
     persistentStore,
     hybridIndex,
     ...(classifier ? { classifier } : {}),
+    ...(skillLearning ? { skillLearning } : {}),
     governance,
     contextEngine,
     tao,
@@ -488,6 +551,24 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
       if (classifier && cls) {
         await classifier.reinforce(query, cls.label, { signal: outcomeSignal(result.status) });
       }
+      if (skillLearning) {
+        // 命中技能按 outcome 加权 + 成功轨迹进蒸馏 buffer。
+        const toolsUsed = [
+          ...new Set(
+            result.trajectory
+              .map((e) => {
+                const st = (e as { state?: { toolResult?: { toolName?: unknown } } }).state;
+                const name = st?.toolResult?.toolName;
+                return typeof name === "string" ? name : undefined;
+              })
+              .filter((n): n is string => Boolean(n)),
+          ),
+        ];
+        skillLearning.recordOutcome(query, cls?.label, result.status, {
+          finalAnswer: result.finalAnswer,
+          toolsUsed,
+        });
+      }
       if (dormant)
         dormant.record(result.finalAnswer, "agent", {
           stage: "run.output",
@@ -519,6 +600,7 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
     async close() {
       hybridIndex.dispose();
       if (classifierStore) await classifierStore.close();
+      if (skillLearning) await skillLearning.close();
       if (otel) otel.dispose();
       if (dormant) await dormant.close();
       await persistentStore.close();

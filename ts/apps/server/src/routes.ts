@@ -256,5 +256,96 @@ export const buildApp = (agent: ServerAgent): Hono => {
     return c.json(agent.dormant!.snapshot());
   });
 
+  // 技能自学习（Phase 2）：仅 enableSkillLearning=true 时可用；未启用统一 503。
+  const requireSkillLearning = (c: Context): Response | undefined => {
+    if (!agent.skillLearning) {
+      return c.json(
+        {
+          error: "skills_learning_not_enabled",
+          hint: "Pass { enableSkillLearning: true } to assembleServerAgent or set OPENINTJ_SKILLS_LEARN=1",
+        },
+        503,
+      );
+    }
+    return undefined;
+  };
+
+  const proposalView = (p: {
+    proposalId: string;
+    candidate: { id: string; name: string; description: string };
+    evidence: { queries: string[]; taskType?: string; count: number };
+    status: string;
+    ts: number;
+    decidedAt?: number;
+  }) => ({
+    proposalId: p.proposalId,
+    skillId: p.candidate.id,
+    name: p.candidate.name,
+    description: p.candidate.description,
+    status: p.status,
+    ts: p.ts,
+    decidedAt: p.decidedAt,
+    evidence: p.evidence,
+  });
+
+  app.post("/api/skills/distill", async (c) => {
+    const guard = requireSkillLearning(c);
+    if (guard) return guard;
+    const produced = await agent.skillLearning!.distill();
+    return c.json({ produced: produced.length, proposals: produced.map(proposalView) });
+  });
+
+  app.get("/api/skills/proposals", async (c) => {
+    const guard = requireSkillLearning(c);
+    if (guard) return guard;
+    const statusParam = c.req.query("status");
+    const validStatus =
+      statusParam === "pending" ||
+      statusParam === "approved" ||
+      statusParam === "rejected" ||
+      statusParam === "revoked"
+        ? statusParam
+        : undefined;
+    const list = agent.skillLearning!.listProposals(validStatus);
+    return c.json({ total: list.length, proposals: list.map(proposalView) });
+  });
+
+  app.post("/api/skills/proposals/:id/approve", async (c) => {
+    const guard = requireSkillLearning(c);
+    if (guard) return guard;
+    const out = await agent.skillLearning!.approve(c.req.param("id"));
+    if (!out) return c.json({ error: "not_found_or_already_decided" }, 404);
+    return c.json({ proposalId: out.proposalId, status: out.status, decidedAt: out.decidedAt });
+  });
+
+  app.post("/api/skills/proposals/:id/reject", async (c) => {
+    const guard = requireSkillLearning(c);
+    if (guard) return guard;
+    const out = agent.skillLearning!.reject(c.req.param("id"));
+    if (!out) return c.json({ error: "not_found_or_already_decided" }, 404);
+    return c.json({ proposalId: out.proposalId, status: out.status, decidedAt: out.decidedAt });
+  });
+
+  app.post("/api/skills/proposals/:id/revoke", async (c) => {
+    const guard = requireSkillLearning(c);
+    if (guard) return guard;
+    const out = await agent.skillLearning!.revoke(c.req.param("id"));
+    if (!out) return c.json({ error: "not_found_or_not_approved" }, 404);
+    return c.json({ proposalId: out.proposalId, status: out.status, decidedAt: out.decidedAt });
+  });
+
+  app.get("/api/skills", async (c) => {
+    const guard = requireSkillLearning(c);
+    if (guard) return guard;
+    const active = agent.skillLearning!.listApproved().map((s) => ({
+      id: s.id,
+      name: s.name,
+      description: s.description,
+      source: s.source,
+      weight: agent.skillLearning!.weightFor(s.id),
+    }));
+    return c.json({ total: active.length, skills: active });
+  });
+
   return app;
 };

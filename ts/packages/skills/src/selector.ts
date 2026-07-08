@@ -30,6 +30,15 @@ export interface SkillSelectorOpts {
   keywordBoost?: number;
   /** taskType 命中加成（skill.taskTypes 含本轮 taskType）。默认 0.1。 */
   taskTypeBoost?: number;
+  /**
+   * 可选强化权重供给（Phase 2 自学习）：给「历史越用越准」的技能一点有界偏置。
+   * 偏置 = clamp(weight*weightGain, -weightBiasCap, +weightBiasCap)，语义余弦仍主导。
+   */
+  weightFor?: (id: string) => number;
+  /** 权重→偏置的增益。默认 0.05。 */
+  weightGain?: number;
+  /** 权重偏置绝对值封顶（不让权重压过语义相关度）。默认 0.3。 */
+  weightBiasCap?: number;
 }
 
 /**
@@ -44,6 +53,9 @@ export class SkillSelector {
   private readonly maxBodyTokens: number;
   private readonly keywordBoost: number;
   private readonly taskTypeBoost: number;
+  private readonly weightFor?: (id: string) => number;
+  private readonly weightGain: number;
+  private readonly weightBiasCap: number;
 
   constructor(opts: SkillSelectorOpts) {
     this.registry = opts.registry;
@@ -53,6 +65,9 @@ export class SkillSelector {
     this.maxBodyTokens = opts.maxBodyTokens ?? 700;
     this.keywordBoost = opts.keywordBoost ?? 0.15;
     this.taskTypeBoost = opts.taskTypeBoost ?? 0.1;
+    if (opts.weightFor) this.weightFor = opts.weightFor;
+    this.weightGain = opts.weightGain ?? 0.05;
+    this.weightBiasCap = opts.weightBiasCap ?? 0.3;
   }
 
   async select(query: string, opts: SkillSelectOpts = {}): Promise<SelectedSkill[]> {
@@ -71,6 +86,10 @@ export class SkillSelector {
       }
       if (opts.taskType && skill.taskTypes.includes(opts.taskType)) {
         score += this.taskTypeBoost;
+      }
+      if (this.weightFor) {
+        const raw = this.weightFor(skill.id) * this.weightGain;
+        score += Math.max(-this.weightBiasCap, Math.min(this.weightBiasCap, raw));
       }
       if (score >= this.minScore) {
         scored.push({ skill, score: Math.min(1, score) });
