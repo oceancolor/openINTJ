@@ -96,25 +96,25 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 |---|---|---|---|:-:|:-:|
 | 1 | ~~Python v2 ↔ TS 行为对齐测试~~ | ~~中~~ | ~~高~~ | ⭐⭐⭐ | ✅ 2026-05-20 完成（Phase 3.6） |
 | 2 | ~~真实持久化 e2e~~ | ~~中~~ | ~~高~~ | ⭐⭐⭐ | ✅ 2026-05-09 完成 |
-| 3 | **嵌入基准**：simple vs xenova vs ollama 在固定语料上的 nDCG | 低 | 中 | ⭐⭐ | 🟢 harness + 双路径基准（`benchmarkRetrieval` 产品路径 + `benchmarkEmbedderCosine` 纯语义）落地，simple 基线实测归档；xenova/ollama 需装依赖/起服务后 `RUN_EMBED_COMPARE=1` 回填。见 `retrieval-benchmark.md` §12.1 |
+| 3 | **嵌入基准**：simple vs xenova vs ollama 在固定语料上的 nDCG | 低 | 中 | ⭐⭐ | 🟢 harness + 双路径基准落地；simple 基线 + **xenova 实测归档**（纯 cosine 0.396→**0.944**，产品路径 0.773→**1.000**，2026-07-08）→ 默认选型结论：CI 用 simple、质量敏感部署切 xenova。ollama 需本地 `ollama serve` 后 `RUN_EMBED_COMPARE=1` 回填。见 `retrieval-benchmark.md` |
 | 4 | ~~Desktop E2E（Playwright + Electron）~~ | ~~中~~ | ~~中~~ | ⭐⭐ | ✅ 2026-05-20 完成（Phase 3.7） |
 | 5 | ~~RFC-003 装配进主 Agent~~ | ~~中~~ | ~~中~~ | ⭐⭐ | ✅ 2026-05-11 完成 |
-| 6 | **打包发布**：electron-builder Win/macOS + electron-updater | 高 | 中 | ⭐ | 待办 |
+| 6 | **打包发布**：electron-builder Win/macOS + electron-updater | 高 | 中 | ⭐ | 🟢 实现就绪：`electron-builder.yml`（Win nsis/mac dmg/linux AppImage，publish=github oceancolor/openINTJ）+ `updater.ts`（防御式、有测试）+ 主进程接线 + `UpdateBanner` UI + CI `release.yml`（tag v* → 构建 → `--publish always`）。剩运维手动项（图标/签名/首个真 release），见 `release-packaging.md` |
 | 7 | ~~可观测性：Hooks → OpenTelemetry~~ | ~~低~~ | ~~低-中~~ | ⭐ | ✅ 2026-05-20 完成（Phase 3.8） |
 | 8 | ~~GitHub Actions CI 工作流~~ | ~~低~~ | ~~中~~ | ⭐⭐ | ✅ 2026-05-09 完成 |
 | 9.A | ~~Dormant 持久化（SqliteDormantStore + hydrate）~~ | ~~中~~ | ~~高~~ | ⭐⭐⭐ | ✅ 2026-05-19 完成（Phase 3.4） |
 | 9.B | ~~Dormant 审批 UI（preload + DormantPanel + tab 布局）~~ | ~~中~~ | ~~中-高~~ | ⭐⭐⭐ | ✅ 2026-05-19 完成（Phase 3.5） |
 | 10 | **HybridRetriever LanceDB FTS 路径**：大规模 fragments 时换 LanceDB 原生 FTS，避免每次重建索引 | 中 | 中 | ⭐⭐ | 🟢 存储层原生 FTS（`ensureFtsIndex`/`searchText`）+ `hybridVectorSearch` RRF 融合落地，server `retrieveHybrid` opt-in（`OPENINTJ_LANCE_FTS=1`）；见 §12.2 |
 | 11 | ~~**Dormant 事件清理**：`pruneEvents(olderThanTs)` / LRU 防 `dormant_events` 无限增长~~ | ~~低~~ | ~~中~~ | ⭐⭐ | ✅ 2026-06-30 完成（接口/双适配器/runtime 自动清理 + hydrate/record 兜底触发；见 §10.7） |
-| 12 | **Parity 扩展**：governance plane / Hooks / ContextEngine 接进 parity 网 | 中 | 中 | ⭐⭐ | 🟡 governance plane 已接（9 tests）；Hooks/ContextEngine 仍待办（见 §九） |
+| 12 | **Parity 扩展**：governance plane / Hooks / ContextEngine 接进 parity 网 | 中 | 中 | ⭐⭐ | 🟢 governance（9）+ context（ContextBudget/shaderForTask，12）+ taxonomy（EventType/CommandType/ErrorCode，14）已接；HookBus 本体无 Python 对手（TS-only），不设跨实现 parity，见 §12.8 |
 
 **默认推荐下一站**：
 
-- **#3 嵌入基准**（低成本，给默认选型一个数据支持；下一阶段顺手填）
-- ~~或 **#11 dormant 事件清理**~~（✅ 2026-06-30 完成，见 §10.7）
-- 或 **#12 parity 扩展**（顺势补 governance / Hooks / ContextEngine 进对齐网）
-- 或 **#6 打包发布**（electron-builder Win/macOS + electron-updater；体感工程量最大但收益最直观）
-- 或 **#10 HybridRetriever LanceDB FTS**（3.3 衍生；N>10k fragment 时性能升级；增量索引已落，仅差原生 FTS）
+- ~~#3 嵌入基准~~（✅ xenova 真实数字已回填，纯 cosine 0.944；仅 ollama 待本地起服务后回填）
+- ~~#11 dormant 事件清理~~（✅ 2026-06-30 完成，见 §10.7）
+- ~~#12 parity 扩展~~（✅ 2026-07-08 governance+context+taxonomy，见 §12.8）
+- ~~#6 打包发布~~（✅ 2026-07-08 实现就绪，剩运维手动项，见 `release-packaging.md`）
+- ~~#10 HybridRetriever LanceDB FTS~~（✅ 见 §12.2）
 - ~~**Phase 3.8.1 OTel 扩展**：Hono route + Electron IPC 自动 span 接到 agent span 树~~ ✅ 2026-06-30 完成（`withRootSpan`，见 §九）
 
 ## 四、上下文复盘清单
@@ -370,22 +370,22 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 
 | RFC / 模块 | 设计意图 | 状态 | 缺口摘要 |
 |---|---|:-:|---|
-| RFC-001 TAO/ReAct | 双层循环 + 4 早停 + 多轮 | 🟢 基本完成 | `enableReact:false` 退化分支未实现；走文本协议而非 function-calling；无性能基准 |
+| RFC-001 TAO/ReAct | 双层循环 + 4 早停 + 多轮 | 🟢 完成 | `enableReact:false` 退化分支已实现（`ReactStateMachine.runSingle`，`decideRoute`→`route.single` 触发，core+routing 测试守护）；文本协议 vs function-calling 已定案（ADR-001）；仅剩性能基准未做 |
 | RFC-002 Hooks | 强类型/优先级/短路/改写 | 🟢 完成 | §9 性能基准 `hook-bus-bench` 不存在 |
-| RFC-003 方向一 多线程 | Mutex/Channel/CV/Pool/ForkJoin 装配进 Agent | 🟡 原型 | 包齐全 + 21 测试，但**只在 `cli/rfc3-integration.spec.ts` 用过，未接进真实 agent** |
+| RFC-003 方向一 多线程 | Mutex/Channel/CV/Pool/ForkJoin 装配进 Agent | 🟢 有界接入 | `forkJoin` + `Semaphore`（经 `forkJoin.concurrency`）已进三端自一致性主路径（§9.3 并行 + §12.6 并发上限）；Mutex/Channel/CV/Pool/Backpressure 仍实验性 |
 | RFC-003 方向二 任务池 | SharedContext/HybridRetriever/TaskQueue/ObjectPool | 🟡 部分 | 仅 HybridRetriever 接进 server；其余仅原型；检索每次重建索引；无 nDCG 基准 |
-| RFC-003 方向三 钝化记忆 | 存→学→审批→**注入 systemPrompt** | 🟠 回路未闭合 | persona 写了但**从不注入**；无 A/B、无脱敏、无 revoke |
-| RFC-004 桌面 IPC | 安全模型 + 流式 + 系统能力 | 🟡 半 | 流式✅ 自动更新✅；**工作区文件读写 / 配置面 / utility worker 全缺** |
+| RFC-003 方向三 钝化记忆 | 存→学→审批→**注入 systemPrompt** | 🟢 回路已闭合 | 2026-07-08 收官：`getPersona()` 出口 + 三端注入（含 CLI）+ A/B 杠杆（`OPENINTJ_PERSONA`）+ 脱敏（默认开）+ revoke（runtime/IPC/HTTP/UI 全通）。见 §12.4 |
+| RFC-004 桌面 IPC | 安全模型 + 流式 + 系统能力 | 🟢 基本完成 | 流式✅ 自动更新✅ 工作区读写(治理门禁)✅ config 服务✅ fs.watch✅；2026-07-08 补齐**设置面板 UI**（消费 workspace/config IPC + 实时变更）+ config 字段/启动接线 + **utility 挖掘 worker**（opt-in）。见 §12.5 |
 | 跨 RFC 执行工具 | 治理边界下真实 fs/命令 | 🟢 完成 | fs/命令工具早已是真实沙箱实现（`createWorkspaceTools`）；2026-07-08 又把治理接进 `ToolHub.call`（gate → `checkToolCall`）+ 桌面 IPC，`[mock]` 仅剩 search 兜底。见 §12.3 |
 | #3 嵌入基准 | simple/xenova/ollama nDCG | 🟢 harness+双路径基准落地，simple 实测归档；xenova/ollama 待回填 | `retrieval-benchmark.md` |
 
 ### 8.2 重点缺口（按严重度）
 
 1. ~~**🔴 执行平面工具是 mock**~~。✅ **已解决（此条盘点已过时）**：fs/命令工具其实早已是真实沙箱实现（`createWorkspaceTools`：路径限定 workspace 根 + 读写大小上限 + 命令白名单/默认禁用），三端 agent 均已接；`[mock]` 只剩 search 兜底。2026-07-08 进一步把**治理接进工具执行**（`ToolHub` gate → `GovernancePlane.checkToolCall`：策略黑名单 + 每分钟工具配额 + 审计）+ 桌面 workspace IPC 同闸门，补齐 RFC-004 §8 的「Governance → fs」边界。见 §12.3。
-2. **🟠 钝化记忆 persona 未注入**：`DormantRuntime` 公开 `record/mine/listProposals/approve/reject/prune/hydrate`，**无 `getPersona()` 出口**；`agent.ts` 也不读 persona。RFC-003 §3.6 验收 #2「批准后无需检索就生效」不成立。`abTest`/脱敏/`revoke` 亦未实现。修复点：复用新加的 `contextProvider` 拼接 persona delta。
-3. **🟡 方向一/二并发原语只是原型**：仅 `cli/rfc3-integration.spec.ts` 使用；真实 `agent.run()` 仅经 `RateLimitedLlmClient`(rateLimit) 与 `HybridRetriever`(retrievalMode=hybrid) 接了两件。
-4. **🟡 RFC-004 系统能力面缺失**：`readWorkspaceFile/writeWorkspaceFile/pickWorkspaceDir/onWorkspaceChange/getConfig/updateConfig` 零实现；utility 蒸馏 worker 未实现（`mine()` 跑在 main）。注：§7 流式**已等价实现**（hook→IPC `EVT_TAO/EVT_REACT/EVT_AUDIT` 实时推送）。
-5. **🟢 小缺口**：`enableReact:false` 声明未实现；RFC-001 §11 Q1（function-calling vs 文本协议）事实选了文本协议但未文档化决策。
+2. ~~**🟠 钝化记忆 persona 未注入**~~ ✅ **已解决（2026-07-08，见 §12.4）**：`DormantRuntime.getPersona()` 出口就绪；server/desktop/**cli** 三端 `contextProvider` 均在 `[记忆参考]` 之前注入 `[用户画像]`（无需检索即生效，满足 §3.6 #2）；A/B 由 `resolvePersonaInjection`（`enablePersona` / `OPENINTJ_PERSONA=0`）控制（§3.6 #3）；脱敏 `record()` 前默认生效；revoke 打通 runtime + 桌面 IPC + `POST /api/dormant/proposals/:id/revoke` + DormantPanel「撤销」按钮（§3.6 #4）。
+3. ~~**🟡 方向一/二并发原语只是原型**~~ ✅ **已缩小（2026-07-08，见 §12.6）**：`forkJoin` 早已进三端自一致性主路径（§9.3），本次把 `Semaphore` 经 `forkJoin.concurrency` 接上——`selfConsistency.maxConcurrency` / `OPENINTJ_SELF_CONSISTENCY_CONCURRENCY` 给多采样设并发上限（有界并发，避免打满 LLM 配额）。真实 `agent.run()` 现已接：`RateLimitedLlmClient`(rateLimit) + `HybridRetriever`(hybrid) + `forkJoin`/`Semaphore`(self-consistency)。剩 Mutex/Channel/CV/Pool/Backpressure 仍实验性（无主路径消费者）。
+4. ~~**🟡 RFC-004 系统能力面缺失**~~ ✅ **已解决（2026-07-08，见 §12.5）**：workspace 读写/info/pickDir IPC + `fs.watch → EVT_WORKSPACE` + `ConfigService`(getConfig/updateConfig) 后端此前已在（治理门禁 + 契约测试）；本次补**renderer 消费面**（`SettingsPanel`：workspaceInfo/pickDir + config 增删改 + 实时变更流）、config schema 补 `enablePersona/enableSkills/enableSkillLearning/enableClassifier` 并接入启动装配、`mine()` 的 **utility worker 下放**（`OPENINTJ_DORMANT_WORKER=1`，失败回退内联）。注：§7 流式已等价实现（hook→IPC 实时推送）；配置热重载仍需重启（面板显式标注）。
+5. ~~**🟢 小缺口**：`enableReact:false` 声明未实现；RFC-001 §11 Q1 未文档化~~ ✅ **均已闭合（见 §12.7）**：退化分支早已实现（`runSingle`）且经 `decideRoute`→`route.single` 在三端可达（core `tao.spec` + 新增 classifier `routing.spec` 守护）；function-calling vs 文本协议决策由 **ADR-001**（2026-06-30）记录（含代价与回退触发条件），RFC-001 §11 Q1 已关闭。
 
 ### 8.3 验证 & 可观测盘点
 
@@ -394,7 +394,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 弱/缺：
 - 性能承诺（RFC-001 §8 / RFC-002 §9）**无基准守护**
 - 记忆召回质量**未量化**（默认 64 维 hash embedder）
-- 钝化记忆"越用越好"**无长跑/A-B 可观测验证**
+- 钝化记忆"越用越好"：persona 注入已可用 `OPENINTJ_PERSONA=0/1` 做 A/B 对照（§12.4），但**尚无自动化长跑对照报告**
 - 真实工具缺失 → 端到端"任务完成度"**无法验证**
 - OTel 默认 no-op，**无现成 dashboard**
 
@@ -698,11 +698,16 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
   完整链路 distill→list→approve→active+status.skills schema 校验、approve ghost → not_found）。
   typecheck 全绿、biome touched 全过、desktop vitest 33+ 全过。
 
-### 11.6 仍未做（技能系统后续）
+### 11.6 技能系统后续（2026-07-08 已推进，见 §12.8）
 
-- 蒸馏质量：启发式 body 偏模板化，真价值靠 `llmDistill` 接 agent LLM；可加候选相似度去重（当前按 id）。
-- 工具子集/新工具绑定（技能目前只注入指令文本，不注册新工具、不做工具隔离）。
-- 权重衰减 / LRU（当前只累加+clamp，无时间衰减）。
+- ~~权重衰减 / LRU~~ ✅ 读时指数半衰期（`weightHalfLifeSec` / `OPENINTJ_SKILL_WEIGHT_HALFLIFE_SEC`）：`weightFor`
+  按距 `lastUsed` 的时长衰减，`reinforce` 累加前先衰减旧值；不设即历史行为。
+- ~~工具子集绑定~~ ✅ `Skill.tools`（frontmatter/sqlite/db 全链路）：文本协议下**软绑定**（技能块渲染「优先使用工具」行），
+  并经 `skillToolAllowlist` + `assembleSkillContext.onSelected` 暴露命中并集供装配方做工具面收窄。
+- ~~蒸馏质量~~ ✅ `createLlmSkillDistiller` 校验强化：name/body 必填 + body 最小长度 + 各字段截断 + triggers/tools
+  归一去重 + taskTypes 枚举校验 + 批内去重；新增 `llm-distill.spec`（12 例）。
+- 仍未做：新工具**注册/隔离**（当前只做软绑定 + allowlist 暴露，未在 ToolHub 层按技能硬收窄可用工具面）；
+  蒸馏候选**语义相似度**去重（当前按 id/name）。
 
 ---
 
@@ -756,3 +761,121 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
   （`shell-delete` 等）或超配额（默认 20/min）被拦。运行时 `policyEngine.block("write_file")` 可动态收紧。
 - **测试**：execution +4（gate 拒绝不触发熔断 / 放行 / afterCall 可观测但不 onError）；governance +6
   （checkToolCall 放行/黑名单/动态 block/配额 + createToolCallGate 放行/拦截）；cli +1 端到端拉黑拦截。
+
+### 12.4 钝化记忆 persona 注入闭环（RFC-003 §3.6 收官，2026-07-08）
+
+> 纠偏：旧盘点 §8.2 说「persona 从不注入」已过时——server/desktop 早在飞轮阶段就把
+> `dormant.personaSystemPrompt()` 接进了 `contextProvider`。本次补齐**其余四件**，让 §3.6 四条验收全绿。
+
+- **`getPersona()` 出口**（`packages/dormant/src/dormant-runtime.ts`）：语义等同 `snapshot()`，作为
+  装配层/UI 读「已生效人格」的规范入口名（§3.6 附录 A）。desktop `DORMANT_PERSONA` IPC 与 server
+  `GET /api/dormant/persona` 均切到 `getPersona()`。
+- **CLI 注入 parity**（`apps/cli/src/agent.ts`）：新增 `enableDormant`/`dormantOpts`/`enablePersona`。
+  CLI 为**内存态**（不挂 adapter、无需 hydrate）：`run()` 每轮 `record` 用户输入；`contextProvider`
+  在技能包/`[记忆参考]` 之前拼 `[用户画像]`。三端注入顺序统一：**persona → skills → 记忆参考**。
+- **A/B 杠杆**（`packages/shared/src/persona-config.ts` `resolvePersonaInjection`）：
+  `enablePersona`（opts）> `OPENINTJ_PERSONA`（env，`0`/`false` 关）> 默认开。三端 `contextProvider`
+  用它 gate persona 行——关闭即得「无 persona 基线组」，满足 §3.6 #3 可观测 A/B。
+- **脱敏**：`DormantRuntime.record()` 落库前默认过 `defaultRedactor`（邮箱/卡号/key/身份证/电话），
+  `redactor:null` 显式关闭。此前已实现，本次仅纳入验收确认。
+- **revoke 全链路**（§3.6 #4 可回退）：runtime/桌面 IPC 早已有；本次补 server
+  `POST /api/dormant/proposals/:id/revoke`（仅 `applied` 可撤，否则 404 `not_found_or_not_applied`）+
+  list 接受 `status=revoked` + `DormantPanel` 加「已撤销」tab 与 applied 卡片上的「撤销」按钮
+  （抄 `SkillPanel` 形态）。
+- **测试**：shared +4（`resolvePersonaInjection` 优先级）；cli +4（initialPersona 注入命中 `[用户画像]`、
+  `enablePersona:false` 不注入、record→mine→approve 全链路、未启用则 `agent.dormant` undefined 且不注入，
+  经 `react.beforeThought` 断言最终 system prompt）；server +2（revoke 删字段/version++/可 list、非 applied 404）。
+  typecheck + biome 全绿。
+
+### 12.5 RFC-004 workspace 能力面收官（2026-07-08）
+
+> 纠偏：旧盘点 §8.2 #4 说「workspace 读写 / config 面 / utility worker 全缺」——**后端其实早已在**
+> （WORKSPACE_READ/WRITE/INFO/PICK_DIR + `fs.watch → EVT_WORKSPACE` + `ConfigService`，均有契约测试、
+> 读写过治理 gate）。真正缺的是 **renderer 消费面**、**config 字段完整性/启动接线**、**utility 挖掘 worker**。
+
+- **设置面板**（`apps/desktop/src/renderer/components/SettingsPanel.tsx`，接进右栏「设置」tab）：
+  - 工作区段：`workspaceInfo()` 显示沙箱根/命令开关/白名单；「选择目录…」→ `workspacePickDir()`
+    （持久化到 config，下次启动生效）。
+  - 配置段：`getConfig()`/`updateConfig()` 编辑 llmProvider / retrievalMode + 7 个开关；改完提示「需重启生效」。
+  - 变更流段：`onWorkspaceEvent()` 实时列出 `fs.watch` 的 rename/change（最近 20 条）。
+- **config 字段补全**（`ipc-protocol.ts` `AppConfigSchema`）：新增 `enablePersona / enableSkills /
+  enableSkillLearning / enableClassifier`，并在 `main/index.ts` 启动装配时透传给 `assembleDesktopAgent`。
+- **utility 挖掘 worker**（`@openintj/dormant`，RFC-004 §2）：
+  - `mine-worker.ts`：`worker_threads` 入口，跑 `PatternMiner.mine`（仅可序列化 opts，无 `llmExtract`）。
+  - `worker-miner.ts`：`runMineInWorker`（真实线程）+ `mineWithWorkerFallback`（先 worker、任何失败回退内联，
+    `runner` 可注入便于测试）。
+  - `DormantRuntime` 加 `mineRunner` 选项 + `lastMineUsedWorker` 标记：配了且无 `llmExtract` 才下放；
+    带 `llmExtract`（LLM 在主线程）恒内联。desktop `OPENINTJ_DORMANT_WORKER=1` / `dormantMineWorker`
+    启用。dormant 包被 externalize，`dist/mine-worker.js` 随 node_modules 分发，`new URL(...import.meta.url)`
+    运行时可解析（已用真实线程 e2e 验证）。
+- **测试**：dormant +6（fallback 编排：worker 透传 / 抛错回退等价 PatternMiner / 空事件；DormantRuntime
+  mineRunner 接线：走 worker / llmExtract 不走 / 未配不走）；desktop config schema 扩展经现有 ipc-handlers
+  契约测试守护。typecheck + biome 全绿；真实 worker 线程手动 e2e 通过（3 patterns off-thread）。
+- **未做（明确留量）**：config 热重载（当前需重启；面板已标注）；renderer 无 jsdom 单测 → 面板交互留
+  Playwright；`skillLearning` 已入 config 但装配开关沿用 env（后续可接）。
+
+### 12.6 方向一并发原语接真实 agent：self-consistency 并发上限（2026-07-08）
+
+> 纠偏 §11「方向一/二并发原语只是原型」：§9.3 已把 `forkJoin` 接进三端自一致性主路径，但仍是**无界**
+> 全并发（N 个采样一次性打满 LLM）。本次补的是**有界并发**——把 `@openintj/concurrency` 的 `Semaphore`
+> 经 `forkJoin.concurrency` 真正用在产品路径上。
+
+- `forkJoin` 加 `concurrency` 选项（`ForkJoinOpts`）：`1..<items.length` 时用内部 `Semaphore` 限流——
+  拿到 permit 才调 `fn`，`finally` 释放；不传 / `<=0` / `>=items.length` → 全并发（历史行为不变，零开销）。
+- `SelfConsistencyConfig` 加 `maxConcurrency`；`resolveSelfConsistency` 从 `opts.maxConcurrency` >
+  `OPENINTJ_SELF_CONSISTENCY_CONCURRENCY` 解析（不设即全并发）。
+- cli/server/desktop 三端 `AgentOptions.selfConsistency` 加 `maxConcurrency`，`run()` 里透传给
+  `forkJoin({ concurrency })`——给昂贵的多采样设并发上限，避免一次性打满下游配额。
+- `@openintj/concurrency` index 头集成状态更新：`forkJoin` + `Semaphore`（经 `forkJoin.concurrency`）
+  标为**已接入产品路径**（自一致性），Mutex/Channel/CV/Pool/Backpressure 仍标实验性。
+- **测试**：concurrency +2（peak ≤ 上限；上限 ≥ 总数则全并发 peak 达总数）；shared self-consistency +4
+  （默认无 maxConcurrency / opts 透传 / env 读取 / opts 优先 env）。typecheck + biome 全绿。
+
+### 12.7 小缺口收口：enableReact:false 退化分支 + function-calling 决策文档化（2026-07-08）
+
+> 纠偏 §8.2 #5：两件"小缺口"其实在更早的会话已落地/已文档化，只是盘点未同步。本次核实、补测、纠盘点。
+
+- **`enableReact:false` 退化分支**：`ReactStateMachine.runSingle`（`react.ts`）——跳过 ReAct 微循环与工具
+  下发，做单次 LLM 调用直接作答，仍发 `react.beforeThought/afterThought/onStopCondition` 保持观测一致。
+  `TaoLoop.run` 按 `opts.enableReact ?? config.enableReact` 选 `run`/`runSingle`；三端 agent 经分类器
+  `decideRoute(cls).single`（高置信 + 简单类且非兜底）设 `enableReact:false`——纯对话/快速响应省 token/时延。
+- **可达性守护**：core `tao.spec` 已有「enableReact=false → 单次调用、不解析 Action、不调工具」用例；
+  本次补 `@openintj/classifier` `routing.spec`（`decideRoute` 的 single/topK 判定 6 例 + `outcomeSignal` 3 例），
+  锁定「分类 → 退化路由」这一段此前无专测的链路。
+- **function-calling 决策**：**ADR-001**（`docs/architecture/adr-001-react-tool-protocol.md`，2026-06-30 已采纳）
+  记录「ReAct 统一走文本协议（Thought/Action/FINAL）而非 OpenAI function-calling」的理由（本地优先/多 provider
+  中立、可观测、Python v2 parity）、代价（鲁棒性、token、无并行工具）、**重新评估触发条件**与迁移路径。
+  RFC-001 §11 Q1 已引用该 ADR 并标记关闭。
+
+### 12.8 #12 parity 扩展（ContextEngine/Hooks）+ 技能系统后续（2026-07-08）
+
+**A. parity 扩展（`scripts/python-parity/generate_fixtures.py` +2 slice，core 55→81 parity 测试）**
+
+> 两端 `build_context` 整体架构不同（Python `ConversationMessage`+`token//4` vs TS `ShaderPipeline`+`estimateTokens`），
+> 全量 ContextEngine parity 代价大且脆。改为锁定其**确定性内核**与**共享枚举契约**——真正跨实现必须一致的部分。
+
+- **context slice**（`ts/packages/core/__tests__/parity/{context.spec.ts,fixtures/context.json}`，+12）：
+  `ContextBudget` 算术（`availableTokens`/`usageRatio`/`memoryBudget`/`needsCompaction@[0.5,0.8,0.9]`，6 组预算）
+  与 `ShaderConfig.get_shader_for_task`（6 类 → shader mode）在 Python ↔ TS `ContextBudgetTracker`/`getShaderForTask`
+  逐值等价（usageRatio 12 位小数）。
+- **taxonomy slice**（`taxonomy.spec.ts`/`taxonomy.json`，+14）：这是 Python v2「Hooks/事件」最接近的对齐面——
+  HookBus 发的框架事件用同一套 `EventType`。断言 `EventType`/`CommandType` 逐条相等；`ErrorCode` **Python ⊆ TS**
+  （TS 多出 `HOOK_ERROR`/`STATE_TRANSITION_INVALID`/`LOOP_LIMIT_REACHED`/`REACT_DUPLICATE_LOOP` 等 hook/react 专用码）。
+- **HookBus 本体无 Python 对手**：Python v2 用局部 `events: List[Event]`，无 HookBus 抽象，故无「HookBus 行为」跨实现
+  parity 目标；其行为由 core 单测 + `hook-bus-bench` + concurrency observability 测试守护。parity 只锁其**事件/错误码分类**。
+- 生成器只读 Python v2（冻结）；`context.json`/`taxonomy.json` 为新增确定性 fixture。memory/governance fixture 含
+  `time.time()` 与浮点末位，重跑会漂动 → 本次未随之改动（保持既有）。
+
+**B. 技能系统后续（`@openintj/skills`）**
+
+- **权重衰减**：`SkillLearningRuntimeOpts.weightHalfLifeSec`（或 env `OPENINTJ_SKILL_WEIGHT_HALFLIFE_SEC`，
+  `resolveSkillWeightHalfLifeSec` 三端接线）。读时指数衰减 `w*0.5^(age/halfLife)`：`weightFor` 供选择器偏置随冷却
+  自然回落，`reinforce` 累加前先把旧值衰减到当下（陈旧高权重不永久霸榜）。不设 → 历史行为。
+- **工具子集绑定**：`Skill.tools`（frontmatter `tools:` 解析 / sqlite `SkillSchema` default [] 向后兼容 / db 源透传 /
+  蒸馏草案携带）。文本协议下**软绑定**：`renderSkillPrompt` 命中技能追加「建议优先使用工具：…」引导 Action；
+  `skillToolAllowlist` 求命中并集，经 `assembleSkillContext.onSelected(query,taskType,ids,tools)` 暴露供装配方收窄。
+  内建 seed（code-review/debugging/web-research）已声明 tools 示例。
+- **蒸馏质量**：`createLlmSkillDistiller` 校验强化 —— name/body 必填 + body 最小长度（默认 16）+ name/desc/body 截断 +
+  triggers/tools 归一去重 + taskTypes 校验到合法 `TaskType`（过滤幻觉）+ 批内按 id/name 去重；prompt schema 加 tools/taskTypes 约束。
+- **测试**：skills 38→58（decay 4 + resolver 5 + tools（fs/selector/allowlist）+ llm-distill 12）；storage-sqlite skills +1
+  （tools JSON 往返 + 旧行默认 []）。typecheck + biome 全绿。

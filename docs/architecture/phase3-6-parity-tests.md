@@ -38,8 +38,16 @@
 | control | `@openintj/plane-control` | `GoalParser.parse`, `Planner.createPlan` | **21** |
 | execution | `@openintj/plane-execution` | `StepStateMachine.transition`, `Executor.execute` 事件轨迹 | **17** |
 | memory | `@openintj/plane-memory` | `MemoryStore` overflow, `MemoryRetriever` 评分组件 + 排序 | **3** |
+| governance | `@openintj/plane-governance` | `PolicyEngine.check`（2026-07-08，见 next-session §9.6） | **9** |
+| context | `@openintj/core` | `ContextBudget` 算术 + `ShaderConfig.get_shader_for_task`（ContextEngine 确定性内核，2026-07-08，§12.8） | **12** |
+| taxonomy | `@openintj/core` | `EventType` / `CommandType` / `ErrorCode` 枚举契约（Hooks/事件最接近的对齐面，2026-07-08，§12.8） | **14** |
 
-合计 **64 个 parity 测试**，全部跑在 CI 的 vitest 里（无需 Python）。
+合计 **99 个 parity 测试**，全部跑在 CI 的 vitest 里（无需 Python）。
+
+> **ContextEngine / HookBus 说明**：两端 `build_context` 整体架构不同（Python `ConversationMessage`+`token//4` vs
+> TS `ShaderPipeline`+`estimateTokens`），全量 parity 代价大且脆，故只锁 **ContextBudget 算术 + task→shader 映射** 这一确定性
+> 内核。HookBus 是 TS-only 抽象（Python v2 用局部 `events: List[Event]`，无等价物），因此**无「HookBus 行为」跨实现 parity
+> 目标**；其行为由 core 单测 + `hook-bus-bench` + concurrency observability 守护，parity 仅锁其**事件/错误码分类**（taxonomy slice）。
 
 ### 2.3 容差策略
 

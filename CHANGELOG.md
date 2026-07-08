@@ -4,6 +4,149 @@
 版本号沿用 [SemVer](https://semver.org/lang/zh-CN/) 与
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 
+## [Unreleased] —— #3 嵌入基准 xenova 真实数字回填 (2026-07-08)
+
+> 收尾项：本机实跑 `RUN_EMBED_COMPARE=1`，把 `xenova`（`Xenova/all-MiniLM-L6-v2`，384 维）真实检索质量回填基准表。
+
+### Benchmarks
+
+- **xenova 实测**：纯 cosine（隔离语义）**0.944 nDCG@4**（simple 仅 0.396）、产品路径 **1.000**（simple 0.773）——
+  神经句向量把隔离语义召回翻倍多，兑现了此前「预期收益空间」。见 `docs/architecture/retrieval-benchmark.md`。
+- **默认选型结论**：CI/无依赖环境保持 `simple`（零依赖、可回归守护）；质量敏感且可接受本地模型的部署默认切 `xenova`
+  （首跑下载 ~80MB 权重，之后离线可用，无需外部服务）。ollama 待本机 `ollama serve` 后回填（本次 `fetch failed` 跳过）。
+
+### Chore
+
+- `@openintj/plane-memory` devDeps 加 `@openintj/embed-xenova` / `@openintj/embed-ollama`（workspace，零外部重量），
+  修复三方对比 harness 的可选 `import()` 在 vitest 下无法解析问题。`@xenova/transformers` 仍为 embed-xenova 的**可选 peer dep**
+  （不进 root 硬依赖），按需 `pnpm -w add @xenova/transformers`。
+
+## [Unreleased] —— #6 打包发布核实 + 发布运行手册 (2026-07-08)
+
+> 核实 #6 已实现就绪（electron-builder + electron-updater + CI release + UpdateBanner，全链路接线且有测试），
+> 补发布运行手册并纠正过时盘点（路线表 #6「待办」→ 实现就绪）。本次纯文档，无代码改动。
+
+### Docs
+
+- 新增 `docs/architecture/release-packaging.md`：本地打包命令、CI 切 release 流程（tag `v*` → `--publish always`）、
+  updater 验证、以及**已知手动缺口**（品牌图标、代码签名、Linux CI、首个正式 release 未切）。
+- 纠正 `next-session.md` 路线表 #6/#12 与「下一站」清单：#6/#10/#12/#11 均已完成，实质剩项仅 #3 的 xenova/ollama 真实数字回填。
+
+## [Unreleased] —— #12 parity 扩展（ContextEngine/Hooks）+ 技能系统后续（权重衰减/工具绑定/蒸馏质量） (2026-07-08)
+
+> parity 网从 5 slice 扩到 7（core 新增 context + taxonomy）；技能自学习补齐权重衰减、工具子集绑定、蒸馏校验。
+> 详见 `docs/architecture/next-session.md` §12.8、`docs/architecture/phase3-6-parity-tests.md`。
+
+### Added
+
+- **parity: context slice**（`@openintj/core`）：锁定 ContextEngine 确定性内核 —— `ContextBudget` 算术
+  （`availableTokens`/`usageRatio`/`memoryBudget`/`needsCompaction`）与 `ShaderConfig.get_shader_for_task`
+  在 Python v2 ↔ TS `ContextBudgetTracker`/`getShaderForTask` 逐值等价（+12 测试）。
+- **parity: taxonomy slice**（`@openintj/core`）：`EventType`/`CommandType` 与 Python 逐条相等；`ErrorCode`
+  Python ⊆ TS（TS 多出 hook/react 专用码）。这是 HookBus 事件最接近的跨实现对齐面（+14 测试）。
+- **技能权重衰减**：`SkillLearningRuntimeOpts.weightHalfLifeSec` + env `OPENINTJ_SKILL_WEIGHT_HALFLIFE_SEC`
+  + `resolveSkillWeightHalfLifeSec`（三端接线）。读时指数半衰期：`weightFor` 随冷却回落，`reinforce` 累加前先衰减旧值。
+- **技能工具子集绑定**：`Skill.tools`（frontmatter/sqlite/db 全链路）。文本协议下软绑定（`renderSkillPrompt` 追加
+  「建议优先使用工具」行），`skillToolAllowlist` + `assembleSkillContext.onSelected` 暴露命中并集供装配方收窄。
+  内建 seed 技能已声明 tools 示例。
+
+### Changed
+
+- **`createLlmSkillDistiller` 校验强化**：name/body 必填 + body 最小长度 + 字段截断 + triggers/tools 归一去重 +
+  taskTypes 校验到合法 `TaskType`（过滤幻觉）+ 批内按 id/name 去重；prompt schema 增加 tools/taskTypes 约束。
+- **parity 生成器**：`scripts/python-parity/generate_fixtures.py` 新增 `gen_context` / `gen_taxonomy`（只读 Python v2 冻结实现）。
+
+### Tests
+
+- core parity 55→81（+context 12 +taxonomy 14；含既有 governance 9）；skills 38→58；storage-sqlite skills +1
+  （tools JSON 往返 + 旧行默认 []）。
+
+## [Unreleased] —— 小缺口收口：enableReact:false 退化分支 + function-calling 决策文档化 (2026-07-08)
+
+> 两件"小缺口"其实在更早会话已落地/已文档化（`runSingle` 退化路径 + ADR-001），盘点未同步。本次核实、
+> 补测、纠盘点。详见 `docs/architecture/next-session.md` §12.7。
+
+### Tests
+
+- `@openintj/classifier` 新增 `routing.spec`：`decideRoute`（高置信简单类 → `single=true`/小 topK；fallback /
+  低置信 / 非简单类 → `single=false`/默认 topK；policy 覆盖）6 例 + `outcomeSignal` 3 例——锁定「分类 →
+  `enableReact:false` 退化路由」此前无专测的链路（退化分支本身早由 core `tao.spec` 守护）。
+
+### Docs
+
+- 纠正盘点 `next-session.md` §8.1（RFC-001 行）/§8.2 #5：`enableReact:false` 退化分支已实现（`runSingle`）且
+  经 `decideRoute` 可达；function-calling vs 文本协议决策由 **ADR-001** 记录、RFC-001 §11 Q1 已关闭。
+
+## [Unreleased] —— 方向一并发原语接真实 agent：self-consistency 并发上限 (2026-07-08)
+
+> §9.3 已把 `forkJoin` 接进三端自一致性主路径，但仍是无界全并发。本次把 `@openintj/concurrency` 的
+> `Semaphore` 经 `forkJoin.concurrency` 真正用在产品路径——给多采样设并发上限。详见
+> `docs/architecture/next-session.md` §12.6。
+
+### Added
+
+- **`forkJoin` 并发上限**（`@openintj/concurrency`）：新增 `ForkJoinOpts.concurrency`——`1..<总数` 时用内部
+  `Semaphore` 限流（拿到 permit 才执行，`finally` 释放）；不设 / `<=0` / `>=总数` → 全并发（行为不变，零开销）。
+- **自一致性并发上限**：`SelfConsistencyConfig` 新增 `maxConcurrency`；`resolveSelfConsistency` 从
+  `opts.maxConcurrency` > env `OPENINTJ_SELF_CONSISTENCY_CONCURRENCY` 解析。cli/server/desktop 三端
+  `selfConsistency` 选项新增 `maxConcurrency`，`run()` 透传给 `forkJoin({ concurrency })`——避免多采样一次性打满
+  LLM 配额。
+
+### Changed
+
+- `@openintj/concurrency` 集成状态注释更新：`forkJoin` + `Semaphore`（经 `forkJoin.concurrency`）标为**已接入
+  产品路径**（自一致性）；Mutex/Channel/CV/Pool/Backpressure 仍标实验性。
+
+### Tests
+
+- concurrency +2（同时在跑子任务 peak ≤ 上限；上限 ≥ 总数则全并发 peak 达总数）；
+  shared self-consistency +4（默认无 `maxConcurrency` / opts 透传 / env 读取 / opts 优先 env）。
+
+## [Unreleased] —— RFC-004 workspace 能力面收官（设置 UI + config + utility worker） (2026-07-08)
+
+> workspace 读写/watch + config 服务后端此前已在；本次补 renderer 消费面、config 字段完整性与启动接线、
+> 以及把 CPU 密集的钝化挖掘下放 worker 线程。详见 `docs/architecture/next-session.md` §12.5。
+
+### Added
+
+- **桌面「设置」面板**（`SettingsPanel`）：消费既有 workspace/config IPC——显示沙箱信息、选择工作区目录、
+  编辑 `AppConfig`（provider/检索模式 + 7 个开关）、实时展示 `fs.watch` 工作区变更（`onWorkspaceEvent`）。
+- **`AppConfig` 字段补全**：新增 `enablePersona / enableSkills / enableSkillLearning / enableClassifier`，
+  启动时透传给 `assembleDesktopAgent`（改动需重启生效，面板已标注）。
+- **utility 挖掘 worker**（`@openintj/dormant`）：`runMineInWorker`（`worker_threads`）+
+  `mineWithWorkerFallback`（失败回退内联）；`DormantRuntime` 新增 `mineRunner` 选项 + `lastMineUsedWorker`
+  标记；desktop `dormantMineWorker` / env `OPENINTJ_DORMANT_WORKER=1` 启用（仅无 `llmExtract` 时下放）。
+
+### Tests
+
+- dormant +6（worker 透传 / 抛错回退与 `PatternMiner` 等价 / 空事件；`mineRunner` 走 worker / `llmExtract`
+  不走 / 未配不走）。真实 worker 线程手动 e2e 通过。
+
+## [Unreleased] —— 钝化记忆 persona 注入闭环（RFC-003 §3.6 收官） (2026-07-08)
+
+> server/desktop 早已注入 persona，本次补齐其余四件让 §3.6 四条验收全绿：`getPersona()` 出口、
+> CLI 注入 parity、A/B 杠杆、revoke 的 server/UI 收尾（脱敏此前已默认生效）。详见
+> `docs/architecture/next-session.md` §12.4。
+
+### Added
+
+- **`DormantRuntime.getPersona()`**：读「已生效 PersonaConfig」的规范出口（语义等同 `snapshot()`）；
+  desktop `DORMANT_PERSONA` IPC 与 server `GET /api/dormant/persona` 均切到它。
+- **CLI 钝化记忆**（`@openintj/cli`）：新增 `enableDormant`/`dormantOpts`/`enablePersona`（env
+  `OPENINTJ_DORMANT=1`）。内存态运行：每轮 `record` 用户输入，`contextProvider` 注入 `[用户画像]`
+  （顺序统一为 persona → skills → `[记忆参考]`）。
+- **persona 注入 A/B 杠杆**：`@openintj/shared` 新增 `resolvePersonaInjection`；三端新增
+  `enablePersona` 选项 + env `OPENINTJ_PERSONA`（`0`/`false` 关，默认开）——关闭即得无 persona 基线组
+  （§3.6 #3）。
+- **server persona 撤销路由**：`POST /api/dormant/proposals/:id/revoke`（仅 `applied` 可撤，否则 404
+  `not_found_or_not_applied`）；`GET /api/dormant/proposals` 接受 `status=revoked`。
+- **DormantPanel 撤销 UI**：新增「已撤销」tab 与 applied 卡片上的「撤销」按钮（抄 `SkillPanel` 形态）。
+
+### Tests
+
+- shared +4（`resolvePersonaInjection` 优先级）、cli +4（注入命中 / A/B 不注入 / 全链路 / 未启用不注入，
+  经 `react.beforeThought` 断言最终 system prompt）、server +2（revoke 删字段 + version++ + list；非 applied 404）。
+
 ## [Unreleased] —— 治理接进工具执行（RFC-004 §8：策略/配额门禁） (2026-07-08)
 
 > `GovernancePlane` 三端早已构造却从不被调用——工具执行链路无策略/配额门禁。本次把治理接进
