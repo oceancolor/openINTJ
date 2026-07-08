@@ -293,6 +293,11 @@ export interface DesktopAgent {
       pendingProposals: number;
       persistence?: { adapter: string; dbPath?: string };
     };
+    skills?: {
+      enabled: true;
+      pendingProposals: number;
+      activeSkills: number;
+    };
   };
   close(): Promise<void>;
 }
@@ -610,6 +615,15 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
                 passiveSize: dormant.passiveSize(),
                 pendingProposals: dormant.listProposals("pending").length,
                 ...(dormantPersistenceInfo ? { persistence: dormantPersistenceInfo } : {}),
+              },
+            }
+          : {}),
+        ...(skillLearning
+          ? {
+              skills: {
+                enabled: true as const,
+                pendingProposals: skillLearning.listProposals("pending").length,
+                activeSkills: skillLearning.listApproved().length,
               },
             }
           : {}),

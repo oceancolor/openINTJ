@@ -7,6 +7,10 @@ import {
   DormantPersonaResponseSchema,
   IPC,
   MemoryQueryRequestSchema,
+  SkillActiveResponseSchema,
+  SkillDecisionResponseSchema,
+  SkillDistillResponseSchema,
+  SkillListResponseSchema,
   StatusResponseSchema,
 } from "../src/shared/ipc-protocol.js";
 
@@ -677,6 +681,116 @@ describe("IPC handler registration", () => {
       error?: string;
     };
     expect(r.error).toBe("invalid_request");
+  });
+
+  // ---------- 技能自学习 Phase 2：审批 IPC 契约 ----------
+
+  it("技能自学习 IPC 未启用时统一返回 skills_learning_not_enabled", async () => {
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
+
+    for (const ch of [
+      IPC.SKILLS_DISTILL,
+      IPC.SKILLS_LIST,
+      IPC.SKILLS_APPROVE,
+      IPC.SKILLS_REJECT,
+      IPC.SKILLS_REVOKE,
+      IPC.SKILLS_ACTIVE,
+    ]) {
+      const r = (await handlers.get(ch)?.({}, { proposalId: "x" })) as { error?: string };
+      expect(r.error).toBe("skills_learning_not_enabled");
+    }
+  });
+
+  it("注册了所有 skill channel", async () => {
+    const handle = vi.fn();
+    const removeHandler = vi.fn();
+    const fakeIpc = { handle, removeHandler } as unknown as Parameters<
+      typeof registerIpcHandlers
+    >[2];
+    const agent = await assembleDesktopAgent({ llmProvider: "mock", enableSkillLearning: true });
+    const reg = registerIpcHandlers(agent, undefined, fakeIpc);
+    const channels = handle.mock.calls.map((c) => c[0] as string);
+    expect(channels).toContain(IPC.SKILLS_DISTILL);
+    expect(channels).toContain(IPC.SKILLS_LIST);
+    expect(channels).toContain(IPC.SKILLS_APPROVE);
+    expect(channels).toContain(IPC.SKILLS_REJECT);
+    expect(channels).toContain(IPC.SKILLS_REVOKE);
+    expect(channels).toContain(IPC.SKILLS_ACTIVE);
+    reg.unregister();
+    await agent.close();
+  });
+
+  it("技能完整链路：成功轨迹 → distill → list → approve → active + status.skills", async () => {
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock", enableSkillLearning: true });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
+
+    // 直接喂成功轨迹（默认 minSamplesToDistill=3，taskType 缺省聚成 general 簇）。
+    for (const q of [
+      "review my python function for bugs",
+      "review this java function for bugs",
+      "review the typescript function for correctness",
+    ]) {
+      agent.skillLearning!.recordOutcome(q, undefined, "completed", {
+        finalAnswer: "done",
+        toolsUsed: ["read_file"],
+      });
+    }
+
+    const distillRaw = await handlers.get(IPC.SKILLS_DISTILL)?.({}, undefined);
+    const distillParsed = SkillDistillResponseSchema.safeParse(distillRaw);
+    expect(distillParsed.success).toBe(true);
+    if (!distillParsed.success) return;
+    expect(distillParsed.data.produced).toBeGreaterThan(0);
+
+    const listRaw = await handlers.get(IPC.SKILLS_LIST)?.({}, { status: "pending" });
+    const listParsed = SkillListResponseSchema.safeParse(listRaw);
+    expect(listParsed.success).toBe(true);
+    if (!listParsed.success) return;
+    expect(listParsed.data.total).toBeGreaterThan(0);
+    const first = listParsed.data.proposals[0]!;
+    expect(first.evidence.count).toBeGreaterThan(0);
+
+    const approveRaw = await handlers.get(IPC.SKILLS_APPROVE)?.(
+      {},
+      { proposalId: first.proposalId },
+    );
+    const approveParsed = SkillDecisionResponseSchema.safeParse(approveRaw);
+    expect(approveParsed.success).toBe(true);
+    if (approveParsed.success) expect(approveParsed.data.status).toBe("approved");
+
+    const activeRaw = await handlers.get(IPC.SKILLS_ACTIVE)?.({}, undefined);
+    const activeParsed = SkillActiveResponseSchema.safeParse(activeRaw);
+    expect(activeParsed.success).toBe(true);
+    if (activeParsed.success) {
+      expect(activeParsed.data.total).toBeGreaterThan(0);
+      expect(activeParsed.data.skills[0]!.id).toBe(first.skillId);
+    }
+
+    // status.skills 反映生效技能数，且通过全字段 schema 校验。
+    const statusRaw = await handlers.get(IPC.STATUS)?.({}, undefined);
+    const statusParsed = StatusResponseSchema.safeParse(statusRaw);
+    expect(statusParsed.success).toBe(true);
+    if (statusParsed.success) {
+      expect(statusParsed.data.skills?.enabled).toBe(true);
+      expect(statusParsed.data.skills?.activeSkills).toBeGreaterThan(0);
+    }
+
+    await agent.close();
+  });
+
+  it("SKILLS_APPROVE 不存在 proposalId 返回 not_found_or_already_decided", async () => {
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock", enableSkillLearning: true });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
+
+    const r = (await handlers.get(IPC.SKILLS_APPROVE)?.({}, { proposalId: "ghost" })) as {
+      error?: string;
+    };
+    expect(r.error).toBe("not_found_or_already_decided");
+    await agent.close();
   });
 
   it("注册了所有 workspace + config channel", async () => {

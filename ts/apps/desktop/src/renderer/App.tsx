@@ -2,12 +2,13 @@ import React from "react";
 import { type ChatMessage, ChatPanel } from "./components/ChatPanel.js";
 import { DormantPanel } from "./components/DormantPanel.js";
 import { MemoryPanel } from "./components/MemoryPanel.js";
+import { SkillPanel } from "./components/SkillPanel.js";
 import { StatusBar, type StatusSnapshot } from "./components/StatusBar.js";
 import { type TrajectoryEntry, TrajectoryPanel } from "./components/TrajectoryPanel.js";
 import { UpdateBanner } from "./components/UpdateBanner.js";
 import "./types.js";
 
-type RightTab = "trajectory" | "memory" | "dormant";
+type RightTab = "trajectory" | "memory" | "dormant" | "skills";
 
 export const App = (): JSX.Element => {
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
@@ -96,6 +97,8 @@ export const App = (): JSX.Element => {
 
   const dormantEnabled = status?.dormant?.enabled === true;
   const dormantPending = status?.dormant?.pendingProposals ?? 0;
+  const skillsEnabled = status?.skills?.enabled === true;
+  const skillsPending = status?.skills?.pendingProposals ?? 0;
 
   return (
     <div className="flex flex-col h-screen text-gray-200">
@@ -149,14 +152,32 @@ export const App = (): JSX.Element => {
                 </span>
               ) : null}
             </button>
+            <button
+              type="button"
+              onClick={() => setRightTab("skills")}
+              className={
+                rightTab === "skills"
+                  ? "px-3 py-2 text-gray-100 border-b-2 border-purple-500"
+                  : "px-3 py-2 text-gray-500 hover:text-gray-300"
+              }
+            >
+              技能
+              {skillsEnabled && skillsPending > 0 ? (
+                <span className="ml-1.5 px-1.5 py-0.5 rounded text-[10px] bg-yellow-700 text-yellow-100">
+                  {skillsPending}
+                </span>
+              ) : null}
+            </button>
           </div>
           <div className="flex-1 min-h-0">
             {rightTab === "trajectory" ? (
               <TrajectoryPanel entries={trajectory} />
             ) : rightTab === "memory" ? (
               <MemoryPanel />
-            ) : (
+            ) : rightTab === "dormant" ? (
               <DormantPanel enabled={dormantEnabled} />
+            ) : (
+              <SkillPanel enabled={skillsEnabled} />
             )}
           </div>
         </div>

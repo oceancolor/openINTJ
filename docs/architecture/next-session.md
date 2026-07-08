@@ -1,7 +1,9 @@
 # 下一次工作交接备忘
 
 > 本文件用于工作中断 / 多日离开后快速恢复上下文。
-> 上次更新：2026-07-07（**技能系统 Phase 2**：自学习闭环——outcome 给命中技能加权 + 成功轨迹蒸馏
+> 上次更新：2026-07-08（**桌面「技能审批」UI 面板**：右侧栏「技能」tab——蒸馏 / 审批候选 / 查看
+> 生效技能+权重，把 Phase 2 自学习闭环接到桌面端；见 §11.5）。
+> 此前 2026-07-07：**技能系统 Phase 2**：自学习闭环——outcome 给命中技能加权 + 成功轨迹蒸馏
 > 候选技能 → 人审批 → 写 DB 源并立即重载生效，opt-in `OPENINTJ_SKILLS_LEARN=1` 默认关；见 §11.4）。
 > 此前 2026-07-01：**技能系统 Phase 1**（新包 `@openintj/skills`，作者能力包 `SKILL.md` +
 > 两级「目录 + 嵌入检索」按需注入，opt-in `OPENINTJ_SKILLS=1` 默认关；见 [§十一](#十一技能系统phase-1-作者能力包2026-07-01)）。
@@ -671,9 +673,27 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
   skills 32 / storage-sqlite 31 / telemetry-otel 21 / server 55(+8 skip) / cli 18 全过。
 - **env 开关**（默认关）：`OPENINTJ_SKILLS_LEARN=1`。
 
-### 11.5 仍未做（技能系统后续）
+### 11.5 桌面「技能审批」UI 面板（2026-07-08，已实现）
 
-- 桌面「技能审批」UI 面板（IPC/preload 已就绪，抄 `DormantPanel` 即可）。
+> 把 Phase 2 自学习闭环接到用户手上——此前只有 HTTP/IPC 后端，桌面端没界面。抄 `DormantPanel` 落地。
+
+- **新组件 `SkillPanel.tsx`**（`renderer/components/`）：右侧栏第 4 个 tab「技能」。
+  - 顶部「蒸馏」按钮 → `skillsDistill()`（成功轨迹提炼候选技能提案）。
+  - status filter：pending / approved / rejected / revoked / all；每条提案显示技能名 / 描述 /
+    证据（命中次数 + taskType + 示例 query）。
+  - pending → ✓批准 / ✗拒绝；approved → 撤销。底部「生效技能」折叠区显示当前学习技能 + 权重。
+  - `status.skills === undefined`（未启用 `OPENINTJ_SKILLS_LEARN`）→ 显示未启用提示 + 启用方法。
+- **状态贯通**：`ipc-protocol` 新增 `SkillProposalDto`/`SkillListResponse`/`SkillDistillResponse`/
+  `SkillDecisionResponse`/`SkillActiveDto`/`SkillActiveResponse`/`SkillLearningError` schema +
+  `StatusResponse.skills`（`{enabled, pendingProposals, activeSkills}`）；desktop `agent.status()`
+  暴露 `skills`；preload 6 个 skill API 从 `Promise<unknown>` 收窄到精确联合类型。
+  `App.tsx` 用 `status.skills.pendingProposals` 给 tab 加待审批角标（同 Dormant）。
+- **测试**：`ipc-handlers.spec.ts` 扩到 31（+4：未启用统一 `skills_learning_not_enabled`、注册全 channel、
+  完整链路 distill→list→approve→active+status.skills schema 校验、approve ghost → not_found）。
+  typecheck 全绿、biome touched 全过、desktop vitest 33+ 全过。
+
+### 11.6 仍未做（技能系统后续）
+
 - 蒸馏质量：启发式 body 偏模板化，真价值靠 `llmDistill` 接 agent LLM；可加候选相似度去重（当前按 id）。
 - 工具子集/新工具绑定（技能目前只注入指令文本，不注册新工具、不做工具隔离）。
 - 权重衰减 / LRU（当前只累加+clamp，无时间衰减）。

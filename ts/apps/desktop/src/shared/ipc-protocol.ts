@@ -66,6 +66,14 @@ export const StatusResponseSchema = z.object({
         .optional(),
     })
     .optional(),
+  /** 技能自学习（Phase 2）：只有 enableSkillLearning 时存在。 */
+  skills: z
+    .object({
+      enabled: z.literal(true),
+      pendingProposals: z.number(),
+      activeSkills: z.number(),
+    })
+    .optional(),
 });
 export type StatusResponse = z.infer<typeof StatusResponseSchema>;
 
@@ -111,6 +119,71 @@ export const SkillListRequestSchema = z.object({
   status: z.enum(["pending", "approved", "rejected", "revoked"]).optional(),
 });
 export type SkillListRequest = z.infer<typeof SkillListRequestSchema>;
+
+/** 技能提案 DTO（main → renderer；来自 learning-runtime 的 SkillProposal 投影）。 */
+export const SkillProposalDtoSchema = z.object({
+  proposalId: z.string(),
+  skillId: z.string(),
+  name: z.string(),
+  description: z.string(),
+  status: z.enum(["pending", "approved", "rejected", "revoked"]),
+  ts: z.number(),
+  decidedAt: z.number().optional(),
+  evidence: z.object({
+    queries: z.array(z.string()),
+    taskType: z.string().optional(),
+    count: z.number(),
+  }),
+});
+export type SkillProposalDto = z.infer<typeof SkillProposalDtoSchema>;
+
+export const SkillListResponseSchema = z.object({
+  total: z.number(),
+  proposals: z.array(SkillProposalDtoSchema),
+});
+export type SkillListResponse = z.infer<typeof SkillListResponseSchema>;
+
+export const SkillDistillResponseSchema = z.object({
+  produced: z.number(),
+  proposals: z.array(SkillProposalDtoSchema),
+});
+export type SkillDistillResponse = z.infer<typeof SkillDistillResponseSchema>;
+
+export const SkillDecisionResponseSchema = z.object({
+  proposalId: z.string(),
+  status: z.enum(["pending", "approved", "rejected", "revoked"]),
+  decidedAt: z.number().optional(),
+});
+export type SkillDecisionResponse = z.infer<typeof SkillDecisionResponseSchema>;
+
+/** 当前生效的学习技能 + 权重。 */
+export const SkillActiveDtoSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  source: z.string().optional(),
+  weight: z.number(),
+});
+export type SkillActiveDto = z.infer<typeof SkillActiveDtoSchema>;
+
+export const SkillActiveResponseSchema = z.object({
+  total: z.number(),
+  skills: z.array(SkillActiveDtoSchema),
+});
+export type SkillActiveResponse = z.infer<typeof SkillActiveResponseSchema>;
+
+/** 技能自学习未启用 / 请求非法时的统一错误 shape。 */
+export const SkillLearningErrorSchema = z.object({
+  error: z.union([
+    z.literal("skills_learning_not_enabled"),
+    z.literal("invalid_request"),
+    z.literal("not_found_or_already_decided"),
+    z.literal("not_found_or_not_approved"),
+  ]),
+  issues: z.array(z.unknown()).optional(),
+  hint: z.string().optional(),
+});
+export type SkillLearningError = z.infer<typeof SkillLearningErrorSchema>;
 
 /** ?? proposal ??IPC ???????pattern ????description???*/
 export const DormantProposalDtoSchema = z.object({

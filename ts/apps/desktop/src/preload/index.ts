@@ -22,7 +22,12 @@ import {
   IPC,
   type MemoryQueryRequest,
   type MemoryQueryResult,
+  type SkillActiveResponse,
+  type SkillDecisionResponse,
+  type SkillDistillResponse,
+  type SkillLearningError,
   type SkillListRequest,
+  type SkillListResponse,
   type SkillProposalDecision,
   type StatusResponse,
   type WorkspaceError,
@@ -100,27 +105,27 @@ const api = {
   },
   // ---------- 技能自学习 (Phase 2) ----------
   /** 触发一次蒸馏：成功轨迹 → 候选技能 pending 提案。 */
-  skillsDistill(): Promise<unknown> {
+  skillsDistill(): Promise<SkillDistillResponse | SkillLearningError> {
     return ipcRenderer.invoke(IPC.SKILLS_DISTILL);
   },
   /** 列出技能提案；不传 status 返回所有状态。 */
-  skillsList(req?: SkillListRequest): Promise<unknown> {
+  skillsList(req?: SkillListRequest): Promise<SkillListResponse | SkillLearningError> {
     return ipcRenderer.invoke(IPC.SKILLS_LIST, req ?? {});
   },
   /** 批准一条提案 → 写入生效技能并重载注册表。 */
-  skillsApprove(req: SkillProposalDecision): Promise<unknown> {
+  skillsApprove(req: SkillProposalDecision): Promise<SkillDecisionResponse | SkillLearningError> {
     return ipcRenderer.invoke(IPC.SKILLS_APPROVE, req);
   },
   /** 拒绝一条提案。 */
-  skillsReject(req: SkillProposalDecision): Promise<unknown> {
+  skillsReject(req: SkillProposalDecision): Promise<SkillDecisionResponse | SkillLearningError> {
     return ipcRenderer.invoke(IPC.SKILLS_REJECT, req);
   },
   /** 撤销一条已批准技能 → 从生效集移除并重载注册表。 */
-  skillsRevoke(req: SkillProposalDecision): Promise<unknown> {
+  skillsRevoke(req: SkillProposalDecision): Promise<SkillDecisionResponse | SkillLearningError> {
     return ipcRenderer.invoke(IPC.SKILLS_REVOKE, req);
   },
   /** 当前生效的学习技能 + 权重。 */
-  skillsActive(): Promise<unknown> {
+  skillsActive(): Promise<SkillActiveResponse | SkillLearningError> {
     return ipcRenderer.invoke(IPC.SKILLS_ACTIVE);
   },
   onTaoEvent(cb: (payload: unknown) => void): () => void {

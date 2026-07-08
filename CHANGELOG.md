@@ -4,6 +4,25 @@
 版本号沿用 [SemVer](https://semver.org/lang/zh-CN/) 与
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 
+## [Unreleased] —— 桌面「技能审批」UI 面板 (2026-07-08)
+
+> 把技能系统 Phase 2 的自学习闭环接到桌面端用户手上——此前只有 HTTP/IPC 后端。抄 `DormantPanel`
+> 落地一个「技能」tab：蒸馏 → 审批候选提案 → 查看生效技能与权重。详见
+> `docs/architecture/next-session.md` §11.5。
+
+### Added
+
+- **`SkillPanel.tsx`**（desktop renderer）：右侧栏第 4 个 tab「技能」。顶部「蒸馏」按钮触发轨迹蒸馏；
+  status filter（pending / approved / rejected / revoked / all）；pending 提案可✓批准/✗拒绝，
+  approved 可撤销；底部「生效技能」折叠区显示学习技能 + 权重。未启用（`OPENINTJ_SKILLS_LEARN` 未开）
+  时显示启用提示。`App.tsx` 用 `status.skills.pendingProposals` 给 tab 加待审批角标。
+- **IPC 协议收窄**：`ipc-protocol` 新增技能响应 DTO（`SkillProposalDto`/`SkillListResponse`/
+  `SkillDistillResponse`/`SkillDecisionResponse`/`SkillActiveDto`/`SkillActiveResponse`/
+  `SkillLearningError`）+ `StatusResponse.skills`（`{enabled, pendingProposals, activeSkills}`）；
+  desktop `agent.status()` 暴露 `skills`；preload 6 个 skill API 从 `Promise<unknown>` 收窄到精确联合类型。
+- **测试**：`ipc-handlers.spec.ts` +4（未启用统一 `skills_learning_not_enabled`、注册全 skill channel、
+  完整链路 distill→list→approve→active + `status.skills` schema 校验、approve 不存在 id → not_found）。
+
 ## [Unreleased] —— 技能系统 Phase 2：自学习闭环（outcome 加权 + 轨迹蒸馏 + 人审批 + DB 源） (2026-07-07)
 
 > 把 Phase 1 的「静态作者能力包」升级为「越用越好 + 会长出新技能」：每次 `agent.run()` 的
