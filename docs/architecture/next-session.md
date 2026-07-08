@@ -1,7 +1,13 @@
 # 下一次工作交接备忘
 
 > 本文件用于工作中断 / 多日离开后快速恢复上下文。
-> 上次更新：2026-07-08（**桌面「技能审批」UI 面板**：右侧栏「技能」tab——蒸馏 / 审批候选 / 查看
+> 上次更新：2026-07-08（**治理接进工具执行**：`ToolHub` gate → `GovernancePlane.checkToolCall`（策略黑名单 +
+> 每分钟工具配额 + 审计）三端接线 + 桌面 workspace IPC 同闸门，补齐 RFC-004 §8；纠正旧盘点「执行工具是 mock」
+> 已过时——fs/命令工具早是真实沙箱。见 §12.3）。
+> 此前 2026-07-08：**检索性能/规模 B**：#10 LanceDB 原生 FTS（存储层 `ensureFtsIndex`/`searchText`
+> + `hybridVectorSearch` RRF 融合，server opt-in `OPENINTJ_LANCE_FTS=1`）+ #3 嵌入基准（双路径 harness +
+> simple 实测归档，xenova/ollama 待回填）；见 §十二 与 `retrieval-benchmark.md`）。
+> 此前 2026-07-08：**桌面「技能审批」UI 面板**：右侧栏「技能」tab——蒸馏 / 审批候选 / 查看
 > 生效技能+权重，把 Phase 2 自学习闭环接到桌面端；见 §11.5）。
 > 此前 2026-07-07：**技能系统 Phase 2**：自学习闭环——outcome 给命中技能加权 + 成功轨迹蒸馏
 > 候选技能 → 人审批 → 写 DB 源并立即重载生效，opt-in `OPENINTJ_SKILLS_LEARN=1` 默认关；见 §11.4）。
@@ -90,7 +96,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 |---|---|---|---|:-:|:-:|
 | 1 | ~~Python v2 ↔ TS 行为对齐测试~~ | ~~中~~ | ~~高~~ | ⭐⭐⭐ | ✅ 2026-05-20 完成（Phase 3.6） |
 | 2 | ~~真实持久化 e2e~~ | ~~中~~ | ~~高~~ | ⭐⭐⭐ | ✅ 2026-05-09 完成 |
-| 3 | **嵌入基准**：simple vs xenova vs ollama 在固定语料上的 nDCG | 低 | 中 | ⭐⭐ | 🟢 harness 落地（`benchmarkRetrieval`，三方对比 `RUN_EMBED_COMPARE=1` 可跑；见 §九） |
+| 3 | **嵌入基准**：simple vs xenova vs ollama 在固定语料上的 nDCG | 低 | 中 | ⭐⭐ | 🟢 harness + 双路径基准（`benchmarkRetrieval` 产品路径 + `benchmarkEmbedderCosine` 纯语义）落地，simple 基线实测归档；xenova/ollama 需装依赖/起服务后 `RUN_EMBED_COMPARE=1` 回填。见 `retrieval-benchmark.md` §12.1 |
 | 4 | ~~Desktop E2E（Playwright + Electron）~~ | ~~中~~ | ~~中~~ | ⭐⭐ | ✅ 2026-05-20 完成（Phase 3.7） |
 | 5 | ~~RFC-003 装配进主 Agent~~ | ~~中~~ | ~~中~~ | ⭐⭐ | ✅ 2026-05-11 完成 |
 | 6 | **打包发布**：electron-builder Win/macOS + electron-updater | 高 | 中 | ⭐ | 待办 |
@@ -98,7 +104,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 | 8 | ~~GitHub Actions CI 工作流~~ | ~~低~~ | ~~中~~ | ⭐⭐ | ✅ 2026-05-09 完成 |
 | 9.A | ~~Dormant 持久化（SqliteDormantStore + hydrate）~~ | ~~中~~ | ~~高~~ | ⭐⭐⭐ | ✅ 2026-05-19 完成（Phase 3.4） |
 | 9.B | ~~Dormant 审批 UI（preload + DormantPanel + tab 布局）~~ | ~~中~~ | ~~中-高~~ | ⭐⭐⭐ | ✅ 2026-05-19 完成（Phase 3.5） |
-| 10 | **HybridRetriever LanceDB FTS 路径**：大规模 fragments 时换 LanceDB 原生 FTS，避免每次重建索引 | 中 | 中 | ⭐⭐ | 🟡 增量索引（upsert/remove/clear）已落，省去全量重建；原生 FTS 仍待办（见 §九） |
+| 10 | **HybridRetriever LanceDB FTS 路径**：大规模 fragments 时换 LanceDB 原生 FTS，避免每次重建索引 | 中 | 中 | ⭐⭐ | 🟢 存储层原生 FTS（`ensureFtsIndex`/`searchText`）+ `hybridVectorSearch` RRF 融合落地，server `retrieveHybrid` opt-in（`OPENINTJ_LANCE_FTS=1`）；见 §12.2 |
 | 11 | ~~**Dormant 事件清理**：`pruneEvents(olderThanTs)` / LRU 防 `dormant_events` 无限增长~~ | ~~低~~ | ~~中~~ | ⭐⭐ | ✅ 2026-06-30 完成（接口/双适配器/runtime 自动清理 + hydrate/record 兜底触发；见 §10.7） |
 | 12 | **Parity 扩展**：governance plane / Hooks / ContextEngine 接进 parity 网 | 中 | 中 | ⭐⭐ | 🟡 governance plane 已接（9 tests）；Hooks/ContextEngine 仍待办（见 §九） |
 
@@ -370,12 +376,12 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 | RFC-003 方向二 任务池 | SharedContext/HybridRetriever/TaskQueue/ObjectPool | 🟡 部分 | 仅 HybridRetriever 接进 server；其余仅原型；检索每次重建索引；无 nDCG 基准 |
 | RFC-003 方向三 钝化记忆 | 存→学→审批→**注入 systemPrompt** | 🟠 回路未闭合 | persona 写了但**从不注入**；无 A/B、无脱敏、无 revoke |
 | RFC-004 桌面 IPC | 安全模型 + 流式 + 系统能力 | 🟡 半 | 流式✅ 自动更新✅；**工作区文件读写 / 配置面 / utility worker 全缺** |
-| 跨 RFC 执行工具 | 治理边界下真实 fs/命令 | 🔴 mock | `readFile/writeFile/executeCommand` 全是 `noop = () => ({ note: "[mock]" })` |
-| #3 嵌入基准 | simple/xenova/ollama nDCG | 🔴 未做 | |
+| 跨 RFC 执行工具 | 治理边界下真实 fs/命令 | 🟢 完成 | fs/命令工具早已是真实沙箱实现（`createWorkspaceTools`）；2026-07-08 又把治理接进 `ToolHub.call`（gate → `checkToolCall`）+ 桌面 IPC，`[mock]` 仅剩 search 兜底。见 §12.3 |
+| #3 嵌入基准 | simple/xenova/ollama nDCG | 🟢 harness+双路径基准落地，simple 实测归档；xenova/ollama 待回填 | `retrieval-benchmark.md` |
 
 ### 8.2 重点缺口（按严重度）
 
-1. **🔴 执行平面工具是 mock**（`apps/*/src/**/agent.ts` 的 `registerBuiltinTools` 全传 `noop`，仅 `search` 真）。`ToolHub`/`Executor`/状态机/熔断器基建齐全且测试充分，但没有任何真实副作用工具接上去 → "本地优先编码 Agent" 不能真读写文件 / 跑命令。RFC-004 §4/§8 的工作区 fs IPC 也因此全缺。
+1. ~~**🔴 执行平面工具是 mock**~~。✅ **已解决（此条盘点已过时）**：fs/命令工具其实早已是真实沙箱实现（`createWorkspaceTools`：路径限定 workspace 根 + 读写大小上限 + 命令白名单/默认禁用），三端 agent 均已接；`[mock]` 只剩 search 兜底。2026-07-08 进一步把**治理接进工具执行**（`ToolHub` gate → `GovernancePlane.checkToolCall`：策略黑名单 + 每分钟工具配额 + 审计）+ 桌面 workspace IPC 同闸门，补齐 RFC-004 §8 的「Governance → fs」边界。见 §12.3。
 2. **🟠 钝化记忆 persona 未注入**：`DormantRuntime` 公开 `record/mine/listProposals/approve/reject/prune/hydrate`，**无 `getPersona()` 出口**；`agent.ts` 也不读 persona。RFC-003 §3.6 验收 #2「批准后无需检索就生效」不成立。`abTest`/脱敏/`revoke` 亦未实现。修复点：复用新加的 `contextProvider` 拼接 persona delta。
 3. **🟡 方向一/二并发原语只是原型**：仅 `cli/rfc3-integration.spec.ts` 使用；真实 `agent.run()` 仅经 `RateLimitedLlmClient`(rateLimit) 与 `HybridRetriever`(retrievalMode=hybrid) 接了两件。
 4. **🟡 RFC-004 系统能力面缺失**：`readWorkspaceFile/writeWorkspaceFile/pickWorkspaceDir/onWorkspaceChange/getConfig/updateConfig` 零实现；utility 蒸馏 worker 未实现（`mine()` 跑在 main）。注：§7 流式**已等价实现**（hook→IPC `EVT_TAO/EVT_REACT/EVT_AUDIT` 实时推送）。
@@ -514,7 +520,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 
 - RFC-004 utility process 蒸馏 worker（`mine()` 仍在 main 跑）。
 - ~~增量检索索引**接进 agent**（需 fragment change-feed 把 memory 写入广播给 HybridRetriever）~~。✅ 2026-06-30 完成（§十 A1）
-- HybridRetriever 换 LanceDB 原生 FTS（#10 余下部分）。
+- ~~HybridRetriever 换 LanceDB 原生 FTS（#10 余下部分）~~。✅ 2026-07-08 完成（存储层原生 FTS + RRF 融合 + server opt-in，见 §12.2）
 - Parity 扩展：Hooks / ContextEngine（governance 已接）。
 - ~~`pruneEvents(olderThanTs)`（#11 dormant 事件磁盘清理）~~。✅ 2026-06-30 完成（保留策略 + hydrate/record/mine 三处触发，见 §10.7）
 - #6 打包发布（electron-builder Win/macOS + electron-updater）。
@@ -697,3 +703,56 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 - 蒸馏质量：启发式 body 偏模板化，真价值靠 `llmDistill` 接 agent LLM；可加候选相似度去重（当前按 id）。
 - 工具子集/新工具绑定（技能目前只注入指令文本，不注册新工具、不做工具隔离）。
 - 权重衰减 / LRU（当前只累加+clamp，无时间衰减）。
+
+---
+
+## 十二、检索性能 / 规模：#10 LanceDB 原生 FTS + #3 嵌入基准（2026-07-08）
+
+> 详见 `docs/architecture/retrieval-benchmark.md`（方法 / 实测数字 / 复现命令）。
+
+### 12.2（#10）HybridRetriever 换 LanceDB 原生 FTS（已实现）
+
+- **动机**：`MemoryHybridIndex` 每次 query 在内存对全部文档算 BM25 + cosine（O(N)/query），
+  N>10k fragment 时全表扫描成本上升。LanceDB 自带 BM25 原生 FTS，可把词法检索下推到存储层。
+- **存储层能力**（`packages/storage/lance/src/`）：`VectorStore` 新增可选 `supportsFts` /
+  `ensureFtsIndex()` / `searchText(query, opts)`。
+  - `LanceDBVectorStore`：`table.createIndex("content", {config: Index.fts()})` 建索引 +
+    `table.search(query, "fts")` 查询；旧版 / 不支持 / 建索引失败时 `supportsFts=false` 静默降级。
+  - `InMemoryVectorStore`：实现 BM25-lite `searchText`，让融合逻辑在**不装 LanceDB** 时也能单测。
+- **融合**（`fusion.ts`）：`rrfFuse` + `hybridVectorSearch(store, {query, queryEmbedding, topK, ...})`——
+  向量榜 + FTS 榜各出一份，RRF（只依赖名次，天然适配 cosine/BM25 异构分数）融合；`searchText`
+  缺失 / 空时自动降级为纯向量。
+- **接入**（`apps/server/src/hybrid-retrieve.ts`，opt-in）：默认仍走内存路径；`useLanceFts:true` 或
+  env `OPENINTJ_LANCE_FTS=1` → `hybridVectorSearch(persistentStore.vectorStore, …)`，结果映射回
+  `MemoryHybridHit`（RRF 分入 `components.rrf`）。
+- **测试**：storage-lance 22（+9 fusion +4 in-memory FTS）、server hybrid-retrieve 17（+3 FTS 路径）全绿。
+
+### 12.1（#3）嵌入基准：simple 实测 + 双路径 harness（simple 已跑，xenova/ollama 待回填）
+
+- **双路径 harness**（`packages/planes/memory/src/eval/retrieval-benchmark.ts`）：
+  - `benchmarkRetrieval`：`MemoryRetriever` 产品路径（cosine + 关键词重叠 + 时间衰减）。
+  - `benchmarkEmbedderCosine`（新）：**纯 cosine**，隔离出 embedder 的语义能力（去掉关键词兜底）。
+- **simple 实测**（12 篇 × 6 query，k=4）：产品路径 nDCG **0.773**；纯 cosine 仅 **0.396**——落差量化了
+  SHA-256 词袋哈希「无真语义、维度无关」的短板，也是引入神经嵌入器的收益空间。
+- **xenova/ollama**：本机未装 `@xenova/transformers` / ollama 服务未起，暂无数字；装好后
+  `RUN_EMBED_COMPARE=1 pnpm --filter @openintj/plane-memory test retrieval-benchmark` 回填。
+- **测试**：benchmark spec 加纯 cosine 维度不敏感断言；compare 分支并列打印两套评分表。
+
+### 12.3 治理接进工具执行（RFC-004 §8，2026-07-08）
+
+> 纠偏：旧盘点里「🔴 执行平面工具是 mock」已过时——fs/命令工具早是真实沙箱（`createWorkspaceTools`）。
+> 真正的缺口是**治理平面从不被调用**：`GovernancePlane` 三端都 new 了，但 `checkAndRecord` 只在单测里跑，
+> 工具执行链路无策略/配额门禁。本次补上。
+
+- **`ToolHub` 通用 gate**（`packages/planes/execution/src/tool-hub.ts`）：`ToolHubOpts.gate?: ToolGate`，
+  在 `tool.beforeCall` 之后、handler 之前执行；抛错 → `ToolCallResult.success=false`（**不触发熔断**——
+  治理拒绝不是工具故障，也**不发 `tool.onError`** 避免被当可重试）。execution **不反向依赖** governance。
+- **`GovernancePlane.checkToolCall(command)`**（governance）：镜像 `checkAndRecord`，但走**每分钟工具配额**
+  （`checkToolQuota`/`recordToolCall`）+ 策略黑名单 + 审计；不消耗 API 配额。
+- **`createToolCallGate(governance)`**（governance）：把 plane 包成 `TOOL_CALL` 命令的 gate，三端 agent
+  `new ToolHub({ hooks, gate: createToolCallGate(governance) })`。
+- **桌面 IPC**：`WORKSPACE_READ/WRITE` 直连沙箱的路径也过同一 gate（补 RFC-004 §8「Governance → fs」）。
+- **默认不回归**：白名单含 `read_file/search`；`write_file/execute_command` 非黑非白 → 放行；仅黑名单目标
+  （`shell-delete` 等）或超配额（默认 20/min）被拦。运行时 `policyEngine.block("write_file")` 可动态收紧。
+- **测试**：execution +4（gate 拒绝不触发熔断 / 放行 / afterCall 可观测但不 onError）；governance +6
+  （checkToolCall 放行/黑名单/动态 block/配额 + createToolCallGate 放行/拦截）；cli +1 端到端拉黑拦截。

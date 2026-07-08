@@ -32,7 +32,7 @@ import {
   createWorkspaceTools,
   resolveWebSearchConfig,
 } from "@openintj/plane-execution";
-import { GovernancePlane } from "@openintj/plane-governance";
+import { GovernancePlane, createToolCallGate } from "@openintj/plane-governance";
 import {
   ContextEngine,
   MemoryPlane,
@@ -393,7 +393,8 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     hooks,
     ...(candidateRetrieve ? { candidateRetrieve } : {}),
   });
-  const toolHub = new ToolHub({ hooks });
+  // gate：每次工具调用前跑治理平面（策略黑名单 + 工具配额），拒绝即 success:false + 审计（RFC-004 §8）。
+  const toolHub = new ToolHub({ hooks, gate: createToolCallGate(governance) });
   const noop = () => ({ note: "[mock]" });
   // search 工具优先级：外部 Web Search（Tavily/Brave，provider 中立）> 混元内建联网搜索（仅旧平台有效）> 占位。
   // 旧混元平台搜索已随平台下线、TokenHub 改 Responses API，因此 TokenHub 用户应配 OPENINTJ_SEARCH_API_KEY 走外部搜索。

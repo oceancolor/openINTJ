@@ -1,4 +1,5 @@
 import { type FSWatcher, watch } from "node:fs";
+import { createToolCallGate } from "@openintj/plane-governance";
 import { withRootSpan } from "@openintj/telemetry-otel";
 import { type IpcMain, type WebContents, ipcMain } from "electron";
 import {
@@ -134,10 +135,14 @@ export const registerIpcHandlers = (
     allowedCommands: agent.workspace.config.allowedCommands,
   }));
 
+  // 与 agent 工具路径同一治理闸门：IPC 直连沙箱也要过策略 + 配额（RFC-004 §8）。
+  const workspaceGate = createToolCallGate(agent.governance);
+
   api.handle(IPC.WORKSPACE_READ, async (_evt, raw: unknown) => {
     const parsed = WorkspaceReadRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     try {
+      await workspaceGate({ tool: "read_file", params: { path: parsed.data.path } });
       // 复用 Agent read_file 工具的同一沙箱（路径越界 / 过大都在工具内拦截）。
       return await agent.workspace.tools.readFile({ path: parsed.data.path });
     } catch (e) {
@@ -149,6 +154,10 @@ export const registerIpcHandlers = (
     const parsed = WorkspaceWriteRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     try {
+      await workspaceGate({
+        tool: "write_file",
+        params: { path: parsed.data.path, content: parsed.data.content },
+      });
       return await agent.workspace.tools.writeFile({
         path: parsed.data.path,
         content: parsed.data.content,

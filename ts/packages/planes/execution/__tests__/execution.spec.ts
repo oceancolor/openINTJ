@@ -158,6 +158,56 @@ describe("ToolHub", () => {
     expect(r.success).toBe(false);
     expect(r.error).toMatch(/超时/);
   });
+
+  it("gate 拒绝 → success:false，且不执行 handler、不触发熔断", async () => {
+    const handler = vi.fn(() => ({ ok: true }));
+    const hub = new ToolHub({
+      gate: ({ tool }) => {
+        if (tool === "danger") throw new Error("策略阻断: danger");
+      },
+    });
+    hub.register(ToolDescriptorSchema.parse({ name: "danger", description: "" }), handler);
+    // 连续多次被 gate 拒绝：若计入熔断（阈值 3）会变成熔断错误；这里应始终是策略错误。
+    for (let i = 0; i < 5; i++) {
+      const r = await hub.call("danger", {});
+      expect(r.success).toBe(false);
+      expect(r.error).toContain("策略阻断");
+      expect(r.error).not.toContain("熔断");
+    }
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("gate 放行 → handler 正常执行，gate 收到工具名 + params", async () => {
+    const seen: Array<{ tool: string; params: Record<string, unknown> }> = [];
+    const hub = new ToolHub({
+      gate: ({ tool, params }) => {
+        seen.push({ tool, params });
+      },
+    });
+    hub.register(ToolDescriptorSchema.parse({ name: "echo", description: "" }), (p) => p);
+    const r = await hub.call("echo", { x: 1 });
+    expect(r.success).toBe(true);
+    expect(r.output).toEqual({ x: 1 });
+    expect(seen).toEqual([{ tool: "echo", params: { x: 1 } }]);
+  });
+
+  it("gate 拒绝仍会 emit tool.afterCall（可观测），但不 emit tool.onError", async () => {
+    const hooks = new HookBus({ logger: silentLogger });
+    const after = vi.fn();
+    const onError = vi.fn();
+    hooks.on("tool.afterCall", after);
+    hooks.on("tool.onError", onError);
+    const hub = new ToolHub({
+      hooks,
+      gate: () => {
+        throw new Error("blocked");
+      },
+    });
+    hub.register(ToolDescriptorSchema.parse({ name: "echo", description: "" }), (p) => p);
+    await hub.call("echo", {});
+    expect(after).toHaveBeenCalledOnce();
+    expect(onError).not.toHaveBeenCalled();
+  });
 });
 
 describe("Executor (sequential)", () => {

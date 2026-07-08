@@ -48,6 +48,30 @@ describe("assembleAgent E2E (mock LLM)", () => {
     expect(cmd.error).toMatch(/未启用/);
   });
 
+  it("治理接进工具执行：黑名单工具被拒 + 审计记 blocked（RFC-004 §8）", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "openintj-cli-gov-"));
+    tmpDirs.push(dir);
+    const agent = assembleAgent({ llmProvider: "mock", workspaceDir: dir });
+
+    // 默认 write_file 非黑非白 → 放行（沙箱内写成功）。
+    const ok = await agent.execution.toolHub.call("write_file", { path: "a.txt", content: "hi" });
+    expect(ok.success).toBe(true);
+
+    // 运行时把 write_file 拉黑 → 下次调用被治理拒绝，handler 不执行。
+    agent.governance.policyEngine.block("write_file");
+    const blocked = await agent.execution.toolHub.call("write_file", {
+      path: "b.txt",
+      content: "no",
+    });
+    expect(blocked.success).toBe(false);
+    expect(blocked.error).toMatch(/策略阻断/);
+    // b.txt 不应被写入（gate 在 handler 前拦截）
+    const readBack = await agent.execution.toolHub.call("read_file", { path: "b.txt" });
+    expect(readBack.success).toBe(false);
+    // 审计里应有一条 blocked
+    expect(agent.governance.getStats().audit.blockedCount).toBeGreaterThanOrEqual(1);
+  });
+
   it("自一致性：samples>1 时用 forkJoin 并行多采样并选出答案", async () => {
     const agent = assembleAgent({
       llmProvider: "mock",

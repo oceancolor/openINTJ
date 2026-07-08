@@ -4,6 +4,59 @@
 版本号沿用 [SemVer](https://semver.org/lang/zh-CN/) 与
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 
+## [Unreleased] —— 治理接进工具执行（RFC-004 §8：策略/配额门禁） (2026-07-08)
+
+> `GovernancePlane` 三端早已构造却从不被调用——工具执行链路无策略/配额门禁。本次把治理接进
+> `ToolHub.call` 与桌面 workspace IPC，补齐 RFC-004 §8「Governance → fs」边界。同时纠正过时盘点：
+> fs/命令工具其实早是真实沙箱（`createWorkspaceTools`），`[mock]` 只剩 search 兜底。详见
+> `docs/architecture/next-session.md` §12.3。
+
+### Added
+
+- **`ToolHub` 治理闸门**：`ToolHubOpts.gate?: ToolGate`（新导出类型），在 `tool.beforeCall` 之后、
+  handler 之前执行；抛错 → `ToolCallResult.success=false`，**不触发熔断**（治理拒绝≠工具故障）、
+  不发 `tool.onError`（避免被当可重试）。execution 不反向依赖 governance。
+- **`GovernancePlane.checkToolCall(command)`**：镜像 `checkAndRecord`，走每分钟**工具配额**
+  （`checkToolQuota`/`recordToolCall`）+ 策略黑名单 + 审计（不消耗 API 配额）。
+- **`createToolCallGate(governance)`**：把 plane 包成 `TOOL_CALL` 命令的 gate；cli/server/desktop 三端
+  `new ToolHub({ hooks, gate: createToolCallGate(governance) })`。
+- **桌面 workspace IPC 门禁**：`WORKSPACE_READ/WRITE` 直连沙箱前也过同一 gate（RFC-004 §8）。
+
+### Changed
+
+- 默认策略不回归：白名单含 `read_file/search`；`write_file/execute_command` 非黑非白 → 放行；仅黑名单
+  目标或超配额（默认 20 次/分钟）被拦。运行时 `policyEngine.block(target)` 可动态收紧。
+
+### Tests
+
+- execution +4（gate 拒绝不触发熔断 / 放行 / afterCall 可观测但不 onError）；governance +6
+  （checkToolCall 放行·黑名单·动态 block·配额 + createToolCallGate 放行·拦截）；cli +1（端到端拉黑拦截）。
+
+## [Unreleased] —— 检索性能/规模 B：LanceDB 原生 FTS (#10) + 嵌入基准 (#3) (2026-07-08)
+
+> 大规模 fragment（N>10k）时把词法检索从「内存 BM25 全表扫描」下推到 LanceDB 原生 FTS；并给
+> 嵌入器默认选型补上双路径量化基准。详见 `docs/architecture/retrieval-benchmark.md`
+> 与 `docs/architecture/next-session.md` §十二。
+
+### Added
+
+- **存储层原生 FTS（#10）**：`VectorStore` 新增可选 `supportsFts` / `ensureFtsIndex()` /
+  `searchText(query, opts)`。`LanceDBVectorStore` 用 `table.createIndex("content", {config: Index.fts()})`
+  + `table.search(query, "fts")` 走 BM25 原生索引，旧版 / 不支持时 `supportsFts=false` 静默降级为纯向量；
+  `InMemoryVectorStore` 实现 BM25-lite `searchText`（使融合逻辑在不装 LanceDB 时可单测）。
+- **混合检索融合**：`fusion.ts` 新增 `rrfFuse`（RRF，只依赖名次、适配 cosine/BM25 异构分数）+
+  `hybridVectorSearch(store, {query, queryEmbedding, topK, ...})`（向量榜 + FTS 榜 RRF 融合，
+  `searchText` 缺失/空自动降级为纯向量）。
+- **server 混合检索 opt-in**：`retrieveHybrid` 新增 `useLanceFts`（默认读 env `OPENINTJ_LANCE_FTS=1`）——
+  开启后走 `hybridVectorSearch(persistentStore.vectorStore, …)`，结果映射回 `MemoryHybridHit`
+  （RRF 分记入 `components.rrf`）；默认仍走内存 `MemoryHybridIndex`，行为零变化。
+- **嵌入基准双路径（#3）**：`benchmarkEmbedderCosine`（纯 cosine，隔离 embedder 语义能力）与既有
+  `benchmarkRetrieval`（产品路径）并列。simple 实测归档：产品路径 nDCG **0.773** / 纯 cosine **0.396**
+  （维度无关）；新文档 `docs/architecture/retrieval-benchmark.md` 记方法/数字/复现命令。
+  xenova/ollama 需装 `@xenova/transformers` / 起 ollama 后 `RUN_EMBED_COMPARE=1` 回填。
+- **测试**：storage-lance +13（`fusion.spec.ts` 9 + in-memory FTS 4）；server hybrid-retrieve +3（FTS 路径）；
+  plane-memory benchmark spec 加纯 cosine 维度不敏感断言。
+
 ## [Unreleased] —— 桌面「技能审批」UI 面板 (2026-07-08)
 
 > 把技能系统 Phase 2 的自学习闭环接到桌面端用户手上——此前只有 HTTP/IPC 后端。抄 `DormantPanel`

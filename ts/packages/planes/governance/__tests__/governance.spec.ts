@@ -7,7 +7,13 @@ import {
   type HookLogger,
 } from "@openintj/core";
 import { describe, expect, it, vi } from "vitest";
-import { AuditTrail, GovernancePlane, PolicyEngine, QuotaGuard } from "../src/index.js";
+import {
+  AuditTrail,
+  GovernancePlane,
+  PolicyEngine,
+  QuotaGuard,
+  createToolCallGate,
+} from "../src/index.js";
 
 const silentLogger: HookLogger = {
   warn: () => {},
@@ -186,5 +192,70 @@ describe("GovernancePlane.checkAndRecord", () => {
     );
     await plane.checkAndRecord(mkCommand("read_file"));
     expect(extraRan).toBe(false);
+  });
+});
+
+describe("GovernancePlane.checkToolCall", () => {
+  it("allowed 工具通过 + 记审计 + 走工具配额（不消耗 API 配额）", async () => {
+    const plane = new GovernancePlane();
+    const ev = await plane.checkToolCall(mkCommand("read_file"));
+    expect(ev.result).toBe("allowed");
+    const stats = plane.getStats();
+    expect(stats.audit.totalEvents).toBe(1);
+    expect(stats.quota.toolCallsLastMinute).toBe(1);
+    expect(stats.quota.apiCallsLastHour).toBe(0); // 工具调用不计 API 配额
+  });
+
+  it("黑名单工具抛 POLICY_BLOCKED(retriable=false) + onBlock + 审计 blocked", async () => {
+    const hooks = new HookBus({ logger: silentLogger });
+    const plane = new GovernancePlane({ hooks });
+    const onBlock = vi.fn();
+    hooks.on("policy.onBlock", onBlock);
+    await expect(plane.checkToolCall(mkCommand("shell-delete"))).rejects.toMatchObject({
+      code: ErrorCode.POLICY_BLOCKED,
+      retriable: false,
+    });
+    expect(onBlock).toHaveBeenCalledOnce();
+    expect(plane.getStats().audit.blockedCount).toBe(1);
+  });
+
+  it("运行时 block() 后非白名单工具也被拦（write_file 默认放行 → block 后拦截）", async () => {
+    const plane = new GovernancePlane();
+    // 默认 write_file 非黑非白 → 放行
+    await expect(plane.checkToolCall(mkCommand("write_file"))).resolves.toMatchObject({
+      result: "allowed",
+    });
+    plane.policyEngine.block("write_file");
+    await expect(plane.checkToolCall(mkCommand("write_file"))).rejects.toMatchObject({
+      code: ErrorCode.POLICY_BLOCKED,
+    });
+  });
+
+  it("工具配额耗尽抛 POLICY_BLOCKED(retriable=true)", async () => {
+    const now = 1000;
+    const quota = new QuotaGuard({ maxToolCallsPerMinute: 1 }, { clock: () => now });
+    const plane = new GovernancePlane({ quotaGuard: quota });
+    await plane.checkToolCall(mkCommand("read_file"));
+    await expect(plane.checkToolCall(mkCommand("read_file"))).rejects.toMatchObject({
+      code: ErrorCode.POLICY_BLOCKED,
+      retriable: true,
+    });
+  });
+});
+
+describe("createToolCallGate", () => {
+  it("放行工具：gate 不抛，且映射 TOOL_CALL 命令进审计", async () => {
+    const plane = new GovernancePlane();
+    const gate = createToolCallGate(plane);
+    await expect(gate({ tool: "read_file", params: { path: "a.txt" } })).resolves.toBeUndefined();
+    expect(plane.getStats().audit.totalEvents).toBe(1);
+  });
+
+  it("黑名单工具：gate 抛 POLICY_BLOCKED", async () => {
+    const plane = new GovernancePlane();
+    const gate = createToolCallGate(plane);
+    await expect(gate({ tool: "shell-delete", params: {} })).rejects.toMatchObject({
+      code: ErrorCode.POLICY_BLOCKED,
+    });
   });
 });

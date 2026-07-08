@@ -12,10 +12,25 @@ import {
 } from "@openintj/core";
 import { CircuitBreaker } from "./circuit-breaker.js";
 
+/**
+ * 工具调用闸门：在每次工具执行前调用，抛错即拒绝该调用。
+ *
+ * 用于接入治理平面（策略黑名单 / 配额）而**不让 execution 反向依赖 governance** ——
+ * 由 agent 负责把 governance.checkToolCall 包成 gate 传进来。gate 收到的是经 `tool.beforeCall`
+ * 钩子改写后的最终 params。抛出的错误消息会成为 ToolCallResult.error（治理拒绝不计入熔断）。
+ */
+export type ToolGate = (ctx: {
+  tool: string;
+  params: Record<string, unknown>;
+  descriptor: ToolDescriptor;
+}) => Promise<void> | void;
+
 export interface ToolHubOpts {
   hooks?: HookBus;
   /** 默认熔断器配置。 */
   breakerConfig?: { failureThreshold?: number; recoveryTimeoutMs?: number };
+  /** 治理闸门：每次工具调用前执行；抛错即拒绝（不触发熔断）。 */
+  gate?: ToolGate;
 }
 
 const _unusedTypeCheck: { lod?: LODLevelType; shader?: ShaderModeType } = {};
@@ -30,10 +45,12 @@ export class ToolHub {
   private readonly historyMax = 1000;
   private readonly hooks?: HookBus;
   private readonly breakerConfig: { failureThreshold?: number; recoveryTimeoutMs?: number };
+  private readonly gate?: ToolGate;
 
   constructor(opts: ToolHubOpts = {}) {
     if (opts.hooks !== undefined) this.hooks = opts.hooks;
     this.breakerConfig = opts.breakerConfig ?? {};
+    if (opts.gate !== undefined) this.gate = opts.gate;
   }
 
   register(descriptor: ToolDescriptor, handler?: ToolHandler): void {
@@ -112,6 +129,30 @@ export class ToolHub {
       );
       // 允许 hook 改写 params（typed payload mutation）
       params = (ctx.params as Record<string, unknown>) ?? params;
+    }
+
+    // 治理闸门：策略 / 配额检查（在 params 定型后）。拒绝 = 终态失败结果，不触发熔断
+    // （治理拒绝不是工具故障），也不发 tool.onError（避免被当作可重试错误）。
+    if (this.gate) {
+      try {
+        await this.gate({ tool: name, params, descriptor });
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        const blocked: ToolCallResult = {
+          toolName: name,
+          success: false,
+          error: errorMessage,
+          durationMs: 0,
+          traceId: opts?.traceId ?? "",
+          callId: randomUUID(),
+        };
+        this.recordHistory(blocked);
+        if (this.hooks) {
+          const emitOpts = opts?.traceId ? { traceId: opts.traceId } : undefined;
+          await this.hooks.emit("tool.afterCall", { tool: name, result: blocked }, emitOpts);
+        }
+        return blocked;
+      }
     }
 
     const handler = this.handlers.get(name);

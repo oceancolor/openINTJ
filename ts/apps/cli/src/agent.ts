@@ -30,7 +30,7 @@ import {
   createWorkspaceTools,
   resolveWebSearchConfig,
 } from "@openintj/plane-execution";
-import { GovernancePlane } from "@openintj/plane-governance";
+import { GovernancePlane, createToolCallGate } from "@openintj/plane-governance";
 import { ContextEngine, MemoryPlane, fragmentsToRanked } from "@openintj/plane-memory";
 import {
   DEFAULT_AGENT_SYSTEM_PROMPT,
@@ -164,7 +164,8 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
     ...(candidateRetrieve ? { candidateRetrieve } : {}),
   });
 
-  const toolHub = new ToolHub({ hooks });
+  // gate：每次工具调用前跑治理平面（策略黑名单 + 工具配额），拒绝即 success:false + 审计。
+  const toolHub = new ToolHub({ hooks, gate: createToolCallGate(governance) });
   const handlers = opts.toolHandlers ?? {};
 
   // 默认 handler：真实工作区工具（沙箱限定在 workspace 根内，命令默认禁用）。
