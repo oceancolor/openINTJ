@@ -1,0 +1,58 @@
+# ============================================================
+# OpenINTJ Docker Compose 编排文件
+# ============================================================
+# 使用方式：
+#   1. 复制 .env.example 为 .env 并填写配置
+#   2. docker-compose up -d        启动服务
+#   3. docker-compose logs -f      查看日志
+#   4. docker-compose restart      重启服务
+#   5. docker-compose down         停止并移除容器
+# ============================================================
+
+version: "3.8"
+
+services:
+  openintj:
+    # ---- 构建配置 ----
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openintj:latest
+    container_name: openintj
+
+    # ---- 端口映射 ----
+    ports:
+      - "8000:8000"
+
+    # ---- 环境变量（从 .env 文件加载） ----
+    env_file:
+      - .env
+
+    # ---- 自动重启策略 ----
+    # unless-stopped: 除非手动停止，否则始终自动重启（包括 Docker 守护进程重启后）
+    restart: unless-stopped
+
+    # ---- 健康检查 ----
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s        # 每 30 秒检查一次
+      timeout: 10s         # 超时 10 秒判定失败
+      start_period: 15s    # 启动后 15 秒开始检查（给应用预热时间）
+      retries: 3           # 连续 3 次失败判定为不健康
+
+    # ---- 日志配置 ----
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"    # 单个日志文件最大 50MB
+        max-file: "5"      # 最多保留 5 个日志文件（共 250MB）
+
+    # ---- 资源限制（可选，根据 Lighthouse 配置调整） ----
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: "2.0"
+    #       memory: 2G
+    #     reservations:
+    #       cpus: "0.5"
+    #       memory: 512M
