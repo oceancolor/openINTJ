@@ -43,7 +43,11 @@ describe("selectConsistentAnswer", () => {
 });
 
 describe("resolveSelfConsistency", () => {
-  const KEYS = ["OPENINTJ_SELF_CONSISTENCY", "OPENINTJ_SELF_CONSISTENCY_STRATEGY"];
+  const KEYS = [
+    "OPENINTJ_SELF_CONSISTENCY",
+    "OPENINTJ_SELF_CONSISTENCY_STRATEGY",
+    "OPENINTJ_SELF_CONSISTENCY_CONCURRENCY",
+  ];
   afterEach(() => {
     for (const k of KEYS) delete process.env[k];
   });
@@ -65,5 +69,28 @@ describe("resolveSelfConsistency", () => {
 
   it("clamps samples to a max of 8", () => {
     expect(resolveSelfConsistency({ samples: 99 })?.samples).toBe(8);
+  });
+
+  it("默认不带 maxConcurrency（全并发）", () => {
+    expect(resolveSelfConsistency({ samples: 3 })?.maxConcurrency).toBeUndefined();
+  });
+
+  it("opts.maxConcurrency 透传", () => {
+    expect(resolveSelfConsistency({ samples: 3, maxConcurrency: 2 })?.maxConcurrency).toBe(2);
+  });
+
+  it("从 env OPENINTJ_SELF_CONSISTENCY_CONCURRENCY 读并发上限", () => {
+    process.env["OPENINTJ_SELF_CONSISTENCY"] = "4";
+    process.env["OPENINTJ_SELF_CONSISTENCY_CONCURRENCY"] = "2";
+    expect(resolveSelfConsistency()).toEqual({
+      samples: 4,
+      strategy: "majority",
+      maxConcurrency: 2,
+    });
+  });
+
+  it("opts.maxConcurrency 优先于 env", () => {
+    process.env["OPENINTJ_SELF_CONSISTENCY_CONCURRENCY"] = "5";
+    expect(resolveSelfConsistency({ samples: 3, maxConcurrency: 1 })?.maxConcurrency).toBe(1);
   });
 });

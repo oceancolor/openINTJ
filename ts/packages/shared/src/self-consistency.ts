@@ -57,15 +57,21 @@ export interface SelfConsistencyConfig {
   samples: number;
   /** 选择策略，默认 majority。 */
   strategy: SelfConsistencyStrategy;
+  /**
+   * 同时在跑的采样上限（透传给 forkJoin 的 `concurrency`，内部用 Semaphore 限流）。
+   * 不设 → 全并发（历史行为）。用于给昂贵的多采样设并发上限，避免一次性打满 LLM 配额。
+   */
+  maxConcurrency?: number;
 }
 
 /**
- * 解析自一致性配置：opts > env(OPENINTJ_SELF_CONSISTENCY=采样数, OPENINTJ_SELF_CONSISTENCY_STRATEGY) > 关闭。
- * 返回 undefined 表示关闭（samples<=1）。
+ * 解析自一致性配置：opts > env(OPENINTJ_SELF_CONSISTENCY=采样数, OPENINTJ_SELF_CONSISTENCY_STRATEGY,
+ * OPENINTJ_SELF_CONSISTENCY_CONCURRENCY=并发上限) > 关闭。返回 undefined 表示关闭（samples<=1）。
  */
 export const resolveSelfConsistency = (opts?: {
   samples?: number;
   strategy?: SelfConsistencyStrategy;
+  maxConcurrency?: number;
 }): SelfConsistencyConfig | undefined => {
   const envSamples = Number(process.env["OPENINTJ_SELF_CONSISTENCY"] ?? "");
   const samples =
@@ -77,5 +83,11 @@ export const resolveSelfConsistency = (opts?: {
     (envStrategy === "longest" || envStrategy === "first" || envStrategy === "majority"
       ? envStrategy
       : "majority");
-  return { samples: Math.min(samples, 8), strategy };
+  const envConc = Number(process.env["OPENINTJ_SELF_CONSISTENCY_CONCURRENCY"] ?? "");
+  const rawConc =
+    opts?.maxConcurrency ??
+    (Number.isFinite(envConc) && envConc > 0 ? Math.floor(envConc) : undefined);
+  const cfg: SelfConsistencyConfig = { samples: Math.min(samples, 8), strategy };
+  if (rawConc !== undefined && rawConc > 0) cfg.maxConcurrency = rawConc;
+  return cfg;
 };

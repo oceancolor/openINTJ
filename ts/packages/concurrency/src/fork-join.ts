@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { HookBus } from "@openintj/core";
+import { Semaphore } from "./mutex.js";
 
 /**
  * ForkJoin —— 把任务拆分为子任务并行执行，最后合并结果。
@@ -24,6 +25,11 @@ export interface ForkJoinOpts<T, R> {
   hooks?: HookBus;
   /** 分组名（写进事件）。默认随机 uuid。 */
   group?: string;
+  /**
+   * 最大同时在跑的子任务数（用内部 {@link Semaphore} 限流）。不传 / <=0 / >=items.length → 全并发。
+   * 用于给昂贵的子任务（如多次 LLM 采样）设并发上限，避免一次性打满下游配额。
+   */
+  concurrency?: number;
 }
 
 export interface ForkJoinResult<T, R> {
@@ -57,11 +63,24 @@ export const forkJoin = async <Item, T, R = T[]>(
   if (opts.hooks) {
     await opts.hooks.emit("forkjoin.beforeFork", { group, total: items.length });
   }
-  const promises = items.map((item, i) => {
-    const base = fn(item, i);
-    if (opts.timeoutMs !== undefined) return wait(base, opts.timeoutMs);
-    return base;
-  });
+  // concurrency 有效（1..<total）时用信号量限流：permit 拿到才调 fn，真正约束"同时在跑"的子任务数。
+  const useSem =
+    opts.concurrency !== undefined && opts.concurrency > 0 && opts.concurrency < items.length;
+  const sem = useSem ? new Semaphore(opts.concurrency as number) : undefined;
+  const runOne = async (item: Item, i: number): Promise<T> => {
+    const invoke = (): Promise<T> => {
+      const base = fn(item, i);
+      return opts.timeoutMs !== undefined ? wait(base, opts.timeoutMs) : base;
+    };
+    if (!sem) return invoke();
+    const release = await sem.acquire();
+    try {
+      return await invoke();
+    } finally {
+      release();
+    }
+  };
+  const promises = items.map((item, i) => runOne(item, i));
   const settled = await Promise.allSettled(promises);
   const fulfilled: T[] = [];
   const rejected: Array<{ index: number; reason: unknown }> = [];

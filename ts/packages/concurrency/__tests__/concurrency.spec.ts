@@ -196,6 +196,42 @@ describe("forkJoin", () => {
     );
     expect(r.rejected).toHaveLength(1);
   });
+
+  it("concurrency 限流：同时在跑的子任务数不超过上限", async () => {
+    let active = 0;
+    let peak = 0;
+    const r = await forkJoin(
+      [1, 2, 3, 4, 5, 6],
+      async (n) => {
+        active++;
+        peak = Math.max(peak, active);
+        await new Promise((res) => setTimeout(res, 15));
+        active--;
+        return n;
+      },
+      { concurrency: 2 },
+    );
+    expect(r.fulfilled).toHaveLength(6);
+    expect(peak).toBeLessThanOrEqual(2);
+    expect(peak).toBeGreaterThan(0);
+  });
+
+  it("concurrency >= items.length 或未设 → 全并发（peak 达到总数）", async () => {
+    let active = 0;
+    let peak = 0;
+    await forkJoin(
+      [1, 2, 3, 4],
+      async (n) => {
+        active++;
+        peak = Math.max(peak, active);
+        await new Promise((res) => setTimeout(res, 10));
+        active--;
+        return n;
+      },
+      { concurrency: 10 },
+    );
+    expect(peak).toBe(4);
+  });
 });
 
 describe("TokenBucket", () => {
