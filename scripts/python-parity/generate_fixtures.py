@@ -39,6 +39,8 @@ from framework_core import (  # noqa: E402
     Command,
     CommandType,
     ContextBudget,
+    ErrorCode,
+    EventType,
     LODLevel,
     MemoryFragment,
     ShaderConfig,
@@ -63,6 +65,8 @@ OUT = {
     / "ts/packages/planes/memory/__tests__/parity/fixtures/python-v2.json",
     "governance": REPO_ROOT
     / "ts/packages/planes/governance/__tests__/parity/fixtures/python-v2.json",
+    "context": REPO_ROOT / "ts/packages/core/__tests__/parity/fixtures/context.json",
+    "taxonomy": REPO_ROOT / "ts/packages/core/__tests__/parity/fixtures/taxonomy.json",
 }
 
 
@@ -579,6 +583,98 @@ def gen_governance() -> dict[str, Any]:
 
 
 # ============================================================
+# 7. context slice —— ContextBudget 算术 + ShaderConfig.get_shader_for_task
+#    （ContextEngine 的确定性内核；两端实现 TS ContextBudgetTracker / getShaderForTask 完全对应）
+# ============================================================
+
+# (system_prompt, conversation, memory, tool, max, reserved)
+CONTEXT_BUDGET_CASES: list[dict[str, int]] = [
+    {},  # 全默认（空）
+    {"system_prompt_tokens": 500, "conversation_tokens": 2000, "memory_tokens": 1000},
+    # 逼近 0.8 阈值
+    {"conversation_tokens": 100000, "memory_tokens": 5000},
+    # 超出 → usage_ratio 应 clamp 到 1.0
+    {"conversation_tokens": 200000},
+    # 小窗口 + 非零 reserved / systemPrompt（影响 memory_budget）
+    {"max_tokens": 1000, "reserved_tokens": 100, "system_prompt_tokens": 200,
+     "conversation_tokens": 300},
+    # tool_tokens 参与
+    {"max_tokens": 8000, "tool_tokens": 2000, "memory_tokens": 1000},
+]
+
+_COMPACTION_THRESHOLDS = [0.5, 0.8, 0.9]
+
+
+def _budget_case(kw: dict[str, int]) -> dict[str, Any]:
+    b = ContextBudget(**kw)
+    return {
+        "input": {
+            "maxTokens": b.max_tokens,
+            "reservedTokens": b.reserved_tokens,
+            "systemPromptTokens": b.system_prompt_tokens,
+            "conversationTokens": b.conversation_tokens,
+            "memoryTokens": b.memory_tokens,
+            "toolTokens": b.tool_tokens,
+        },
+        "expected": {
+            "availableTokens": b.available_tokens,
+            "usageRatio": b.usage_ratio,
+            "memoryBudget": b.memory_budget,
+            "needsCompaction": {
+                str(t): b.needs_compaction(t) for t in _COMPACTION_THRESHOLDS
+            },
+        },
+    }
+
+
+def gen_context() -> dict[str, Any]:
+    cfg = ShaderConfig()
+    return {
+        "schemaVersion": 1,
+        "generatedFrom": (
+            "framework_core.ContextBudget (available_tokens/usage_ratio/memory_budget/"
+            "needs_compaction) + ShaderConfig.get_shader_for_task (v2 frozen)"
+        ),
+        "notes": {
+            "scope": (
+                "ContextEngine 的确定性内核。两端 build_context 架构不同（Python ConversationMessage "
+                "vs TS ShaderPipeline），但预算算术与 task→shader 映射语义等价，本 slice 锁定之。"
+            ),
+        },
+        "budgets": [_budget_case(c) for c in CONTEXT_BUDGET_CASES],
+        "shaderForTask": [
+            {"taskType": tt.value, "expected": cfg.get_shader_for_task(tt).value}
+            for tt in TaskType
+        ],
+    }
+
+
+# ============================================================
+# 8. taxonomy slice —— 跨实现共享的枚举契约（events / commands / errors）
+#    这是 Python v2「Hooks/事件」最接近的对齐面：HookBus 发的框架事件用同一套 EventType；
+#    ErrorCode 是错误契约（对客户端/日志暴露）。TS 侧 ErrorCode 是 Python 的超集（多出 hook/react 专用码）。
+# ============================================================
+
+
+def gen_taxonomy() -> dict[str, Any]:
+    return {
+        "schemaVersion": 1,
+        "generatedFrom": "framework_core.EventType / CommandType / ErrorCode (v2 frozen)",
+        "notes": {
+            "eventType": "TS EventType 必须与 Python 逐条相等（name→value）。",
+            "commandType": "TS CommandType 必须与 Python 逐条相等。",
+            "errorCode": (
+                "Python ErrorCode 的每一项都必须在 TS ErrorCode 中存在且值相等；"
+                "TS 可额外扩展（HOOK_ERROR 等 hook/react 专用码）。"
+            ),
+        },
+        "eventType": {e.name: e.value for e in EventType},
+        "commandType": {c.name: c.value for c in CommandType},
+        "errorCode": {e.name: e.value for e in ErrorCode},
+    }
+
+
+# ============================================================
 # 主入口
 # ============================================================
 
@@ -600,6 +696,8 @@ def main() -> None:
         "execution": gen_execution(),
         "memory": gen_memory(),
         "governance": gen_governance(),
+        "context": gen_context(),
+        "taxonomy": gen_taxonomy(),
     }
     for slice_name, path in OUT.items():
         path.parent.mkdir(parents=True, exist_ok=True)

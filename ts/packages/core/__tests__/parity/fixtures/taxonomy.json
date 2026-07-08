@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "generatedFrom": "framework_core.EventType / CommandType / ErrorCode (v2 frozen)",
+  "notes": {
+    "eventType": "TS EventType 必须与 Python 逐条相等（name→value）。",
+    "commandType": "TS CommandType 必须与 Python 逐条相等。",
+    "errorCode": "Python ErrorCode 的每一项都必须在 TS ErrorCode 中存在且值相等；TS 可额外扩展（HOOK_ERROR 等 hook/react 专用码）。"
+  },
+  "eventType": {
+    "PLANNED": "PLANNED",
+    "STEP_STARTED": "STEP_STARTED",
+    "STEP_FINISHED": "STEP_FINISHED",
+    "STEP_FAILED": "STEP_FAILED",
+    "POLICY_BLOCKED": "POLICY_BLOCKED",
+    "COMPLETED": "COMPLETED",
+    "SHADER_APPLIED": "SHADER_APPLIED",
+    "MEMORY_LOADED": "MEMORY_LOADED",
+    "CONTEXT_COMPACTED": "CONTEXT_COMPACTED",
+    "TOOL_EXECUTED": "TOOL_EXECUTED",
+    "CIRCUIT_OPENED": "CIRCUIT_OPENED",
+    "LOOP_ITERATION": "LOOP_ITERATION"
+  },
+  "commandType": {
+    "PLAN": "PLAN",
+    "EXECUTE": "EXECUTE",
+    "EVALUATE": "EVALUATE",
+    "REPAIR": "REPAIR",
+    "SHADER_SELECT": "SHADER_SELECT",
+    "MEMORY_RETRIEVE": "MEMORY_RETRIEVE",
+    "TOOL_CALL": "TOOL_CALL"
+  },
+  "errorCode": {
+    "CONFIG_MISSING": "CONFIG_MISSING",
+    "VALIDATION_ERROR": "VALIDATION_ERROR",
+    "POLICY_BLOCKED": "POLICY_BLOCKED",
+    "TOOL_FAILED": "TOOL_FAILED",
+    "EXECUTION_FAILED": "EXECUTION_FAILED",
+    "TIMEOUT": "TIMEOUT",
+    "INTERNAL_ERROR": "INTERNAL_ERROR",
+    "SHADER_ERROR": "SHADER_ERROR",
+    "MEMORY_ERROR": "MEMORY_ERROR",
+    "CONTEXT_OVERFLOW": "CONTEXT_OVERFLOW",
+    "CIRCUIT_OPEN": "CIRCUIT_OPEN"
+  }
+}

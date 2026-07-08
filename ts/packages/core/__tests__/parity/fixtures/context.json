@@ -1,0 +1,155 @@
+{
+  "schemaVersion": 1,
+  "generatedFrom": "framework_core.ContextBudget (available_tokens/usage_ratio/memory_budget/needs_compaction) + ShaderConfig.get_shader_for_task (v2 frozen)",
+  "notes": {
+    "scope": "ContextEngine 的确定性内核。两端 build_context 架构不同（Python ConversationMessage vs TS ShaderPipeline），但预算算术与 task→shader 映射语义等价，本 slice 锁定之。"
+  },
+  "budgets": [
+    {
+      "input": {
+        "maxTokens": 128000,
+        "reservedTokens": 4096,
+        "systemPromptTokens": 0,
+        "conversationTokens": 0,
+        "memoryTokens": 0,
+        "toolTokens": 0
+      },
+      "expected": {
+        "availableTokens": 123904,
+        "usageRatio": 0.0,
+        "memoryBudget": 37171,
+        "needsCompaction": {
+          "0.5": false,
+          "0.8": false,
+          "0.9": false
+        }
+      }
+    },
+    {
+      "input": {
+        "maxTokens": 128000,
+        "reservedTokens": 4096,
+        "systemPromptTokens": 500,
+        "conversationTokens": 2000,
+        "memoryTokens": 1000,
+        "toolTokens": 0
+      },
+      "expected": {
+        "availableTokens": 120404,
+        "usageRatio": 0.02824767561983471,
+        "memoryBudget": 36021,
+        "needsCompaction": {
+          "0.5": false,
+          "0.8": false,
+          "0.9": false
+        }
+      }
+    },
+    {
+      "input": {
+        "maxTokens": 128000,
+        "reservedTokens": 4096,
+        "systemPromptTokens": 0,
+        "conversationTokens": 100000,
+        "memoryTokens": 5000,
+        "toolTokens": 0
+      },
+      "expected": {
+        "availableTokens": 18904,
+        "usageRatio": 0.8474302685950413,
+        "memoryBudget": 32171,
+        "needsCompaction": {
+          "0.5": true,
+          "0.8": true,
+          "0.9": false
+        }
+      }
+    },
+    {
+      "input": {
+        "maxTokens": 128000,
+        "reservedTokens": 4096,
+        "systemPromptTokens": 0,
+        "conversationTokens": 200000,
+        "memoryTokens": 0,
+        "toolTokens": 0
+      },
+      "expected": {
+        "availableTokens": 0,
+        "usageRatio": 1.0,
+        "memoryBudget": 37171,
+        "needsCompaction": {
+          "0.5": true,
+          "0.8": true,
+          "0.9": true
+        }
+      }
+    },
+    {
+      "input": {
+        "maxTokens": 1000,
+        "reservedTokens": 100,
+        "systemPromptTokens": 200,
+        "conversationTokens": 300,
+        "memoryTokens": 0,
+        "toolTokens": 0
+      },
+      "expected": {
+        "availableTokens": 400,
+        "usageRatio": 0.5555555555555556,
+        "memoryBudget": 210,
+        "needsCompaction": {
+          "0.5": true,
+          "0.8": false,
+          "0.9": false
+        }
+      }
+    },
+    {
+      "input": {
+        "maxTokens": 8000,
+        "reservedTokens": 4096,
+        "systemPromptTokens": 0,
+        "conversationTokens": 0,
+        "memoryTokens": 1000,
+        "toolTokens": 2000
+      },
+      "expected": {
+        "availableTokens": 904,
+        "usageRatio": 0.7684426229508197,
+        "memoryBudget": 171,
+        "needsCompaction": {
+          "0.5": true,
+          "0.8": false,
+          "0.9": false
+        }
+      }
+    }
+  ],
+  "shaderForTask": [
+    {
+      "taskType": "code_generation",
+      "expected": "high_fidelity"
+    },
+    {
+      "taskType": "technical_writing",
+      "expected": "high_fidelity"
+    },
+    {
+      "taskType": "general_chat",
+      "expected": "low_fidelity"
+    },
+    {
+      "taskType": "quick_response",
+      "expected": "low_fidelity"
+    },
+    {
+      "taskType": "analysis",
+      "expected": "hybrid"
+    },
+    {
+      "taskType": "planning",
+      "expected": "hybrid"
+    }
+  ]
+}
