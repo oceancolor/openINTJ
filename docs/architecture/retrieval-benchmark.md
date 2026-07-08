@@ -43,12 +43,27 @@
   几乎全靠 `MemoryRetriever` 的**关键词重叠**兜底；embedder 自身语义召回仅 0.396。
   → 这正是引入神经嵌入器（xenova / ollama）的收益空间。
 
-### `xenova` / `ollama`
+### `xenova`（XenovaEmbedder，`Xenova/all-MiniLM-L6-v2`，384 维，本机实跑 2026-07-08）
 
-- 现状：本机 **未安装** `@xenova/transformers`（可选 peer dep），**未运行** ollama 服务，故暂无实测数字。
-- 预期：两者为真正的神经句向量（MiniLM 384 维 / nomic-embed-text 768 维），在**纯 cosine**路径上
-  应显著高于 `simple` 的 0.396；产品路径因已被关键词项抬高，提升幅度会小一些但仍应 ≥ simple。
-- 待补：安装 / 起服务后按下节命令实跑，把数字回填到本表。
+| 路径 | nDCG@4 | recall@4 | precision@4 | MRR |
+| --- | --- | --- | --- | --- |
+| MemoryRetriever（产品路径） | **1.000** | 1.000 | 1.000 | 1.000 |
+| 纯 cosine（隔离语义） | **0.944** | 0.917 | 0.917 | 1.000 |
+
+- **纯 cosine 0.396 → 0.944** 是本次选型的关键证据：同一套 6 条 query，把 SHA-256 词袋哈希换成真正的
+  神经句向量后，**隔离语义召回**翻了一倍多——这正是「预期收益空间」的实测兑现。
+- **产品路径 0.773 → 1.000**：MemoryRetriever 的关键词兜底本已把 simple 抬到 0.773，叠加语义后本语料 6 条
+  query 全部命中满分（语料小，真实大语料不会恒为 1.0，但方向明确：语义项把关键词兜底不到的近义/改写补齐）。
+- 首跑下载 `~80MB` 权重到 HF 缓存（`~/.cache/huggingface` 或 `XENOVA_CACHE_DIR`）；本次 3 个用例合计 ~14s（含冷加载）。
+
+### `ollama`（待补）
+
+- 现状：本机 **未运行** ollama 服务（本次 `RUN_EMBED_COMPARE=1` 实跑时 ollama 分支 `fetch failed` 被 try/catch 跳过）。
+- 预期：`nomic-embed-text`（768 维）同为真神经句向量，纯 cosine 应与 xenova 同一量级（显著高于 simple 的 0.396）。
+- 待补：本机 `ollama serve` + `ollama pull nomic-embed-text` 后按下节命令实跑，把数字回填本表。
+
+> **默认选型结论**：CI/无依赖环境保持 `simple`（零依赖、维度无关、可回归守护）；对检索质量敏感且可接受本地模型的部署，
+> 默认切 `xenova`（纯语义 0.944，无需外部服务，首跑下载后离线可用）。ollama 作为「已有本地 ollama 栈」用户的等价替代项。
 
 ---
 
@@ -59,8 +74,8 @@
 pnpm --filter @openintj/plane-memory test retrieval-benchmark
 
 # 三方对比（simple vs xenova vs ollama）——需先满足各自前置条件
-#   xenova：pnpm --filter @openintj/embed-xenova add @xenova/transformers（首跑会下载 ~90MB 模型）
-#   ollama：本地起服务并拉模型  ollama pull nomic-embed-text
+#   xenova：pnpm -w add @xenova/transformers（首跑会下载 ~80MB 模型；@openintj/embed-xenova 已是 plane-memory 的 devDep，import 可解析）
+#   ollama：本地起服务并拉模型  ollama serve; ollama pull nomic-embed-text
 RUN_EMBED_COMPARE=1 pnpm --filter @openintj/plane-memory test retrieval-benchmark
 ```
 

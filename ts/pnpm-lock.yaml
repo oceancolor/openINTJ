@@ -558,6 +558,12 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
+      '@openintj/embed-ollama':
+        specifier: workspace:*
+        version: link:../../embed/ollama
+      '@openintj/embed-xenova':
+        specifier: workspace:*
+        version: link:../../embed/xenova
       apache-arrow:
         specifier: ^17.0.0
         version: 17.0.0
