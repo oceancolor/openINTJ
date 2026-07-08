@@ -343,6 +343,14 @@ export const AppConfigSchema = z.object({
   enableCommands: z.boolean().optional(),
   allowedCommands: z.array(z.string()).optional(),
   enableDormant: z.boolean().optional(),
+  /** 是否注入已批准的钝化记忆 persona（A/B 杠杆，仅 enableDormant 时有意义）。 */
+  enablePersona: z.boolean().optional(),
+  /** 技能系统（Phase 1 作者能力包）。 */
+  enableSkills: z.boolean().optional(),
+  /** 技能自学习闭环（Phase 2，隐含开启 enableSkills）。 */
+  enableSkillLearning: z.boolean().optional(),
+  /** 前端可强化分类器。 */
+  enableClassifier: z.boolean().optional(),
   autoUpdate: z.boolean().optional(),
 });
 export type AppConfig = z.infer<typeof AppConfigSchema>;

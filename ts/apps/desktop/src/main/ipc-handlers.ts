@@ -267,7 +267,7 @@ export const registerIpcHandlers = (
 
   api.handle(IPC.DORMANT_PERSONA, async () => {
     if (!agent.dormant) return DORMANT_NOT_ENABLED;
-    return agent.dormant.snapshot();
+    return agent.dormant.getPersona();
   });
 
   // 技能自学习 Phase 2：蒸馏 / 列表 / 审批。未启用统一返回 skills_learning_not_enabled。

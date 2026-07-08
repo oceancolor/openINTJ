@@ -113,6 +113,16 @@ void app.whenReady().then(async () => {
     ...(savedConfig.enableDormant !== undefined
       ? { enableDormant: savedConfig.enableDormant }
       : {}),
+    ...(savedConfig.enablePersona !== undefined
+      ? { enablePersona: savedConfig.enablePersona }
+      : {}),
+    ...(savedConfig.enableSkills !== undefined ? { enableSkills: savedConfig.enableSkills } : {}),
+    ...(savedConfig.enableSkillLearning !== undefined
+      ? { enableSkillLearning: savedConfig.enableSkillLearning }
+      : {}),
+    ...(savedConfig.enableClassifier !== undefined
+      ? { enableClassifier: savedConfig.enableClassifier }
+      : {}),
   });
   console.log(
     `[OpenINTJ desktop] persistence=${agent.persistenceInfo.mode} dataDir=${agent.persistenceInfo.dataDir ?? "<in-memory>"}`,

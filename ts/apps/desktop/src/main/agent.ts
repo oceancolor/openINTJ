@@ -20,6 +20,7 @@ import {
   type DormantPersistenceAdapter,
   DormantRuntime,
   type DormantRuntimeOpts,
+  runMineInWorker,
 } from "@openintj/dormant";
 import { HunyuanClient, createHunyuanSearchTool } from "@openintj/llm-hunyuan";
 import { OllamaClient } from "@openintj/llm-ollama";
@@ -46,6 +47,7 @@ import {
   type ResolvedWorkspaceConfig,
   type SelfConsistencyStrategy,
   appendSourcesFooter,
+  resolvePersonaInjection,
   resolveSelfConsistency,
   resolveWorkspaceConfig,
   selectConsistentAnswer,
@@ -58,6 +60,7 @@ import {
   type SkillStore,
   assembleSkillContext,
   createLlmSkillDistiller,
+  resolveSkillWeightHalfLifeSec,
 } from "@openintj/skills";
 import {
   createSqliteClassifierStore,
@@ -90,6 +93,11 @@ export interface DesktopAgentOpts {
   enableDormant?: boolean;
   dormantOpts?: DormantRuntimeOpts;
   /**
+   * 是否把已批准的钝化记忆 persona 注入 system prompt（A/B 杠杆，仅 enableDormant 时有意义）。
+   * 默认开；env `OPENINTJ_PERSONA=0` 关闭 → 无 persona 基线组（RFC-003 §3.6 验收 #3）。
+   */
+  enablePersona?: boolean;
+  /**
    * Dormant 持久化策略（仅 enableDormant=true 时生效）。
    * - 'auto'（默认）：跟随主持久化（real → SqliteDormantStore，memory → 不挂 adapter）
    * - 'memory'：强制不挂 adapter
@@ -98,6 +106,11 @@ export interface DesktopAgentOpts {
   dormantPersistence?: "auto" | "memory" | "real";
   /** 自定义 dormant SQLite 文件路径；缺省 `${dataDir}/dormant.sqlite`。 */
   dormantDbPath?: string;
+  /**
+   * 把 CPU 密集的钝化记忆挖掘下放 worker 线程（RFC-004 §2 utility 蒸馏 worker）。
+   * 默认关；env `OPENINTJ_DORMANT_WORKER=1` 也启用。失败自动回退主线程内联挖掘。
+   */
+  dormantMineWorker?: boolean;
   /** RFC-003 方向 2：默认检索模式。env OPENINTJ_RETRIEVAL_MODE=hybrid 也启用。 */
   retrievalMode?: "vector" | "hybrid";
   /** RFC-003 方向 1：LLM 速率限制。env OPENINTJ_RATE_LIMIT_QPS 也启用。 */
@@ -107,7 +120,11 @@ export interface DesktopAgentOpts {
    * samples>1 时每次 run 用 forkJoin 并行跑 N 个 tao.run，再按 strategy 选最终答案。
    * 默认关闭；env OPENINTJ_SELF_CONSISTENCY=N / OPENINTJ_SELF_CONSISTENCY_STRATEGY 也可启用。
    */
-  selfConsistency?: { samples: number; strategy?: SelfConsistencyStrategy };
+  selfConsistency?: {
+    samples: number;
+    strategy?: SelfConsistencyStrategy;
+    maxConcurrency?: number;
+  };
   /**
    * 前端可强化分类器：开启后每次 run 先分类 → 注入 taskType + 记忆 label，高置信简单类
    * 路由单次 LLM 降 token，收尾用 outcome 强化。real 模式自动挂 SqliteClassifierStore 持久化。
@@ -337,11 +354,15 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       }
     }
   }
+  // utility 蒸馏 worker（opt-in，RFC-004 §2）：OPENINTJ_DORMANT_WORKER=1 时把 CPU 密集的
+  // n-gram 挖掘下放 worker 线程，避免 mine() 阻塞 main 事件循环 / 卡 UI。失败自动回退内联。
+  const useMineWorker = opts.dormantMineWorker ?? process.env["OPENINTJ_DORMANT_WORKER"] === "1";
   const dormant = dormantEnabled
     ? new DormantRuntime({
         eventIdPrefix: "desktop",
         // 默认给磁盘事件一个 LRU 上限，防 dormant_events 无限增长；显式 dormantOpts 可覆盖。
         maxDiskEvents: 50_000,
+        ...(useMineWorker ? { mineRunner: (e, o) => runMineInWorker(e, o) } : {}),
         ...(opts.dormantOpts ?? {}),
         ...(dormantAdapter ? { adapter: dormantAdapter } : {}),
       })
@@ -426,6 +447,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     ) => toolHub.call(name, params, callOpts ?? {}),
   });
   const baseSystemPrompt = opts.systemPrompt ?? DEFAULT_AGENT_SYSTEM_PROMPT;
+  const personaEnabled = resolvePersonaInjection(opts);
 
   // 技能系统（opt-in）：OPENINTJ_SKILLS=1 时装配，复用 store embedder，命中才注入能力包全文。
   // 自学习（Phase 2）：OPENINTJ_SKILLS_LEARN=1 隐含开启注入 + outcome 加权 + 蒸馏/审批闭环。
@@ -440,9 +462,11 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       persistence.mode === "real" && persistence.dataDir
         ? await createSqliteSkillStore({ dbPath: `${persistence.dataDir}/skills.sqlite` })
         : new InMemorySkillStore();
+    const skillHalfLife = resolveSkillWeightHalfLifeSec();
     skillLearning = new SkillLearningRuntime({
       store: skillStore,
       hooks,
+      ...(skillHalfLife ? { weightHalfLifeSec: skillHalfLife } : {}),
       llmDistill: createLlmSkillDistiller({
         generate: (prompt) => llm.chat([{ role: "user" as const, content: prompt }]),
       }),
@@ -481,8 +505,9 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     availableTools: () => toolHub.list(),
     systemPrompt: baseSystemPrompt,
     // 每轮注入：①已批准的钝化记忆 persona ②命中的技能包 ③检索到的 [记忆参考]。
+    // personaEnabled 是 A/B 杠杆：关闭即得到无 persona 基线（RFC-003 §3.6 #3）。
     contextProvider: async ({ query, history, taskType, topK, traceId }) => {
-      const persona = dormant?.personaSystemPrompt() ?? "";
+      const persona = personaEnabled ? (dormant?.personaSystemPrompt() ?? "") : "";
       const skillBlock = skillContext
         ? await skillContext.render(query, {
             ...(taskType ? { taskType } : {}),
@@ -562,7 +587,14 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
         const { fulfilled } = await forkJoin(
           Array.from({ length: selfConsistency.samples }, (_, i) => i),
           (i) => tao.run(query, taoOpts(`${randomUUID()}-sc${i}`)),
-          { hooks, group: "self-consistency", minSuccess: 1 },
+          {
+            hooks,
+            group: "self-consistency",
+            minSuccess: 1,
+            ...(selfConsistency.maxConcurrency
+              ? { concurrency: selfConsistency.maxConcurrency }
+              : {}),
+          },
         );
         result = selectConsistentAnswer(fulfilled, selfConsistency.strategy) ?? fulfilled[0]!;
       } else {
