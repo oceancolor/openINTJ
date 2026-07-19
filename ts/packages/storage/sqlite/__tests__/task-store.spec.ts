@@ -15,6 +15,7 @@ describe("SqliteTaskStore recovery", () => {
       graph: {
         planId: "recover-plan",
         goalIntent: "test",
+        goalInput: "恢复持久化任务",
         nodes: [
           { id: "a", deps: [], action: "x", description: "a" },
           { id: "b", deps: ["a"], action: "x", description: "b" },
@@ -41,6 +42,7 @@ describe("SqliteTaskStore recovery", () => {
       incomplete!,
       async (node, ctx) => {
         calls.push(node.id);
+        expect(ctx.goalInput).toBe("恢复持久化任务");
         expect(ctx.shared.get("task:a:result")).toBe("A");
         return node.id.toUpperCase();
       },

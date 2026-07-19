@@ -10,6 +10,11 @@
 
 ### Added
 
+- **RFC-007 应用级重启恢复**：TaskGraph 快照新增原始 `goalInput`；server/desktop 在
+  TaskPool + real data dir 下启动扫描 incomplete runs。默认把遗留运行安全标记 cancelled，
+  只有 `OPENINTJ_TASK_POOL_RECOVERY=resume` / `taskPoolRecoveryPolicy: "resume"` 才续跑，
+  防止崩溃窗口内重复外部副作用；旧版缺输入快照拒绝不可靠 resume。新增 TaskPool 单测、
+  SQLite 集成测试及 server/desktop 应用级 E2E。
 - **`@openintj/model-runtime`**：统一 `resolveLlmClient` / `resolveEmbedder`；`auto` 本地优先（Ollama → Hunyuan → 可见 mock）；显式 `ollama`/`hunyuan` strict fail-closed；embedding 指纹校验。
 - **RFC-006**：`product-behavior.ts`、`trait-scenarios.ts`、`trait-eval.ts`；planning/clarification skills；`planning`/`analysis` 路由护栏；OTel `openintj.product.behavior.injected`。
 - **RFC-006 配置/状态 parity**：CLI `--product-behavior treatment|control`，server 启动配置沿用

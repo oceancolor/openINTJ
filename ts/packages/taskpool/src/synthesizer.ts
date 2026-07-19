@@ -44,6 +44,21 @@ export const resolveTaskPoolEnabled = (
   return env["OPENINTJ_TASK_POOL"] === "1";
 };
 
+export type TaskPoolRecoveryPolicy = "cancel" | "resume";
+
+/**
+ * Restart recovery is fail-closed by default. Re-running a task whose external
+ * side effect completed just before a crash is not exactly-once safe, so
+ * automatic resume requires an explicit opt-in.
+ */
+export const resolveTaskPoolRecoveryPolicy = (
+  explicit?: TaskPoolRecoveryPolicy,
+  env: NodeJS.ProcessEnv = process.env,
+): TaskPoolRecoveryPolicy => {
+  if (explicit !== undefined) return explicit;
+  return env["OPENINTJ_TASK_POOL_RECOVERY"] === "resume" ? "resume" : "cancel";
+};
+
 /** planning/analysis 等复杂类走 TaskPool（opt-in 时）。 */
 export const shouldUseTaskPool = (enabled: boolean, taskType?: TaskTypeType): boolean => {
   if (!enabled || !taskType) return false;

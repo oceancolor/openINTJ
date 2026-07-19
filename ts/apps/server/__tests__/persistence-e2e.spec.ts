@@ -7,6 +7,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SqliteTaskStore } from "@openintj/storage-sqlite";
+import type { StoredTaskRun } from "@openintj/taskpool";
 import { afterAll, describe, expect, it } from "vitest";
 import { assembleServerAgent } from "../src/agent.js";
 import { buildApp } from "../src/routes.js";
@@ -32,6 +34,52 @@ afterAll(() => {
 });
 
 describeE2E("server persistence e2e (LanceDB + SQLite)", { timeout: 30_000 }, () => {
+  it("explicitly resumes an incomplete TaskPool run during startup", async () => {
+    const dir = makeDir("taskpool-resume");
+    const dbPath = join(dir, "taskpool.sqlite");
+    const stored: StoredTaskRun = {
+      runId: "server-recovery-run",
+      planId: "server-recovery-plan",
+      status: "running",
+      graph: {
+        planId: "server-recovery-plan",
+        goalIntent: "plan",
+        goalInput: "规划服务迁移",
+        nodes: [{ id: "a", deps: [], action: "respond", description: "输出计划" }],
+      },
+      nodes: [{ taskId: "a", state: "running", attempt: 1, updatedAt: 2 }],
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const seed = new SqliteTaskStore(dbPath, false);
+    await seed.init();
+    await seed.saveRun(stored);
+    await seed.close();
+
+    const agent = await assembleServerAgent({
+      llmProvider: "mock",
+      embedProvider: "simple",
+      dataDir: dir,
+      enableTaskPool: true,
+      taskPoolRecoveryPolicy: "resume",
+    });
+
+    expect(agent.taskPoolRecovery).toEqual({
+      policy: "resume",
+      found: 1,
+      resumed: 1,
+      completed: 1,
+      cancelled: 0,
+      failed: 0,
+    });
+    await agent.close();
+
+    const verify = new SqliteTaskStore(dbPath, false);
+    await verify.init();
+    expect((await verify.loadRun(stored.runId))?.status).toBe("completed");
+    await verify.close();
+  });
+
   it("write → close → reassemble → memory + audit + vector search 一致", async () => {
     const dir = makeDir("roundtrip");
 

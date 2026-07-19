@@ -377,7 +377,7 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
       const { plan } = core.control.processInput(query, cls.label);
       const graph = planGraphToTaskGraph(plan);
       const poolResult = await core.taskPool.submitRun(graph, async (node, ctx) => {
-        const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${query}`;
+        const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
         return core.tao.run(stepQuery, taoOpts(ctx.traceId, ctx.signal));
       });
       result = synthesizeTaskPoolAnswer(poolResult, query);

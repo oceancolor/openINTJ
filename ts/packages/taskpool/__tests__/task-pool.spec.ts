@@ -5,7 +5,7 @@ import { z } from "zod";
 import { AgentInstancePool } from "../src/agent-instance-pool.js";
 import { Channel } from "../src/channel.js";
 import { planGraphToTaskGraph } from "../src/plan-graph-adapter.js";
-import { resolveOrchestrationMode } from "../src/synthesizer.js";
+import { resolveOrchestrationMode, resolveTaskPoolRecoveryPolicy } from "../src/synthesizer.js";
 import { TaskGraphValidationError, TaskPool, topologicalTaskOrder } from "../src/task-pool.js";
 import { MemoryTaskStore, type StoredTaskRun, type TaskStore } from "../src/task-store.js";
 
@@ -16,6 +16,7 @@ describe("TaskPool MVD", () => {
     const goal = parser.parse("帮我规划迁移方案", "planning");
     const plan = planner.createPlan(goal);
     const graph = planGraphToTaskGraph(plan);
+    expect(graph.goalInput).toBe("帮我规划迁移方案");
     expect(graph.nodes.length).toBeGreaterThanOrEqual(3);
     expect(graph.nodes[0]!.deps).toEqual([]);
   });
@@ -166,6 +167,156 @@ describe("TaskPool MVD", () => {
     expect(await store.listIncompleteRuns()).toEqual([]);
   });
 
+  it("cancels interrupted snapshots by default without replaying workers", async () => {
+    const store = new MemoryTaskStore();
+    await store.saveRun({
+      runId: "interrupted",
+      planId: "safe-default",
+      status: "running",
+      graph: {
+        planId: "safe-default",
+        goalIntent: "plan",
+        goalInput: "规划数据库迁移",
+        nodes: [{ id: "a", deps: [], action: "write", description: "写迁移文件" }],
+      },
+      nodes: [{ taskId: "a", state: "running", attempt: 1, updatedAt: 2 }],
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    const worker = async (): Promise<string> => {
+      throw new Error("safe recovery must not replay side effects");
+    };
+
+    const summary = await new TaskPool({ store }).recoverIncomplete(worker);
+
+    expect(summary).toEqual({
+      policy: "cancel",
+      found: 1,
+      resumed: 0,
+      completed: 0,
+      cancelled: 1,
+      failed: 0,
+    });
+    const saved = await store.loadRun("interrupted");
+    expect(saved?.status).toBe("cancelled");
+    expect(saved?.nodes[0]).toMatchObject({
+      state: "cancelled",
+      error: "interrupted by process restart",
+    });
+  });
+
+  it("refuses to resume legacy snapshots that lack the original input", async () => {
+    const store = new MemoryTaskStore();
+    await store.saveRun({
+      runId: "legacy-run",
+      planId: "legacy-plan",
+      status: "running",
+      graph: {
+        planId: "legacy-plan",
+        goalIntent: "plan",
+        nodes: [{ id: "a", deps: [], action: "x", description: "legacy" }],
+      },
+      nodes: [{ taskId: "a", state: "running", attempt: 1, updatedAt: 2 }],
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    let workerCalls = 0;
+
+    const summary = await new TaskPool({ store }).recoverIncomplete(async () => {
+      workerCalls++;
+      return "unexpected";
+    }, "resume");
+
+    expect(workerCalls).toBe(0);
+    expect(summary).toMatchObject({ resumed: 0, cancelled: 1, failed: 0 });
+    expect((await store.loadRun("legacy-run"))?.nodes[0]?.error).toContain(
+      "without original goal input",
+    );
+  });
+
+  it("explicitly resumes incomplete nodes with the persisted original input", async () => {
+    const store = new MemoryTaskStore();
+    await store.saveRun({
+      runId: "resume-run",
+      planId: "resume-plan",
+      status: "running",
+      graph: {
+        planId: "resume-plan",
+        goalIntent: "plan",
+        goalInput: "规划 TypeScript 迁移",
+        nodes: [
+          { id: "a", deps: [], action: "analyze", description: "分析" },
+          { id: "b", deps: ["a"], action: "respond", description: "总结" },
+        ],
+      },
+      nodes: [
+        { taskId: "a", state: "completed", attempt: 1, result: "A", updatedAt: 1 },
+        { taskId: "b", state: "running", attempt: 1, updatedAt: 2 },
+      ],
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    const calls: string[] = [];
+
+    const summary = await new TaskPool({ store }).recoverIncomplete(async (node, ctx) => {
+      calls.push(node.id);
+      expect(ctx.goalInput).toBe("规划 TypeScript 迁移");
+      expect(ctx.shared.get("task:a:result")).toBe("A");
+      return "B";
+    }, "resume");
+
+    expect(calls).toEqual(["b"]);
+    expect(summary).toEqual({
+      policy: "resume",
+      found: 1,
+      resumed: 1,
+      completed: 1,
+      cancelled: 0,
+      failed: 0,
+    });
+    expect(await store.loadRun("resume-run")).toMatchObject({
+      status: "completed",
+      createdAt: 1,
+    });
+  });
+
+  it("does not replay terminally failed nodes during explicit resume", async () => {
+    const store = new MemoryTaskStore();
+    await store.saveRun({
+      runId: "resume-failed",
+      planId: "resume-failed-plan",
+      status: "running",
+      graph: {
+        planId: "resume-failed-plan",
+        goalIntent: "plan",
+        goalInput: "执行有依赖的计划",
+        nodes: [
+          { id: "a", deps: [], action: "write", description: "已失败步骤" },
+          { id: "b", deps: ["a"], action: "respond", description: "下游步骤" },
+        ],
+      },
+      nodes: [
+        { taskId: "a", state: "failed", attempt: 1, error: "write failed", updatedAt: 1 },
+        { taskId: "b", state: "running", attempt: 1, updatedAt: 2 },
+      ],
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    let workerCalls = 0;
+
+    const summary = await new TaskPool({ store }).recoverIncomplete(async () => {
+      workerCalls++;
+      return "unexpected";
+    }, "resume");
+
+    expect(workerCalls).toBe(0);
+    expect(summary.failed).toBe(1);
+    expect((await store.loadRun("resume-failed"))?.nodes).toMatchObject([
+      { taskId: "a", state: "failed", error: "write failed" },
+      { taskId: "b", state: "failed" },
+    ]);
+  });
+
   it("serializes durable snapshots across parallel transitions", async () => {
     class DetectConcurrentStore implements TaskStore {
       readonly memory = new MemoryTaskStore();
@@ -212,6 +363,20 @@ describe("TaskPool MVD", () => {
     expect(resolveOrchestrationMode(true, true)).toBe("taskpool");
     expect(resolveOrchestrationMode(false, true)).toBe("self-consistency");
     expect(resolveOrchestrationMode(false, false)).toBe("simple");
+  });
+
+  it("requires explicit opt-in before restart recovery replays workers", () => {
+    expect(resolveTaskPoolRecoveryPolicy(undefined, {})).toBe("cancel");
+    expect(
+      resolveTaskPoolRecoveryPolicy(undefined, {
+        OPENINTJ_TASK_POOL_RECOVERY: "resume",
+      }),
+    ).toBe("resume");
+    expect(
+      resolveTaskPoolRecoveryPolicy("cancel", {
+        OPENINTJ_TASK_POOL_RECOVERY: "resume",
+      }),
+    ).toBe("cancel");
   });
 });
 

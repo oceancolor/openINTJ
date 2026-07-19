@@ -83,9 +83,12 @@ import {
   type MemoryHybridHit,
   MemoryHybridIndex,
   TaskPool,
+  type TaskPoolRecoveryPolicy,
+  type TaskPoolRecoverySummary,
   planGraphToTaskGraph,
   resolveOrchestrationMode,
   resolveTaskPoolEnabled,
+  resolveTaskPoolRecoveryPolicy,
   shouldUseTaskPool,
   synthesizeTaskPoolAnswer,
 } from "@openintj/taskpool";
@@ -186,6 +189,11 @@ export interface DesktopAgentOpts {
   enableOtel?: boolean | AttachOtelOpts;
   /** RFC-007：opt-in TaskPool（env OPENINTJ_TASK_POOL=1）。 */
   enableTaskPool?: boolean;
+  /**
+   * 遗留 TaskPool run 的启动恢复策略。默认 cancel（避免重复外部副作用）；
+   * 仅显式 resume / OPENINTJ_TASK_POOL_RECOVERY=resume 时重跑未完成节点。
+   */
+  taskPoolRecoveryPolicy?: TaskPoolRecoveryPolicy;
 }
 
 const parseDesktopLlmProvider = (opts: DesktopAgentOpts): LlmProviderId => {
@@ -334,6 +342,8 @@ export interface DesktopAgent {
   /** OpenTelemetry 接线状态（enableOtel 真值时存在；含 dispose 钩子）。 */
   otel?: AttachedOtel;
   modelRuntime: ModelRuntimeStatus;
+  /** real data dir + TaskPool 开启时的启动恢复结果。 */
+  taskPoolRecovery?: TaskPoolRecoverySummary;
   /**
    * 工作区系统能力面（RFC-004 §8）：与 Agent 的 read_file/write_file 工具**共用同一沙箱**，
    * 供 IPC handler 直接复用，保证 UI 直接读写与 Agent 工具读写遵循完全相同的边界。
@@ -627,6 +637,17 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     if (classifier.size === 0) await classifier.addSeeds(DEFAULT_SEEDS);
   }
 
+  const taskPoolRecovery =
+    taskPool && taskStore
+      ? await taskPool.recoverIncomplete(async (node, ctx) => {
+          const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
+          return tao.run(stepQuery, {
+            traceId: ctx.traceId,
+            signal: ctx.signal,
+          });
+        }, resolveTaskPoolRecoveryPolicy(opts.taskPoolRecoveryPolicy))
+      : undefined;
+
   return {
     hooks,
     llm,
@@ -647,6 +668,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     ...(dormantPersistenceInfo ? { dormantPersistenceInfo } : {}),
     ...(otel ? { otel } : {}),
     modelRuntime: runtime.status,
+    ...(taskPoolRecovery ? { taskPoolRecovery } : {}),
     workspace: { config: wsConfig, tools: wsTools },
     retrieveHybrid,
     async run(query: string) {
@@ -675,7 +697,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
         const { plan } = control.processInput(query, cls.label);
         const graph = planGraphToTaskGraph(plan);
         const poolResult = await taskPool.submitRun(graph, async (node, ctx) => {
-          const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${query}`;
+          const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
           return tao.run(stepQuery, taoOpts(ctx.traceId, ctx.signal));
         });
         result = synthesizeTaskPoolAnswer(poolResult, query);

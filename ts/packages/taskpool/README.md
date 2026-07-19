@@ -28,10 +28,19 @@ self-consistency，符合条件的 TaskPool 明确优先；其他任务仍走 se
 
 worker 通过 `TaskWorkerContext.signal` 接收 cooperative cancellation。每节点可用
 `timeoutMs` 覆盖默认 watchdog。成功的 partial result 同时写入
-`SharedContext` 的 `task:<id>:result`。
+`SharedContext` 的 `task:<id>:result`；`goalInput` 保存原始用户输入，确保重启后可重建
+同一 worker prompt。
 
 真实 data dir 且 TaskPool 开启时，server/desktop 使用 SQLite 快照；默认关闭或
-memory 模式不会创建数据库。`listIncompleteRuns()` 与 `TaskPool.recover()` 用于重启恢复。
+memory 模式不会创建数据库。启动时会读取 `listIncompleteRuns()`：
+
+- 默认策略 `cancel`：把遗留非终态节点标为 `cancelled`，避免崩溃前已完成外部副作用却未落快照时被重复执行。
+- 显式 `OPENINTJ_TASK_POOL_RECOVERY=resume`（或 agent option `taskPoolRecoveryPolicy: "resume"`）：
+  保留 completed partial results，只重跑未完成节点。
+- 旧快照若缺少 `goalInput`，即使配置 resume 也会安全取消，不会用有损的 intent 标签伪造原始输入。
+
+server/desktop 装配完成后可从 `agent.taskPoolRecovery` 读取本次 found/resumed/completed/
+cancelled/failed 汇总。
 
 ## 可观测性
 

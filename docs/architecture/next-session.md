@@ -10,8 +10,9 @@
 RFC-005/006/007 的核心库、三端 opt-in 接线与确定性测试已经落地，但不能据此宣称生产闭环。
 下一轮先完成以下六项正确性 / 产品接线，再推进扩展 RFC：
 
-1. **TaskPool 重启恢复**：server/desktop 已写 SQLite snapshot，但应用启动尚未读取
-   `listIncompleteRuns()` 并执行明确的恢复策略。
+1. ~~**TaskPool 重启恢复**~~：✅ 2026-07-19 完成。server/desktop 启动扫描
+   `listIncompleteRuns()`；默认 cancel 防重复副作用，显式 `OPENINTJ_TASK_POOL_RECOVERY=resume`
+   才续跑；快照补 `goalInput`，旧快照拒绝不可靠 resume；包级与两端真实 SQLite E2E 通过。
 2. **严格 provider 语义**：移除或硬隔离 Ollama/Hunyuan adapter 内部的静默 mock；
    显式 provider 失败必须可见。
 3. **LLM 取消传播**：把 `AbortSignal` 从 TaskPool/Tao/ReAct 传入 `LlmClient.chat` 和 provider fetch，

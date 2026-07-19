@@ -13,6 +13,11 @@ export interface TaskGraphNode {
 export interface TaskGraph {
   planId: string;
   goalIntent: string;
+  /**
+   * Original user input required to reconstruct worker prompts after restart.
+   * Optional only for snapshots created before restart recovery was wired.
+   */
+  goalInput?: string;
   nodes: readonly TaskGraphNode[];
 }
 
@@ -20,6 +25,7 @@ export interface TaskGraph {
 export const planGraphToTaskGraph = (plan: PlanGraph): TaskGraph => ({
   planId: plan.planId,
   goalIntent: plan.goal.intent,
+  goalInput: plan.goal.rawInput,
   nodes: plan.steps.map((s) => ({
     id: s.stepId,
     deps: [...s.dependencies],

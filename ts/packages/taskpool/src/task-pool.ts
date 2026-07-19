@@ -1,6 +1,7 @@
 import type { HookBus } from "@openintj/core";
 import type { TaskGraph, TaskGraphNode } from "./plan-graph-adapter.js";
 import { SharedContext } from "./shared-context.js";
+import type { TaskPoolRecoveryPolicy } from "./synthesizer.js";
 import type { StoredTaskNode, StoredTaskRun, TaskStore } from "./task-store.js";
 
 export type TaskRunState =
@@ -32,6 +33,8 @@ export interface RetryPolicy {
 
 export interface TaskWorkerContext {
   runId: string;
+  /** Original input persisted with the graph; stable across restart recovery. */
+  goalInput: string;
   /** Stable correlation id for this task attempt's Tao/tool trace. */
   traceId: string;
   shared: SharedContext;
@@ -55,6 +58,15 @@ export interface SubmitRunOptions {
   signal?: AbortSignal;
   traceId?: string;
   runId?: string;
+}
+
+export interface TaskPoolRecoverySummary {
+  policy: TaskPoolRecoveryPolicy;
+  found: number;
+  resumed: number;
+  completed: number;
+  cancelled: number;
+  failed: number;
 }
 
 export class TaskGraphValidationError extends Error {}
@@ -180,8 +192,12 @@ export class TaskPool {
     const runId = opts.runId ?? crypto.randomUUID();
     const seedNodes = new Map(seed?.nodes.map((node) => [node.taskId, node]) ?? []);
     const initialResults = new Map<string, T>();
+    const initialErrors = new Map<string, unknown>();
     for (const node of seed?.nodes ?? []) {
       if (node.state === "completed") initialResults.set(node.taskId, node.result as T);
+      else if (terminal.has(node.state) && node.error) {
+        initialErrors.set(node.taskId, new Error(node.error));
+      }
     }
     const shared = new SharedContext(
       [...initialResults].map(([taskId, result]) => [`task:${taskId}:result`, result] as const),
@@ -191,7 +207,7 @@ export class TaskPool {
         const previous = seedNodes.get(node.id)?.state;
         return [
           node.id,
-          previous === "completed" ? "completed" : ("pending" as TaskRunState),
+          previous && terminal.has(previous) ? previous : ("pending" as TaskRunState),
         ] as const;
       }),
     );
@@ -217,7 +233,9 @@ export class TaskPool {
         controller,
         runId,
         initialResults,
+        initialErrors,
         opts.traceId,
+        seed?.createdAt,
       ),
     );
   }
@@ -239,6 +257,108 @@ export class TaskPool {
     return this.submit(stored.graph, worker, { ...opts, runId: stored.runId }, stored);
   }
 
+  /**
+   * Resolve snapshots left in `running` state by a previous process.
+   *
+   * `cancel` is the safe default because replaying an interrupted node cannot
+   * guarantee exactly-once external side effects. `resume` must be explicit;
+   * legacy snapshots without the original input are cancelled rather than
+   * reconstructed from the lossy intent label.
+   */
+  async recoverIncomplete<T>(
+    worker: TaskWorker<T>,
+    policy: TaskPoolRecoveryPolicy = "cancel",
+  ): Promise<TaskPoolRecoverySummary> {
+    const summary: TaskPoolRecoverySummary = {
+      policy,
+      found: 0,
+      resumed: 0,
+      completed: 0,
+      cancelled: 0,
+      failed: 0,
+    };
+    if (!this.store) return summary;
+
+    const incomplete = await this.store.listIncompleteRuns();
+    summary.found = incomplete.length;
+    for (const stored of incomplete) {
+      if (policy === "cancel" || !stored.graph.goalInput) {
+        const reason =
+          policy === "cancel"
+            ? "interrupted by process restart"
+            : "cannot resume legacy snapshot without original goal input";
+        const status = await this.cancelStoredRun(stored, reason);
+        if (status === "completed") summary.completed++;
+        else summary.cancelled++;
+        continue;
+      }
+
+      summary.resumed++;
+      try {
+        const result = await this.recover(stored, worker, {
+          traceId: `${stored.runId}:recovery`,
+        }).result;
+        if (result.status === "completed") summary.completed++;
+        else if (result.status === "cancelled") summary.cancelled++;
+        else summary.failed++;
+      } catch (error) {
+        summary.failed++;
+        await this.cancelStoredRun(stored, `restart recovery failed: ${errorText(error)}`).catch(
+          () => undefined,
+        );
+      }
+    }
+    return summary;
+  }
+
+  private async cancelStoredRun(
+    stored: StoredTaskRun,
+    reason: string,
+  ): Promise<"completed" | "cancelled"> {
+    if (!this.store) throw new Error("TaskPool recovery requires a TaskStore");
+    const now = Date.now();
+    const cancelledTaskIds: string[] = [];
+    const nodes: StoredTaskNode[] = stored.nodes.map((node) => {
+      if (terminal.has(node.state)) return node;
+      cancelledTaskIds.push(node.taskId);
+      return {
+        ...node,
+        state: "cancelled",
+        error: reason,
+        updatedAt: now,
+      };
+    });
+    const status = nodes.every((node) => node.state === "completed") ? "completed" : "cancelled";
+    await this.store.saveRun({
+      ...stored,
+      status,
+      nodes,
+      updatedAt: now,
+    });
+    for (const taskId of cancelledTaskIds) {
+      await this.hooks?.emit(
+        "taskpool.task.cancel",
+        { pool: this.name, runId: stored.runId, taskId, reason },
+        { traceId: `${stored.runId}:recovery` },
+      );
+    }
+    await this.hooks?.emit(
+      "taskpool.run.complete",
+      {
+        pool: this.name,
+        runId: stored.runId,
+        planId: stored.planId,
+        status,
+        completed: nodes.filter((node) => node.state === "completed").length,
+        failed: nodes.filter((node) => node.state === "failed").length,
+        cancelled: nodes.filter((node) => node.state === "cancelled").length,
+        timedOut: nodes.filter((node) => node.state === "timed_out").length,
+      },
+      { traceId: `${stored.runId}:recovery` },
+    );
+    return status;
+  }
+
   private async execute<T>(
     graph: TaskGraph,
     ordered: readonly TaskGraphNode[],
@@ -249,13 +369,15 @@ export class TaskPool {
     controller: AbortController,
     runId: string,
     initialResults: ReadonlyMap<string, T>,
+    initialErrors: ReadonlyMap<string, unknown>,
     suppliedTraceId?: string,
+    suppliedCreatedAt?: number,
   ): Promise<TaskRunResult<T>> {
     const id = runId;
     const traceId = suppliedTraceId ?? runId;
     const results = new Map(initialResults);
-    const errors = new Map<string, unknown>();
-    const createdAt = Date.now();
+    const errors = new Map(initialErrors);
+    const createdAt = suppliedCreatedAt ?? Date.now();
     let active = 0;
     let wake: (() => void) | undefined;
     let persistChain = Promise.resolve();
@@ -341,6 +463,7 @@ export class TaskPool {
             const out = await Promise.race([
               worker(node, {
                 runId: id,
+                goalInput: graph.goalInput ?? graph.goalIntent,
                 traceId: workerTraceId,
                 shared,
                 signal: taskController.signal,

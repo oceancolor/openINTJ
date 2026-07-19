@@ -8,6 +8,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskType } from "@openintj/core";
+import { SqliteTaskStore } from "@openintj/storage-sqlite";
+import type { StoredTaskRun } from "@openintj/taskpool";
 import { afterAll, describe, expect, it } from "vitest";
 import { assembleDesktopAgent } from "../src/main/agent.js";
 
@@ -80,6 +82,51 @@ describe("desktop agent (memory mode default)", () => {
 });
 
 describeE2E("desktop agent (real persistence)", { timeout: 30_000 }, () => {
+  it("safely cancels an interrupted TaskPool run during startup by default", async () => {
+    const dir = makeDir("taskpool-cancel");
+    const dbPath = join(dir, "taskpool.sqlite");
+    const stored: StoredTaskRun = {
+      runId: "desktop-recovery-run",
+      planId: "desktop-recovery-plan",
+      status: "running",
+      graph: {
+        planId: "desktop-recovery-plan",
+        goalIntent: "plan",
+        goalInput: "写入迁移文件",
+        nodes: [{ id: "a", deps: [], action: "write", description: "写文件" }],
+      },
+      nodes: [{ taskId: "a", state: "running", attempt: 1, updatedAt: 2 }],
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const seed = new SqliteTaskStore(dbPath, false);
+    await seed.init();
+    await seed.saveRun(stored);
+    await seed.close();
+
+    const agent = await assembleDesktopAgent({
+      llmProvider: "mock",
+      embedProvider: "simple",
+      dataDir: dir,
+      enableTaskPool: true,
+    });
+
+    expect(agent.taskPoolRecovery).toEqual({
+      policy: "cancel",
+      found: 1,
+      resumed: 0,
+      completed: 0,
+      cancelled: 1,
+      failed: 0,
+    });
+    await agent.close();
+
+    const verify = new SqliteTaskStore(dbPath, false);
+    await verify.init();
+    expect((await verify.loadRun(stored.runId))?.status).toBe("cancelled");
+    await verify.close();
+  });
+
   it("dataDir → 写入 → 重启 → 读回", async () => {
     const dir = makeDir("roundtrip");
     const a1 = await assembleDesktopAgent({

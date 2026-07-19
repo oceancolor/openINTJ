@@ -56,7 +56,9 @@ Hook 事件：
 3. **三端 parity**：CLI `--task-pool`、server env/config/status、desktop AppConfig/Settings；
    符合条件时 TaskPool 明确优先于 self-consistency，默认简单路径不变。
 4. **生产持久化**：`TaskStore` 抽象与 `@openintj/storage-sqlite` 的 `SqliteTaskStore`；
-   incomplete listing、重启恢复测试。仅 opt-in + real data dir 接线。
+   server/desktop 在 opt-in + real data dir 下启动扫描 incomplete runs。快照持久化原始
+   `goalInput`，completed partial results 可跨重启复用。默认安全取消遗留 run；
+   仅显式 `OPENINTJ_TASK_POOL_RECOVERY=resume` 时自动重跑未完成节点，旧版缺输入快照拒绝 resume。
 5. **多 Agent 基础**：role-based `AgentInstancePool` 与 Zod `Channel`/typed reducer；
    保持 opt-in，不复用 `ObjectPool`，不接默认路径。
 
@@ -66,6 +68,8 @@ Hook 事件：
 - 跨进程、分布式或 Kubernetes 调度不在本 RFC 范围。
 - 底层 provider 是否能中止已发出的网络请求取决于其客户端 API；当前在 Tao/ReAct/tool
   边界 cooperative fail-fast，TaskPool watchdog 保证 run 不被无限阻塞。
+- 自动 resume 不提供 exactly-once 外部副作用保证，因此默认策略为 cancel。只有调用方确认
+  worker 可安全重放时才应启用 resume。
 - 多 Agent 默认启用仍需真实角色策略、prompt 隔离、权限与成本基准。
 
 ## 验收
@@ -74,3 +78,4 @@ Hook 事件：
 - TaskPool 关闭时零行为变化
 - 开启时并发不超过配置上限
 - timeout/cancel/retry、失败级联、SQLite restart recovery 均有确定性测试
+- server 显式 resume 与 desktop 默认 cancel 均有真实 SQLite 应用级 E2E

@@ -78,9 +78,12 @@ import {
 import {
   MemoryHybridIndex,
   TaskPool,
+  type TaskPoolRecoveryPolicy,
+  type TaskPoolRecoverySummary,
   planGraphToTaskGraph,
   resolveOrchestrationMode,
   resolveTaskPoolEnabled,
+  resolveTaskPoolRecoveryPolicy,
   shouldUseTaskPool,
   synthesizeTaskPoolAnswer,
 } from "@openintj/taskpool";
@@ -190,6 +193,11 @@ export interface ServerAgentOpts {
   /** RFC-007：opt-in TaskPool（env OPENINTJ_TASK_POOL=1）。 */
   enableTaskPool?: boolean;
   /**
+   * 遗留 TaskPool run 的启动恢复策略。默认 cancel（避免重复外部副作用）；
+   * 仅显式 resume / OPENINTJ_TASK_POOL_RECOVERY=resume 时重跑未完成节点。
+   */
+  taskPoolRecoveryPolicy?: TaskPoolRecoveryPolicy;
+  /**
    * RFC-003 衍生 / Phase 3.8 ：把 HookBus 接到 OpenTelemetry。
    * - true：attachOtelToHooks(hooks)，使用默认 scope（@openintj/telemetry-otel）
    * - AttachOtelOpts：透传给 attachOtelToHooks
@@ -228,6 +236,8 @@ export interface ServerAgent {
   otel?: AttachedOtel;
   /** ModelRuntime 解析状态（LLM + embed）。 */
   modelRuntime: ModelRuntimeStatus;
+  /** real data dir + TaskPool 开启时的启动恢复结果。 */
+  taskPoolRecovery?: TaskPoolRecoverySummary;
   run(query: string): Promise<TaoResult>;
   status(): Promise<{
     llm: ReturnType<LlmClient["getStatus"]> & { runtime?: ModelRuntimeStatus["llm"] };
@@ -595,6 +605,17 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
     if (classifier.size === 0) await classifier.addSeeds(DEFAULT_SEEDS);
   }
 
+  const taskPoolRecovery =
+    taskPool && taskStore
+      ? await taskPool.recoverIncomplete(async (node, ctx) => {
+          const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
+          return tao.run(stepQuery, {
+            traceId: ctx.traceId,
+            signal: ctx.signal,
+          });
+        }, resolveTaskPoolRecoveryPolicy(opts.taskPoolRecoveryPolicy))
+      : undefined;
+
   return {
     hooks,
     llm,
@@ -613,6 +634,7 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
     ...(dormantPersistenceInfo ? { dormantPersistenceInfo } : {}),
     retrievalMode,
     modelRuntime: runtime.status,
+    ...(taskPoolRecovery ? { taskPoolRecovery } : {}),
     ...(otel ? { otel } : {}),
     async run(query: string) {
       await hooks.emit("event.PRODUCT_BEHAVIOR", {
@@ -640,7 +662,7 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
         const { plan } = control.processInput(query, cls.label);
         const graph = planGraphToTaskGraph(plan);
         const poolResult = await taskPool.submitRun(graph, async (node, ctx) => {
-          const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${query}`;
+          const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
           return tao.run(stepQuery, taoOpts(ctx.traceId, ctx.signal));
         });
         result = synthesizeTaskPoolAnswer(poolResult, query);
