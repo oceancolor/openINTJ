@@ -15,9 +15,10 @@ ts/
 │   │   ├── memory/              记忆平面：HybridRetriever + ShaderPipeline + 三层记忆
 │   │   └── governance/          治理平面：Policy + Audit + Quota
 │   ├── llm/
+│   │   ├── runtime/             统一 ModelRuntime（provider 选择 / 指纹 / 健康状态）
 │   │   ├── ollama/              Ollama 本地适配
 │   │   ├── hunyuan/             腾讯混元适配
-│   │   └── openai-compat/       OpenAI 兼容
+│   │   └── openai-compat/       OpenAI 兼容占位（尚未接入 runtime）
 │   └── storage/
 │       ├── lance/               LanceDB 向量库
 │       └── sqlite/              SQLite 元数据/审计
@@ -62,9 +63,16 @@ pnpm lint:fix
 
 ## 路线图
 
-详见 `.cursor/plans/openintj_ts_rewrite_roadmap_*.plan.md` 与 [docs/rfcs/](../docs/rfcs/) 中四份 RFC：
+当前实现与设计边界见 [docs/architecture/next-session.md](../docs/architecture/next-session.md) 和
+[docs/rfcs/](../docs/rfcs/)：
 
 1. [RFC-001 TAO + ReAct 双层循环](../docs/rfcs/RFC-001-tao-react-loop.md)
 2. [RFC-002 函数钩子系统](../docs/rfcs/RFC-002-hooks-system.md)
 3. [RFC-003 多线程 / 任务池 / 钝化记忆三方向](../docs/rfcs/RFC-003-three-architecture-directions.md)
 4. [RFC-004 桌面客户端 IPC 协议](../docs/rfcs/RFC-004-desktop-ipc-protocol.md)
+5. [RFC-005 本地模型运行时](../docs/rfcs/RFC-005-local-model-runtime.md)
+6. [RFC-006 产品行为契约](../docs/rfcs/RFC-006-product-behavior-contract.md)
+7. [RFC-007 TaskPool 编排](../docs/rfcs/RFC-007-task-orchestration.md)
+
+> RFC-005/006/007 的核心实现已落地；生产收口项与真实环境验收不在本 README 重复维护，
+> 统一以 `next-session.md` 文首工作队列为准。

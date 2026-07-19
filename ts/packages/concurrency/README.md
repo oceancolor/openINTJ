@@ -2,9 +2,9 @@
 
 RFC-003 **方向一（多线程 Agent 模型）** 的并发原语库。
 
-> ⚠️ **集成状态**：本包大部分是「实验性原语」。除 `RateLimitedLlmClient` 外，其余原语
-> 目前**未接入** Agent 主循环（TAO/ReAct 仍是单线程顺序执行）。它们经过完整单测、可独立使用，
-> 但请勿误以为产品已经在用多线程编排。
+> ⚠️ **集成状态**：本包大部分仍是「实验性原语」。`RateLimitedLlmClient` 已接三端；
+> `forkJoin` + `Semaphore` 已用于三端 self-consistency 有界并行。TAO/ReAct 单条轨迹本身仍按顺序执行，
+> 其余原语只提供库能力与测试，不应计作产品主路径能力。
 
 ## 集成状态矩阵
 
@@ -15,7 +15,7 @@ RFC-003 **方向一（多线程 Agent 模型）** 的并发原语库。
 | `Channel` | 🧪 实验 | 有界/无界通道；仅库 + 单测 |
 | `ConditionVar` | 🧪 实验 | 条件变量；仅库 + 单测 |
 | `AgentPool` | 🧪 实验（可观测） | 多 worker Agent 池；未接入主路径，但已支持 HookBus 可观测 |
-| `ForkJoin` | 🧪 实验（可观测） | 分叉/合并并行编排；未接入主路径，但已支持 HookBus 可观测 |
+| `ForkJoin` | ✅ 有界接入 | 三端 self-consistency 多采样使用 `forkJoin`，并以 `Semaphore`/`forkJoin.concurrency` 限制并发；同时支持 HookBus/OTel |
 | `Backpressure` | 🧪 实验 | 背压控制；仅库 + 单测 |
 
 ## 可观测性（多 Agent / 多线程）
@@ -35,7 +35,7 @@ const res = await forkJoin(agents, (a) => a.run(q), { hooks: agent.hooks, group:
 不传 `hooks` 时零开销（`HookBus.emit` 无订阅者直接返回）。配合 `attachOtelToHooks` 即可在
 任意 OTel 后端看到并发/多 Agent 的 span 树与计数。
 
-## 集成路线（若日后要把实验原语接入产品）
+## 后续集成路线（不含已落地的 self-consistency）
 
 1. **并行子任务**：在 `TaoLoop` 把可并行的 ReAct 子目标用 `ForkJoin` 分发，合并结果后再进入下一轮 TAO。
    需要先在 RFC-001 的停机条件上扩展「并行分支的聚合语义」。

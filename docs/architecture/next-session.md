@@ -1,20 +1,30 @@
 # 下一次工作交接备忘
 
 > 本文件用于工作中断 / 多日离开后快速恢复上下文。
-> 上次更新：2026-07-14（RFC-007 全计划阶段已实现：可靠状态机、取消/重试/超时、
-> 三端 opt-in、OTel、SQLite recovery 与 opt-in 多 Agent primitives）。
+> 上次更新：2026-07-19（完成 RFC-005/006/007 落地后的文档与生产差距复核）。
 
 ---
 
-## 🎯 下次会话重点（2026-07-14 更新）
+## 🎯 当前工作队列（2026-07-19 更新）
 
-RFC-005/006/007 已合入工作区，剩项集中在真实外部环境验证：
+RFC-005/006/007 的核心库、三端 opt-in 接线与确定性测试已经落地，但不能据此宣称生产闭环。
+下一轮先完成以下六项正确性 / 产品接线，再推进扩展 RFC：
 
-1. **ModelRuntime**：`RUN_OLLAMA_E2E=1` 真机 E2E；Settings 热重载；`llm-openai-compat` 覆盖 LM Studio。
-2. **Product Behavior**：确定性 CI 基线已完成（8 traits / 9 cases 全过，**不是真实模型分数**，
-   见 `rfc-006-deterministic-baseline.json`）；下一步只需跑 live-model A/B 并据数据迭代 prompt。
-3. **TaskPool**：代码内阶段已完成。后续只做 live provider 取消能力核验、真实长任务
-   recovery soak、角色权限/成本基准；动态 LLM 拆图与跨进程调度需另立 RFC，不属于 RFC-007。
+1. **TaskPool 重启恢复**：server/desktop 已写 SQLite snapshot，但应用启动尚未读取
+   `listIncompleteRuns()` 并执行明确的恢复策略。
+2. **严格 provider 语义**：移除或硬隔离 Ollama/Hunyuan adapter 内部的静默 mock；
+   显式 provider 失败必须可见。
+3. **LLM 取消传播**：把 `AbortSignal` 从 TaskPool/Tao/ReAct 传入 `LlmClient.chat` 和 provider fetch，
+   使取消不必等待网络超时。
+4. **ModelRuntime 生命周期与可观测性**：补健康刷新、结构化错误、`model.provider.*` /
+   `model.embedding.fingerprint.*` hooks 与 OTel。
+5. **TaskPool 激活契约**：显式处理 classifier 依赖、CLI 持久化边界，并修正配置提示，避免“开关已开但不执行”。
+6. **三端配置 / 状态一致性**：对齐 CLI/server/desktop provider 选项和状态字段；明确热重载与重启边界。
+
+随后执行尚未关闭的真实环境验收：Ollama runtime E2E、live-model trait A/B、Ollama embedding
+基准、flywheel longrun、TaskPool provider cancel/recovery soak，以及首个签名桌面 release。
+动态 LLM 拆图、默认多 Agent、streaming/OpenAI-compatible provider、embedding migration
+属于后续独立 RFC，不混入本轮收口。
 
 ---
 
@@ -31,7 +41,7 @@ RFC-005/006/007 已合入工作区，剩项集中在真实外部环境验证：
 - **Windows 本地启动两批 hotfix 已落**（2026-05-20 → 05-21，无 tag，对应 CHANGELOG `[Unreleased]`）：
   - hotfix #1：Electron 33 vs Node 22 better-sqlite3 ABI 双向自愈 + `.env` 自动加载 + Chromium 后台 SSL 噪音静音
   - 现在 `pnpm desktop:dev` 可以在 Windows 上直接跑：`.env.local` 里写好 HUNYUAN_API_KEY 即可
-- **CI 状态**（本地与 GitHub Actions 同口径）：
+- **2026-05-20 CI 快照**（历史数据，不代表当前 HEAD；当前状态以实际命令输出为准）：
   - `pnpm lint` exit 0（2 条 React useExhaustiveDependencies 警告，不阻塞）
   - `pnpm exec turbo run typecheck --concurrency=1` → 35/35 successful（新增 `@openintj/telemetry-otel`）
   - `pnpm exec turbo run test --concurrency=1`（CI 模式）→ 35/35 successful，**444 passed + 11 skipped**
@@ -51,7 +61,7 @@ RFC-005/006/007 已合入工作区，剩项集中在真实外部环境验证：
 - **Phase 3.7 产出**（上一轮）：见 [`phase3-7-desktop-e2e.md`](./phase3-7-desktop-e2e.md)
 - **Phase 3.5 产出**（上一轮）：见 [`phase3-5-dormant-approval-ui.md`](./phase3-5-dormant-approval-ui.md)
 - **Phase 3.4 产出**：见 [`phase3-4-dormant-persistence.md`](./phase3-4-dormant-persistence.md)
-- **未提交变更**：仓库根 `.dockerignore` / `.env.example` / `deploy.sh` / `docker-compose.yml` / `nginx.conf` 仍未跟踪（Python v2 部署相关，**不属于本阶段范围**）
+- **工作区状态**：本节不记录易过期的 `git status`；每次接手直接运行 `git status --short`。
 
 ## 二、下次开机第一步：自检
 
@@ -59,12 +69,12 @@ RFC-005/006/007 已合入工作区，剩项集中在真实外部环境验证：
 cd F:\openINTJ\ts
 pnpm install                                             # 确认依赖未漂移
 pnpm lint                                                # exit 0
-pnpm exec turbo run typecheck --concurrency=1            # 33/33 successful
-pnpm exec turbo run test --concurrency=1                 # 430 PASS / 11 skipped（CI 模式）
+pnpm exec turbo run typecheck --concurrency=1            # 以当前 workspace 实际项目数为准
+pnpm exec turbo run test --concurrency=1                 # 以当前 HEAD 实际通过/跳过数为准
 
 # 想跑真盘 e2e（需要 @lancedb/lancedb + better-sqlite3 已装）：
 $env:OPENINTJ_E2E="1"
-pnpm exec turbo run test --concurrency=1                 # 441 PASS / 0 skipped
+pnpm exec turbo run test --concurrency=1                 # 记录本次实际结果，不沿用历史计数
 Remove-Item env:OPENINTJ_E2E
 
 # 想跑 Desktop E2E（Playwright + 真 Electron + 真 BrowserWindow，约 35s）：
@@ -94,11 +104,12 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 > RFC-006 当前 live-model 基线阻塞：需要可达、已配置的真实模型 runtime（Ollama 服务/模型或有效 provider 凭据）。
 > normal CI 的 scripted 9/9 只证明评测机械与 judges，严禁记作真实模型质量分。
 > e2e 测试需要 30s 超时（`describe(..., { timeout: 30_000 }, ...)`），LanceDB 首次建表 + 重新打开比较慢。
-> 远端 CI：见 `.github/workflows/ci.yml`，触发条件是 push / PR 改 `ts/**`。
+> 远端 CI：见 `.github/workflows/ci.yml`；触发分支与 `paths` 过滤以 workflow 当前内容为准。
 
-## 三、Phase 3 候选路线（按推荐顺序）
+## 三、Phase 3 路线归档（非当前待办）
 
-来自 [`phase2-complete.md` §九](./phase2-complete.md#九未完成--后续路线)，下表加上"开工成本 / 收益"维度。
+来自 [`phase2-complete.md` §九](./phase2-complete.md#九未完成--后续路线)。本表保留阶段决策历史；
+当前待办以文首“当前工作队列”为准。
 
 | # | 任务 | 开工成本 | 收益 | 推荐度 | 状态 |
 |---|---|---|---|:-:|:-:|
@@ -116,7 +127,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 | 11 | ~~**Dormant 事件清理**：`pruneEvents(olderThanTs)` / LRU 防 `dormant_events` 无限增长~~ | ~~低~~ | ~~中~~ | ⭐⭐ | ✅ 2026-06-30 完成（接口/双适配器/runtime 自动清理 + hydrate/record 兜底触发；见 §10.7） |
 | 12 | **Parity 扩展**：governance plane / Hooks / ContextEngine 接进 parity 网 | 中 | 中 | ⭐⭐ | 🟢 governance（9）+ context（ContextBudget/shaderForTask，12）+ taxonomy（EventType/CommandType/ErrorCode，14）已接；HookBus 本体无 Python 对手（TS-only），不设跨实现 parity，见 §12.8 |
 
-**默认推荐下一站**：
+**阶段收尾记录**：
 
 - ~~#3 嵌入基准~~（✅ xenova 真实数字已回填，纯 cosine 0.944；仅 ollama 待本地起服务后回填）
 - ~~#11 dormant 事件清理~~（✅ 2026-06-30 完成，见 §10.7）
@@ -129,11 +140,12 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 
 按这个顺序读，10 分钟即可回到工作状态：
 
-1. [`docs/architecture/phase2-complete.md`](./phase2-complete.md) —— **唯一最重要**，10 节覆盖一切
-2. [`CHANGELOG.md`](../../CHANGELOG.md) —— `3.0.0-alpha.0..2`（Phase 2 / 持久化 / CI）
-3. [`docs/architecture/python-reference.md`](./python-reference.md) —— Python v2 冻结说明 + 已知遗留清单
-4. [`docs/rfcs/`](../rfcs/) —— RFC-001..004
-5. [`docs/agent-architecture-research_20260422.md`](../agent-architecture-research_20260422.md) —— 最初的架构论证底稿
+1. 本文文首“当前工作队列”——当前唯一权威待办入口
+2. [`CHANGELOG.md`](../../CHANGELOG.md) —— 当前 `[Unreleased]` 与最近落地记录
+3. [`docs/rfcs/`](../rfcs/) —— RFC-001..007 及其边界
+4. [`docs/architecture/phase2-complete.md`](./phase2-complete.md) —— 历史阶段快照，不再作为当前路线图
+5. [`docs/architecture/python-reference.md`](./python-reference.md) —— Python v2 冻结说明 + 已知遗留清单
+6. [`docs/agent-architecture-research_20260422.md`](../agent-architecture-research_20260422.md) —— 最初的架构论证底稿
 
 ## 五、当前已知陷阱 / 注意事项
 
@@ -378,14 +390,14 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 
 | RFC / 模块 | 设计意图 | 状态 | 缺口摘要 |
 |---|---|:-:|---|
-| RFC-001 TAO/ReAct | 双层循环 + 4 早停 + 多轮 | 🟢 完成 | `enableReact:false` 退化分支已实现（`ReactStateMachine.runSingle`，`decideRoute`→`route.single` 触发，core+routing 测试守护）；文本协议 vs function-calling 已定案（ADR-001）；仅剩性能基准未做 |
-| RFC-002 Hooks | 强类型/优先级/短路/改写 | 🟢 完成 | §9 性能基准 `hook-bus-bench` 不存在 |
+| RFC-001 TAO/ReAct | 双层循环 + 4 早停 + 多轮 | 🟢 主路径完成 | `enableReact:false` 与 ADR-001 已闭合；`tao-step-bench` 已守护框架开销。RFC-001 §11 Q2 的产品级“续轮”判据仍需单独决策 |
+| RFC-002 Hooks | 强类型/优先级/短路/改写 | 🟢 完成 | `hook-bus-bench` 已守护 no-handler / 10-handler / register 的灾难性性能回退 |
 | RFC-003 方向一 多线程 | Mutex/Channel/CV/Pool/ForkJoin 装配进 Agent | 🟢 有界接入 | `forkJoin` + `Semaphore`（经 `forkJoin.concurrency`）已进三端自一致性主路径（§9.3 并行 + §12.6 并发上限）；Mutex/Channel/CV/Pool/Backpressure 仍实验性 |
-| RFC-003 方向二 任务池 | SharedContext/HybridRetriever/TaskQueue/ObjectPool | 🟡 部分 | 仅 HybridRetriever 接进 server；其余仅原型；检索每次重建索引；无 nDCG 基准 |
+| RFC-003 / RFC-007 任务池 | 模板 DAG、有界并发、可靠状态机、持久化 | 🟡 生产收口中 | TaskPool 已三端 opt-in，SQLite store/recover 有包级测试；应用启动恢复、真实 provider cancel/recovery soak 仍待完成 |
 | RFC-003 方向三 钝化记忆 | 存→学→审批→**注入 systemPrompt** | 🟢 回路已闭合 | 2026-07-08 收官：`getPersona()` 出口 + 三端注入（含 CLI）+ A/B 杠杆（`OPENINTJ_PERSONA`）+ 脱敏（默认开）+ revoke（runtime/IPC/HTTP/UI 全通）。见 §12.4 |
 | RFC-004 桌面 IPC | 安全模型 + 流式 + 系统能力 | 🟢 基本完成 | 流式✅ 自动更新✅ 工作区读写(治理门禁)✅ config 服务✅ fs.watch✅；2026-07-08 补齐**设置面板 UI**（消费 workspace/config IPC + 实时变更）+ config 字段/启动接线 + **utility 挖掘 worker**（opt-in）。见 §12.5 |
 | 跨 RFC 执行工具 | 治理边界下真实 fs/命令 | 🟢 完成 | fs/命令工具早已是真实沙箱实现（`createWorkspaceTools`）；2026-07-08 又把治理接进 `ToolHub.call`（gate → `checkToolCall`）+ 桌面 IPC，`[mock]` 仅剩 search 兜底。见 §12.3 |
-| #3 嵌入基准 | simple/xenova/ollama nDCG | 🟢 harness+双路径基准落地，simple 实测归档；xenova/ollama 待回填 | `retrieval-benchmark.md` |
+| #3 嵌入基准 | simple/xenova/ollama nDCG | 🟡 剩 Ollama | harness + 双路径基准已落地，simple/xenova 实测归档；Ollama 待回填。见 `retrieval-benchmark.md` |
 
 ### 8.2 重点缺口（按严重度）
 
@@ -399,12 +411,12 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 
 强：单测 444+ passed、Python parity、真盘持久化 e2e(`OPENINTJ_E2E`)、Desktop Playwright e2e(`OPENINTJ_PLAYWRIGHT`)、OTel trace/metric、desktop UI(StatusBar/Trajectory/Dormant/记忆Tab)、server `/api/{status,audit,memory,dormant/*}`。
 
-弱/缺：
-- 性能承诺（RFC-001 §8 / RFC-002 §9）**无基准守护**
-- 记忆召回质量**未量化**（默认 64 维 hash embedder）
-- 钝化记忆"越用越好"：persona 注入已可用 `OPENINTJ_PERSONA=0/1` 做 A/B 对照（§12.4），但**尚无自动化长跑对照报告**
-- 真实工具缺失 → 端到端"任务完成度"**无法验证**
-- OTel 默认 no-op，**无现成 dashboard**
+仍弱 / 待补：
+- 性能基准已经存在，但只守灾难性回退，不等于生产负载容量测试。
+- 记忆召回已有 simple/xenova 固定语料指标；Ollama 数字和真实业务语料仍缺。
+- 钝化记忆 / classifier / Product Behavior 的长跑与 live-model A/B harness 已就绪，真实批量结果尚未归档。
+- fs/命令工具已是真实沙箱；联网 search 未配置 provider 时仍会走 mock 兜底，不能把该路径当真实任务完成证据。
+- OTel hooks/span/metric 已落地但默认 opt-in，尚无现成 dashboard/SLO；ModelRuntime provider 事件仍缺。
 
 ### 8.4 五项推进计划（2026-05-30 全部落地）
 
@@ -502,7 +514,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 - `retrieval-benchmark.ts`（新）：`benchmarkRetrieval(embedder)` 通用异步 harness（探维度 → 建库 → `evaluateRanker`）；
   spec 默认跑 `SimpleEmbedder` 守基线，`RUN_EMBED_COMPARE=1` 时三方对比 simple/xenova/ollama。
 - `HybridRetriever` 增量索引：`upsert/upsertBatch/remove/clear`（增量维护 BM25 统计），替代每次全量重建；
-  接进 agent 仍需 change-feed（留后续）。
+  change-feed 已于 2026-06-30 接进 agent（见 §十 A1）。
 - `@openintj/shared` 新增 `task-eval.ts`：端到端任务完成度 harness（`evaluateTasks` + `judgeContainsAll/judgeNonEmpty`）。
 - 测试：taskpool 增量索引断言、task-eval 单测、retrieval-benchmark 基线。
 
@@ -510,7 +522,8 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 
 - **governance parity**：`generate_fixtures.py` 加 `gen_governance()`（白名单 / 阻断 / 审批 / 未知目标 × strictMode）；
   `plane-governance/__tests__/parity/{fixtures/python-v2.json, python-v2.spec.ts}`（9 tests）断言 TS `PolicyEngine.check`
-  与 Python 同口径（allowed/result/riskLevel/`POLICY_BLOCKED`）。Hooks/ContextEngine parity 仍待办。
+  与 Python 同口径（allowed/result/riskLevel/`POLICY_BLOCKED`）。ContextEngine/taxonomy parity
+  后于 2026-07-08 完成；HookBus 本体无 Python 对手，不设跨实现 parity（见 §12.8）。
 - **OTel route/IPC 根 span**：`telemetry-otel` 新增 `withRootSpan(name, fn, {attributes})`——用 `startActiveSpan`
   把一次 HTTP/IPC 调用包成根 span，agent 内部 hook→span 因 `attach.ts` 用 `context.active()` 作父 → 自动挂到根下
   （需进程注册带 AsyncLocalStorage 的 ContextManager，`bootstrapNodeOtel` / `NodeTracerProvider.register()` 满足）。
@@ -524,14 +537,14 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
   core(loop/hooks)、telemetry-otel、dormant、shared、taskpool、plane-execution/memory/governance、apps(cli/server/desktop)。
   仓库根 `.dockerignore`/`.env.example`/`deploy.sh`/`docker-compose.yml`/`nginx.conf` 仍是历史未跟踪（Python v2 部署相关，不属本阶段）。
 
-### 9.8 本轮仍未做（明确留后续）
+### 9.8 历史留项状态（以当前工作队列为准）
 
-- RFC-004 utility process 蒸馏 worker（`mine()` 仍在 main 跑）。
+- ~~RFC-004 utility process 蒸馏 worker（`mine()` 仍在 main 跑）~~。✅ 2026-07-08 完成 opt-in worker + 内联回退（§12.5）。
 - ~~增量检索索引**接进 agent**（需 fragment change-feed 把 memory 写入广播给 HybridRetriever）~~。✅ 2026-06-30 完成（§十 A1）
 - ~~HybridRetriever 换 LanceDB 原生 FTS（#10 余下部分）~~。✅ 2026-07-08 完成（存储层原生 FTS + RRF 融合 + server opt-in，见 §12.2）
-- Parity 扩展：Hooks / ContextEngine（governance 已接）。
+- ~~Parity 扩展：Hooks / ContextEngine（governance 已接）~~。✅ ContextEngine/taxonomy 已完成；HookBus 无 Python 对手（§12.8）。
 - ~~`pruneEvents(olderThanTs)`（#11 dormant 事件磁盘清理）~~。✅ 2026-06-30 完成（保留策略 + hydrate/record/mine 三处触发，见 §10.7）
-- #6 打包发布（electron-builder Win/macOS + electron-updater）。
+- ~~#6 打包发布代码~~。✅ builder/updater/release workflow 已就绪；图标、签名、Linux CI 与首个真实 release 仍是运维验收项。
 - ~~abTest / self-consistency 的长跑可观测验证（脚手架已就位，缺真实跑批数据）~~。✅ 2026-06-30 longrun harness 落地（§十 A2，真实跑批仍需 `RUN_LONGRUN=1` + LLM key 手动触发）
 
 ---
@@ -820,7 +833,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
   mineRunner 接线：走 worker / llmExtract 不走 / 未配不走）；desktop config schema 扩展经现有 ipc-handlers
   契约测试守护。typecheck + biome 全绿；真实 worker 线程手动 e2e 通过（3 patterns off-thread）。
 - **未做（明确留量）**：config 热重载（当前需重启；面板已标注）；renderer 无 jsdom 单测 → 面板交互留
-  Playwright；`skillLearning` 已入 config 但装配开关沿用 env（后续可接）。
+  Playwright。`skillLearning` 已由保存配置透传到 desktop agent 装配，不再是 env-only。
 
 ### 12.6 方向一并发原语接真实 agent：self-consistency 并发上限（2026-07-08）
 

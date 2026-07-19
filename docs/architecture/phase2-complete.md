@@ -5,6 +5,10 @@
 > 状态：**完成**（typecheck 全绿 / 全量测试 286 / 286 passed）
 >
 > 完成日期：2026-04-29
+>
+> **归档说明（2026-07-19）**：本文的包数量、测试数量和“下一阶段任务”是 Phase 2
+> 收尾时的历史快照，不代表当前 HEAD。当前工作队列统一见
+> [`next-session.md`](./next-session.md) 文首。
 
 ---
 
@@ -158,16 +162,21 @@ ts/
 
 ## 九、未完成 / 后续路线
 
-> Phase 2 不在范围内，但已识别的下一阶段任务：
+> 下列项目最初超出 Phase 2 范围；状态已回填，避免继续被误读成当前待办：
 
-1. ~~**真实持久化 e2e**~~：✅ **已于 2026-05-09 完成**（Phase 3.1）。`apps/server` 通过 `OPENINTJ_DATA_DIR` env、`apps/desktop` 通过 `app.getPath('userData')` 默认启用 LanceDB + SQLite 写盘；新增 `createPersistentMemoryStore` 工厂；写入 → 关闭 → 重启 → 向量检索/审计读回 e2e 全绿。详见 [phase3-1-persistence.md](./phase3-1-persistence.md)。
-2. **嵌入基准**：完成 `simple` vs `xenova` vs `ollama` 在固定语料上的 nDCG 基准，写入 `packages/embed/__tests__/benchmark.spec.ts`。
-3. **Desktop E2E**：使用 Playwright 启 Electron + 真渲染器，跑 mock chat 路径。
-4. ~~**RFC-003 装配**：把 `concurrency`/`taskpool`/`dormant` 接入主 Agent 的可选模式（默认关闭，环境变量 / 配置启用）。~~ ✅ **已于 2026-05-11 完成**（Phase 3.3）。`apps/server` + `apps/desktop` 都加了三个 opt-in：`enableDormant` / `retrievalMode` / `rateLimit`，HTTP `/api/dormant/*` 与 `/api/memory?mode=hybrid` 已上线，desktop IPC 同步扩展。详见 [phase3-3-rfc3-wiring.md](./phase3-3-rfc3-wiring.md)。
-5. **行为对齐测试**：按 `python-reference.md` §五的"对齐测试模式"，对每个核心组件补一条 Python v2 → TS 的事件序列对比。
-6. **打包发布**：`electron-builder` Win/macOS 双平台产物 + `electron-updater` 升级链路。
-7. **可观测性**：把 hooks 输出接入 OpenTelemetry / Datadog（生产场景）。
-8. ~~**CI 工作流**：GitHub Actions 跑 typecheck/test~~ ✅ **已于 2026-05-09 完成**（Phase 3.2）。仓库根 `.github/workflows/ci.yml` 三个 job：lint+typecheck（Node 20/22）/ test（ubuntu/win/mac）/ e2e-persistence（ubuntu）。turbo cache 已识别 `OPENINTJ_*` env。
+1. **真实持久化 e2e**：✅ 2026-05-09 完成（Phase 3.1）。详见 [phase3-1-persistence.md](./phase3-1-persistence.md)。
+2. **嵌入基准**：🟡 harness 与双路径指标已落地，simple/xenova 已归档；只剩 Ollama
+   真机数据待 `RUN_EMBED_COMPARE=1` 回填。见 [retrieval-benchmark.md](./retrieval-benchmark.md)。
+3. **Desktop E2E**：✅ 2026-05-20 完成（Phase 3.7），Playwright + 真 Electron 路径已进专用 CI。
+4. **RFC-003 装配**：✅ 2026-05-11 完成基础 opt-in，后续又补齐 self-consistency 有界并发、
+   memory flywheel 与 RFC-007 TaskPool。详见 [phase3-3-rfc3-wiring.md](./phase3-3-rfc3-wiring.md)。
+5. **行为对齐测试**：✅ governance、ContextEngine 与 taxonomy fixture 已接；
+   HookBus 为 TS-only、无 Python 对手，不设伪 parity。见 `next-session.md` §12.8。
+6. **打包发布**：🟡 builder/updater/release workflow 已就绪；品牌图标、签名、Linux CI
+   与首个正式 release 仍是运维验收。见 [release-packaging.md](./release-packaging.md)。
+7. **可观测性**：✅ Hooks → OpenTelemetry、route/IPC 根 span 与 TaskPool/Product Behavior
+   指标已落地；dashboard/SLO 与 ModelRuntime provider 事件仍待补。
+8. **CI 工作流**：✅ 2026-05-09 完成，后续已扩展 persistence 与 Desktop E2E jobs。
 
 ## 十、阶段交付物索引
 
@@ -183,4 +192,5 @@ ts/
 
 ---
 
-**Phase 2 完成于 2026-04-29。下一阶段 Phase 3 启动前，建议先做 §九 的"行为对齐测试"与"真实持久化 e2e" 。**
+**Phase 2 完成于 2026-04-29。本文只作阶段归档；当前任务请勿从本页 §九重新派生，
+统一以 [`next-session.md`](./next-session.md) 文首为准。**

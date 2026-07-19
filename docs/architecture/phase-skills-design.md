@@ -1,6 +1,6 @@
 # 技能系统设计 — Phase 1 作者能力包（SKILL.md）+ Phase 2 自学习闭环
 
-> 更新时间：2026-07-07
+> 更新时间：2026-07-19
 > 状态：✅ Phase 1 已实现（作者能力包注入）· ✅ Phase 2 已实现（自学习闭环：加权 + 蒸馏 + 审批 + DB 源）
 > 相关：落地总览与验证口径见 [`next-session.md` §十一 / §11.4](./next-session.md) ·
 > 变更清单见 [CHANGELOG](../../CHANGELOG.md) · 与飞轮同哲学（使用反馈）见 [`phase-flywheel-design.md`](./phase-flywheel-design.md)
@@ -106,11 +106,15 @@ flowchart LR
 - **可观测 + 审批入口**：`event.SKILL_PROPOSED` + counter `openintj.skill.proposed`；server HTTP `/api/skills/*`
   与 desktop IPC 镜像，未启用 `skills_learning_not_enabled`(503)。
 
-### Phase 2 仍未做（后续）
+### Phase 2 后续状态（2026-07-19 回填）
 
-- 桌面「技能审批」UI 面板（IPC/preload 已就绪，抄 `DormantPanel`）。
-- 工具子集 / 技能绑定新工具（当前只注入指令文本，不动 `ToolHub`）。
-- 权重时间衰减 / LRU（当前只累加 + clamp）；候选相似度去重（当前按 id）。
+- ~~桌面「技能审批」UI 面板~~：✅ `SkillPanel` 已实现蒸馏、筛选、approve/reject/revoke，
+  并接入 renderer tab。
+- ~~权重时间衰减 / LRU~~：✅ 已实现按 `lastUsed` 的可配置指数半衰期；selector 缓存有界。
+- ~~工具子集软绑定~~：✅ `Skill.tools` 已贯通 frontmatter/SQLite/DB/distill，
+  prompt 会提示优先工具并暴露 `skillToolAllowlist`。
+- **仍待设计**：ToolHub 层硬隔离 / 收窄工具面（当前 allowlist 只暴露给装配方，不执行安全边界）；
+  蒸馏候选语义相似度去重（当前按 id/name）；技能绑定“新注册工具”的治理模型。
 
 ## 风险与缓解
 
