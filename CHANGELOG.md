@@ -38,6 +38,10 @@
 
 ### Changed
 
+- **真实 provider fail-closed**：从 Ollama/Hunyuan adapter 删除内部 mock 生成器与
+  `isMockMode` 旁路。Ollama 网络/HTTP/非法响应、Hunyuan 缺 key/鉴权/HTTP/非法响应
+  现在统一显式失败并更新 degraded/unauthorized 状态；显式 mock 仅由 ModelRuntime
+  `MockLlmClient` 提供。真实 Ollama runtime E2E 4/4 与 Desktop mock smoke 5/5 通过。
 - 三端 agent 改用 `@openintj/model-runtime`（移除重复 `pickLlm`/`buildLlm` 与 Ollama→Hunyuan mock 耦合）。
 - 默认 `LLM_PROVIDER=auto`（server/desktop/cli）；`.env.example` 补充 `EMBED_PROVIDER` 与 Ollama 变量。
 - trait evaluation runner 可选返回 `toolsUsed`/`trajectory` 结构化证据；T3 优先验证真实 search 工具，

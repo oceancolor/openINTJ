@@ -32,8 +32,8 @@ test.describe("desktop smoke (mock provider, no persist)", () => {
     // JSON 文本，所以必须把搜索范围圈在主聊天区内）。
     const chat = page.locator("div.bg-\\[\\#1e1e2e\\]");
     await expect(chat.getByText("你好", { exact: false }).first()).toBeVisible({ timeout: 5_000 });
-    // mock greet 特征片段（mock-responses.ts:13："你好！我是 OpenINTJ Agent（mock 模式）…"）
-    await expect(chat.getByText(/OpenINTJ Agent（mock 模式）/)).toBeVisible({ timeout: 15_000 });
+    // MockLlmClient 是唯一显式 mock 路径；真实 provider adapter 不再生成 mock 文本。
+    await expect(chat.getByText(/\[mock\] 收到：你好/)).toBeVisible({ timeout: 15_000 });
   });
 
   test("trajectory tab counts after chat", async ({ page }) => {

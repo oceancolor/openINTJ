@@ -242,6 +242,10 @@ stateDiagram-v2
 
 这要求 Ollama/Hunyuan adapter 增加 strict 行为或把 mock 生成从真实 adapter 中移出。runtime 不得通过检查 adapter 的 `isMockMode` 来接受一次“看似成功”的真实调用。
 
+> 实现状态（2026-07-19）：真实 adapter 已完全移除 mock 生成与 `isMockMode`；
+> Ollama 网络/HTTP/非法响应、Hunyuan 缺 key/鉴权/HTTP/非法响应均抛结构化 `AgentError`。
+> `MockLlmClient` 是唯一 LLM mock 实现，只有显式 `mock` 或 `auto` 状态机可见回退才会构造。
+
 ### 7.3 Embedding 独立状态机
 
 ```mermaid

@@ -7,7 +7,6 @@ import {
   type LlmStatus,
   type ToolHandler,
 } from "@openintj/core";
-import { generateMockResponse } from "./mock-responses.js";
 import { type HunyuanConfig, HunyuanConfigSchema, loadHunyuanConfigFromEnv } from "./types.js";
 
 interface OpenAIChatRequestMessage {
@@ -30,7 +29,7 @@ export interface HunyuanSearchResult {
   answer: string;
   /** 命中搜索时的来源列表（需服务端开启 search_info）。 */
   sources: HunyuanSearchSource[];
-  mode: "live" | "mock" | "unauthorized";
+  mode: "live";
 }
 
 interface OpenAIChatResponse {
@@ -57,6 +56,7 @@ const isAuthError = (status: number, body: unknown): boolean => {
 export class HunyuanClient implements LlmClient {
   readonly config: HunyuanConfig;
   private authFailed: boolean;
+  private connected = true;
   private lastError = "";
   private lastErrorCode = "";
   private lastErrorType = "";
@@ -72,12 +72,12 @@ export class HunyuanClient implements LlmClient {
     return new HunyuanClient(loadHunyuanConfigFromEnv(env));
   }
 
-  get isMockMode(): boolean {
-    return !this.config.apiKey || this.authFailed;
+  get isAvailable(): boolean {
+    return Boolean(this.config.apiKey) && !this.authFailed && this.connected;
   }
 
   async chat(messages: ChatMessage[], opts: ChatOptions = {}): Promise<string> {
-    if (this.isMockMode) return generateMockResponse(messages);
+    this.assertAvailable();
     return await this.request(messages, opts, this.config.model);
   }
 
@@ -87,18 +87,9 @@ export class HunyuanClient implements LlmClient {
    */
   async webSearch(query: string, opts: ChatOptions = {}): Promise<HunyuanSearchResult> {
     const messages: ChatMessage[] = [{ role: "user", content: query }];
-    if (this.isMockMode) {
-      return {
-        query,
-        answer: generateMockResponse(messages),
-        sources: [],
-        mode: this.authFailed ? "unauthorized" : "mock",
-      };
-    }
+    this.assertAvailable();
+    this.lastSearchSources = [];
     const answer = await this.request(messages, opts, this.config.model, "force");
-    if (this.authFailed) {
-      return { query, answer, sources: [], mode: "unauthorized" };
-    }
     return { query, answer, sources: [...this.lastSearchSources], mode: "live" };
   }
 
@@ -107,7 +98,7 @@ export class HunyuanClient implements LlmClient {
     image: { base64: string; mimeType: string },
     opts: ChatOptions = {},
   ): Promise<string> {
-    if (this.isMockMode) return generateMockResponse(messages);
+    this.assertAvailable();
     const augmented = [...messages];
     const lastUserIdx = [...augmented].reverse().findIndex((m) => m.role === "user");
     const idx = lastUserIdx >= 0 ? augmented.length - 1 - lastUserIdx : augmented.length - 1;
@@ -132,13 +123,15 @@ export class HunyuanClient implements LlmClient {
       model: this.config.model,
       visionModel: this.config.visionModel,
       baseUrl: this.config.baseUrl,
-      available: !this.isMockMode,
-      mode: this.isMockMode ? (this.authFailed ? "unauthorized" : "mock") : "live",
+      available: this.isAvailable,
+      mode: !this.config.apiKey || this.authFailed ? "unauthorized" : "live",
       status: !this.config.apiKey
         ? "missing_api_key"
         : this.authFailed
           ? "unauthorized"
-          : "connected",
+          : this.connected
+            ? "connected"
+            : "degraded",
       visionSupported: true,
     };
     if (this.lastError) status.lastError = this.lastError;
@@ -193,14 +186,23 @@ export class HunyuanClient implements LlmClient {
         parsed = null;
       }
       if (!res.ok) {
+        this.connected = false;
         const err = (parsed as OpenAIErrorEnvelope | undefined)?.error;
         this.lastError = err?.message ?? text.slice(0, 200);
         this.lastErrorCode = err?.code ?? `HTTP_${res.status}`;
         this.lastErrorType = err?.type ?? "http_error";
         if (isAuthError(res.status, parsed)) {
           this.authFailed = true;
-          // 鉴权失败：直接降级 mock，不抛
-          return generateMockResponse(messages);
+          throw new AgentError({
+            code: ErrorCode.CONFIG_MISSING,
+            message: `Hunyuan 鉴权失败: ${this.lastError}`,
+            retriable: false,
+            details: {
+              provider: "hunyuan",
+              status: res.status,
+              errorCode: this.lastErrorCode,
+            },
+          });
         }
         throw new AgentError({
           code: ErrorCode.INTERNAL_ERROR,
@@ -209,11 +211,29 @@ export class HunyuanClient implements LlmClient {
         });
       }
       const data = parsed as OpenAIChatResponse;
+      const content = data?.choices?.[0]?.message?.content;
+      if (typeof content !== "string") {
+        this.connected = false;
+        this.lastError = "Hunyuan response is missing choices[0].message.content";
+        this.lastErrorCode = "INVALID_RESPONSE";
+        this.lastErrorType = "invalid_response";
+        throw new AgentError({
+          code: ErrorCode.INTERNAL_ERROR,
+          message: this.lastError,
+          retriable: true,
+          details: { provider: "hunyuan" },
+        });
+      }
       this.lastSearchSources = data.search_info?.search_results ?? [];
-      return data.choices?.[0]?.message?.content ?? "";
+      this.connected = true;
+      this.lastError = "";
+      this.lastErrorCode = "";
+      this.lastErrorType = "";
+      return content;
     } catch (err) {
       if (err instanceof AgentError) throw err;
       const message = err instanceof Error ? err.message : String(err);
+      this.connected = false;
       this.lastError = message;
       this.lastErrorType = "network_error";
       throw new AgentError({
@@ -238,12 +258,23 @@ export class HunyuanClient implements LlmClient {
       return r;
     });
   }
+
+  private assertAvailable(): void {
+    if (this.config.apiKey && !this.authFailed) return;
+    const reason = this.authFailed ? "configured credentials were rejected" : "missing API key";
+    throw new AgentError({
+      code: ErrorCode.CONFIG_MISSING,
+      message: `Hunyuan 不可用: ${reason}`,
+      retriable: false,
+      details: { provider: "hunyuan", reason },
+    });
+  }
 }
 
 /**
  * 用混元联网搜索构造一个真实的 `search` 工具 handler，可注册到 ToolHub 的内置 search 槽。
  * - 调用时强制开启联网搜索（不依赖 HUNYUAN_ENABLE_SEARCH env）。
- * - 无 key / 鉴权失败时返回 `mode: "mock"|"unauthorized"`，不抛错（与工具语义一致）。
+ * - 无 key / 鉴权失败时抛出结构化 AgentError，由 ToolHub 记录为显式工具失败。
  */
 export const createHunyuanSearchTool =
   (client: HunyuanClient): ToolHandler =>
@@ -255,7 +286,7 @@ export const createHunyuanSearchTool =
     }
     const r = await client.webSearch(query);
     return {
-      ok: r.mode === "live",
+      ok: true,
       mode: r.mode,
       query: r.query,
       answer: r.answer,

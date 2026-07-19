@@ -31,14 +31,37 @@ describe("OllamaClient", () => {
     expect(r).toBe("ollama says hi");
   });
 
-  it("falls back to mock when network errors", async () => {
+  it("fails closed when network errors", async () => {
     globalThis.fetch = (async () => {
       throw new Error("ECONNREFUSED");
     }) as unknown as typeof fetch;
     const c = new OllamaClient({ baseUrl: "http://localhost:11434" });
-    const r = await c.chat([{ role: "user", content: "你好" }]);
-    expect(r).toContain("OpenINTJ");
-    expect(c.getStatus().mode).toBe("mock");
+    await expect(c.chat([{ role: "user", content: "你好" }])).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+      retriable: true,
+    });
+    expect(c.getStatus()).toMatchObject({ mode: "live", status: "degraded" });
+  });
+
+  it("fails closed on HTTP errors without returning generated content", async () => {
+    globalThis.fetch = (async () =>
+      new Response("model not found", { status: 404 })) as unknown as typeof fetch;
+    const c = new OllamaClient({ baseUrl: "http://localhost:11434" });
+    await expect(c.chat([{ role: "user", content: "你好" }])).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+      retriable: false,
+    });
+    expect(c.getStatus().lastError).toContain("model not found");
+  });
+
+  it("rejects malformed success responses", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ done: true }), { status: 200 })) as unknown as typeof fetch;
+    const c = new OllamaClient({ baseUrl: "http://localhost:11434" });
+    await expect(c.chat([{ role: "user", content: "你好" }])).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+    });
+    expect(c.getStatus().lastErrorType).toBe("invalid_response");
   });
 
   it("vision chat puts image in images array, not in content", async () => {
@@ -72,7 +95,7 @@ describe("OllamaClient", () => {
     globalThis.fetch = (async () => {
       throw new Error("fail");
     }) as unknown as typeof fetch;
-    await c.chat([{ role: "user", content: "y" }]);
+    await expect(c.chat([{ role: "user", content: "y" }])).rejects.toBeDefined();
     expect(c.getStatus().status).toBe("degraded");
   });
 

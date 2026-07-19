@@ -1,36 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HunyuanClient, createHunyuanSearchTool, generateMockResponse } from "../src/index.js";
+import { HunyuanClient, createHunyuanSearchTool } from "../src/index.js";
 
-describe("generateMockResponse", () => {
-  it("returns greet for hello", () => {
-    const r = generateMockResponse([{ role: "user", content: "hello there" }]);
-    expect(r).toContain("OpenINTJ");
-  });
-
-  it("returns help for 介绍", () => {
-    const r = generateMockResponse([{ role: "user", content: "介绍一下你的功能" }]);
-    expect(r).toContain("框架");
-  });
-
-  it("default for arbitrary input echoes truncated text", () => {
-    const r = generateMockResponse([{ role: "user", content: "x".repeat(120) }]);
-    expect(r).toContain("...");
-  });
-});
-
-describe("HunyuanClient (mock mode)", () => {
-  it("uses mock when no api key", async () => {
+describe("HunyuanClient (strict configuration)", () => {
+  it("fails closed when no api key is configured", async () => {
     const c = new HunyuanClient({ apiKey: "" });
-    expect(c.isMockMode).toBe(true);
-    const r = await c.chat([{ role: "user", content: "你好" }]);
-    expect(r).toContain("OpenINTJ");
+    expect(c.isAvailable).toBe(false);
+    await expect(c.chat([{ role: "user", content: "你好" }])).rejects.toMatchObject({
+      code: "CONFIG_MISSING",
+      retriable: false,
+    });
   });
 
   it("getStatus reports missing_api_key", () => {
     const c = new HunyuanClient({ apiKey: "" });
     const s = c.getStatus();
     expect(s.status).toBe("missing_api_key");
-    expect(s.mode).toBe("mock");
+    expect(s.mode).toBe("unauthorized");
     expect(s.available).toBe(false);
     expect(s.provider).toBe("hunyuan");
   });
@@ -124,14 +109,16 @@ describe("HunyuanClient (live mode with fetch mock)", () => {
     expect(body["force_search_enhancement"]).toBe(true);
   });
 
-  it("degrades to mock on 401 and updates status", async () => {
+  it("fails closed on 401 and updates status", async () => {
     globalThis.fetch = (async () =>
       new Response(JSON.stringify({ error: { message: "bad key", code: "invalid_api_key" } }), {
         status: 401,
       })) as unknown as typeof fetch;
     const c = new HunyuanClient({ apiKey: "bad" });
-    const r = await c.chat([{ role: "user", content: "你好" }]);
-    expect(r).toContain("OpenINTJ");
+    await expect(c.chat([{ role: "user", content: "你好" }])).rejects.toMatchObject({
+      code: "CONFIG_MISSING",
+      retriable: false,
+    });
     const s = c.getStatus();
     expect(s.mode).toBe("unauthorized");
     expect(s.status).toBe("unauthorized");
@@ -189,11 +176,11 @@ describe("HunyuanClient (live mode with fetch mock)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("createHunyuanSearchTool degrades to mock without key (no throw)", async () => {
+  it("createHunyuanSearchTool fails visibly without a key", async () => {
     const tool = createHunyuanSearchTool(new HunyuanClient({ apiKey: "" }));
-    const out = (await tool({ query: "hello" })) as { ok: boolean; mode: string };
-    expect(out.ok).toBe(false);
-    expect(out.mode).toBe("mock");
+    await expect(tool({ query: "hello" })).rejects.toMatchObject({
+      code: "CONFIG_MISSING",
+    });
   });
 
   it("throws on 500 retriable", async () => {
@@ -205,6 +192,22 @@ describe("HunyuanClient (live mode with fetch mock)", () => {
     await expect(c.chat([{ role: "user", content: "x" }])).rejects.toMatchObject({
       retriable: true,
     });
+    expect(c.getStatus()).toMatchObject({
+      available: false,
+      mode: "live",
+      status: "degraded",
+    });
+  });
+
+  it("rejects malformed success responses", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ choices: [] }), { status: 200 })) as unknown as typeof fetch;
+    const c = new HunyuanClient({ apiKey: "k" });
+    await expect(c.chat([{ role: "user", content: "x" }])).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+      retriable: true,
+    });
+    expect(c.getStatus().lastErrorType).toBe("invalid_response");
   });
 
   it("vision chat injects image into last user message", async () => {

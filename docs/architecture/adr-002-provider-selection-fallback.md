@@ -179,7 +179,9 @@ auto 仍可选择 mock，但它是 actual provider 的公开状态，而不是 a
 ### 负面后果与成本
 
 - provider resolution 变为异步，CLI 当前同步 `assembleAgent()` 需要调整。
-- Ollama/Hunyuan adapter 的内部 mock 行为需要拆分或增加 strict 模式。
+- ~~Ollama/Hunyuan adapter 的内部 mock 行为需要拆分或增加 strict 模式。~~
+  ✅ 2026-07-19 已从真实 adapter 移除 mock 生成；显式 mock 只由
+  `@openintj/model-runtime` 的 `MockLlmClient` 提供。
 - Desktop IPC、config schema、SettingsPanel 和 StatusBar 都要升级。
 - persistence 初始化顺序要改为“先 metadata 指纹、后 LanceDB/hydrate”。
 - legacy 真盘数据没有指纹时会被拒绝，用户必须显式选择恢复或重建路径。

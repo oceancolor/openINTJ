@@ -13,8 +13,10 @@ RFC-005/006/007 的核心库、三端 opt-in 接线与确定性测试已经落�
 1. ~~**TaskPool 重启恢复**~~：✅ 2026-07-19 完成。server/desktop 启动扫描
    `listIncompleteRuns()`；默认 cancel 防重复副作用，显式 `OPENINTJ_TASK_POOL_RECOVERY=resume`
    才续跑；快照补 `goalInput`，旧快照拒绝不可靠 resume；包级与两端真实 SQLite E2E 通过。
-2. **严格 provider 语义**：移除或硬隔离 Ollama/Hunyuan adapter 内部的静默 mock；
-   显式 provider 失败必须可见。
+2. ~~**严格 provider 语义**~~：✅ 2026-07-19 完成。Ollama/Hunyuan adapter 不再包含
+   mock 生成器；缺配置、鉴权、网络、HTTP 与非法响应均显式抛结构化错误，状态同步转为
+   unauthorized/degraded。显式 mock 只由 ModelRuntime 构造；adapter/runtime 单测、
+   Ollama 真机 4/4 与 Desktop mock smoke 5/5 通过。
 3. **LLM 取消传播**：把 `AbortSignal` 从 TaskPool/Tao/ReAct 传入 `LlmClient.chat` 和 provider fetch，
    使取消不必等待网络超时。
 4. **ModelRuntime 生命周期与可观测性**：补健康刷新、结构化错误、`model.provider.*` /

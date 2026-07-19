@@ -7,7 +7,6 @@ import {
   type LlmClient,
   type LlmStatus,
 } from "@openintj/core";
-import { generateMockResponse } from "./mock-responses.js";
 import { type OllamaConfig, OllamaConfigSchema, loadOllamaConfigFromEnv } from "./types.js";
 
 const stringifyContent = (c: ChatMessageContent): string =>
@@ -34,10 +33,6 @@ export class OllamaClient implements LlmClient {
     return new OllamaClient(loadOllamaConfigFromEnv(env));
   }
 
-  get isMockMode(): boolean {
-    return !this.connected;
-  }
-
   async chat(messages: ChatMessage[], opts: ChatOptions = {}): Promise<string> {
     return await this.request(messages, opts, this.config.model, undefined);
   }
@@ -58,6 +53,13 @@ export class OllamaClient implements LlmClient {
       const res = await fetch(url, { signal: controller.signal });
       clearTimeout(timer);
       this.connected = res.ok;
+      if (res.ok) {
+        this.lastError = "";
+        this.lastErrorType = "";
+      } else {
+        this.lastError = `Ollama health check failed (${res.status})`;
+        this.lastErrorType = "http_error";
+      }
       return res.ok;
     } catch (err) {
       this.connected = false;
@@ -74,7 +76,7 @@ export class OllamaClient implements LlmClient {
       visionModel: this.config.visionModel,
       baseUrl: this.config.baseUrl,
       available: this.connected,
-      mode: this.connected ? "live" : "mock",
+      mode: "live",
       status: this.connected ? "connected" : "degraded",
       visionSupported: true,
     };
@@ -126,23 +128,51 @@ export class OllamaClient implements LlmClient {
       if (!res.ok) {
         this.lastError = text.slice(0, 200);
         this.lastErrorType = "http_error";
-        // 服务不可达时降级 mock，避免 CLI 卡死
         this.connected = false;
-        return generateMockResponse(messages);
+        throw new AgentError({
+          code: ErrorCode.INTERNAL_ERROR,
+          message: `Ollama 调用失败 (${res.status}): ${this.lastError || res.statusText}`,
+          retriable: res.status === 408 || res.status === 429 || res.status >= 500,
+          details: { provider: "ollama", status: res.status },
+        });
       }
-      const data: OllamaChatResponse = JSON.parse(text);
+      let data: OllamaChatResponse;
+      try {
+        data = JSON.parse(text) as OllamaChatResponse;
+      } catch (error) {
+        this.connected = false;
+        this.lastError = "Ollama returned invalid JSON";
+        this.lastErrorType = "invalid_response";
+        throw new AgentError({
+          code: ErrorCode.INTERNAL_ERROR,
+          message: this.lastError,
+          retriable: true,
+          cause: error,
+          details: { provider: "ollama" },
+        });
+      }
+      if (typeof data.message?.content !== "string") {
+        this.connected = false;
+        this.lastError = "Ollama response is missing message.content";
+        this.lastErrorType = "invalid_response";
+        throw new AgentError({
+          code: ErrorCode.INTERNAL_ERROR,
+          message: this.lastError,
+          retriable: true,
+          details: { provider: "ollama" },
+        });
+      }
       this.connected = true;
-      return data.message?.content ?? "";
+      this.lastError = "";
+      this.lastErrorType = "";
+      return data.message.content;
     } catch (err) {
       this.connected = false;
+      if (err instanceof AgentError) throw err;
       const message = err instanceof Error ? err.message : String(err);
       this.lastError = message;
       this.lastErrorType = "network_error";
-      // 网络错误降级 mock（除非显式希望抛错）
-      if (
-        err instanceof DOMException &&
-        (err.name === "AbortError" || err.name === "TimeoutError")
-      ) {
+      if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
         throw new AgentError({
           code: ErrorCode.TIMEOUT,
           message: `Ollama 调用超时: ${message}`,
@@ -150,7 +180,13 @@ export class OllamaClient implements LlmClient {
           cause: err,
         });
       }
-      return generateMockResponse(messages);
+      throw new AgentError({
+        code: ErrorCode.INTERNAL_ERROR,
+        message: `Ollama 网络错误: ${message}`,
+        retriable: true,
+        cause: err,
+        details: { provider: "ollama" },
+      });
     } finally {
       clearTimeout(timer);
     }

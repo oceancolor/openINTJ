@@ -22,7 +22,7 @@ const describeE2E = RUN_E2E ? describe : describe.skip;
 describeE2E("Hunyuan search 真盘冒烟（OPENINTJ_E2E=1 + HUNYUAN_API_KEY）", () => {
   it("client.webSearch 走 live 链路并返回非空回答", async () => {
     const client = new HunyuanClient(loadHunyuanConfigFromEnv(process.env));
-    expect(client.isMockMode).toBe(false);
+    expect(client.isAvailable).toBe(true);
 
     const result = await client.webSearch("2026 年值得关注的 AI 进展有哪些？");
     expect(result.mode).toBe("live");
