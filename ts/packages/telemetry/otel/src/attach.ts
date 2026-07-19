@@ -104,6 +104,8 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
   const traces = new Map<string, TraceState>();
   /** 并发/任务/池的独立 span（不挂在 agent 的 tao 树下），key 见各 handler。 */
   const concurrentSpans = new Map<string, Span>();
+  const taskPoolWorkers = new Map<string, { runId: string; taskId: string; attempt: number }>();
+  const taskPoolWorkerByTask = new Map<string, string>();
   let endedCount = 0;
 
   // ---------- 计数器（即便未注册 MeterProvider，create*Counter 返回 no-op） ----------
@@ -122,6 +124,14 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
     "openintj.skill.proposed",
     "技能提案次数（自学习蒸馏产出候选，attribute=skill）",
   );
+  const cProductBehavior = c(
+    "openintj.product.behavior.injected",
+    "Product Behavior run 次数（attributes=version,enabled；含 control）",
+  );
+  const cProductTraitSignal = c(
+    "openintj.product.trait.signal",
+    "确定性 RFC-006 trait 信号（attributes=trait,signal,source；不表示模型意图）",
+  );
   const cTokensSpent = c("openintj.tokens.spent", "TAO run 累计 token 花费");
   const cSearchSources = c("openintj.search.sources", "search 工具命中的联网来源数");
   // 并发 / 多任务 / 多 Agent（RFC-003 方向一/二）
@@ -130,6 +140,11 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
   const cForkRejected = c("openintj.forkjoin.rejected", "ForkJoin 失败子任务数");
   const cTaskEnqueued = c("openintj.task.enqueued", "TaskQueue 入队任务数");
   const cTaskCompleted = c("openintj.task.completed", "TaskQueue 完成/失败任务数");
+  const cTaskPoolRuns = c("openintj.taskpool.runs", "TaskPool run 完成次数");
+  const cTaskPoolTasks = c("openintj.taskpool.tasks", "TaskPool task 完成次数");
+  const cTaskPoolRetries = c("openintj.taskpool.retries", "TaskPool task 重试次数");
+  const cTaskPoolTimeouts = c("openintj.taskpool.timeouts", "TaskPool task 超时次数");
+  const cTaskPoolCancellations = c("openintj.taskpool.cancellations", "TaskPool task 取消次数");
 
   const getTrace = (traceId: string): TraceState => {
     let st = traces.get(traceId);
@@ -217,10 +232,143 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
         const { span, ctx } = startSpan("openintj.tao.iteration");
         span.setAttribute("tao.iter", payload.iteration);
         span.setAttribute("trace_id", hookCtx.traceId);
+        const worker = taskPoolWorkers.get(hookCtx.traceId);
+        if (worker) {
+          span.setAttribute("taskpool.run_id", worker.runId);
+          span.setAttribute("taskpool.task_id", worker.taskId);
+          span.setAttribute("taskpool.attempt", worker.attempt);
+        }
         if (typeof payload.query === "string") {
           span.setAttribute("tao.query.length", payload.query.length);
         }
         st.iteration = { span, ctx };
+      }),
+    ),
+  );
+
+  // TaskPool: run span is the explicit correlation root; task spans carry run_id
+  // so backends can link parallel workers even when their TAO traceIds differ.
+  offs.push(
+    bus.on(
+      "taskpool.run.submit",
+      safe<HookEventMap["taskpool.run.submit"]>((payload) => {
+        if (!enableTraces) return;
+        const { span } = startSpan("openintj.taskpool.run");
+        span.setAttribute("taskpool.run_id", payload.runId);
+        span.setAttribute("taskpool.plan_id", payload.planId);
+        span.setAttribute("taskpool.task_count", payload.taskCount);
+        concurrentSpans.set(`taskpool-run:${payload.runId}`, span);
+      }),
+    ),
+  );
+  offs.push(
+    bus.on(
+      "taskpool.run.complete",
+      safe<HookEventMap["taskpool.run.complete"]>((payload) => {
+        if (enableTraces) {
+          endConcurrentSpan(
+            `taskpool-run:${payload.runId}`,
+            {
+              "taskpool.status": payload.status,
+              "taskpool.completed": payload.completed,
+              "taskpool.failed": payload.failed,
+              "taskpool.cancelled": payload.cancelled,
+              "taskpool.timed_out": payload.timedOut,
+            },
+            payload.status !== "completed",
+          );
+        }
+        cTaskPoolRuns?.add(1, { pool: payload.pool, status: payload.status });
+      }),
+    ),
+  );
+  offs.push(
+    bus.on(
+      "taskpool.task.start",
+      safe<HookEventMap["taskpool.task.start"]>((payload) => {
+        const taskKey = `${payload.runId}:${payload.taskId}`;
+        taskPoolWorkers.set(payload.workerTraceId, {
+          runId: payload.runId,
+          taskId: payload.taskId,
+          attempt: payload.attempt,
+        });
+        taskPoolWorkerByTask.set(taskKey, payload.workerTraceId);
+        if (!enableTraces) return;
+        const { span } = startSpan("openintj.taskpool.task");
+        span.setAttribute("taskpool.run_id", payload.runId);
+        span.setAttribute("taskpool.task_id", payload.taskId);
+        span.setAttribute("taskpool.action", payload.action);
+        span.setAttribute("taskpool.attempt", payload.attempt);
+        concurrentSpans.set(`taskpool-task:${payload.runId}:${payload.taskId}`, span);
+      }),
+    ),
+  );
+  offs.push(
+    bus.on(
+      "taskpool.task.complete",
+      safe<HookEventMap["taskpool.task.complete"]>((payload) => {
+        if (enableTraces) {
+          endConcurrentSpan(
+            `taskpool-task:${payload.runId}:${payload.taskId}`,
+            {
+              "taskpool.success": payload.success,
+              "taskpool.status": payload.status,
+              "taskpool.attempt": payload.attempt,
+            },
+            !payload.success,
+          );
+        }
+        const taskKey = `${payload.runId}:${payload.taskId}`;
+        const workerTraceId = taskPoolWorkerByTask.get(taskKey);
+        if (workerTraceId) taskPoolWorkers.delete(workerTraceId);
+        taskPoolWorkerByTask.delete(taskKey);
+        cTaskPoolTasks?.add(1, { pool: payload.pool, status: payload.status });
+      }),
+    ),
+  );
+  offs.push(
+    bus.on(
+      "taskpool.task.retry",
+      safe<HookEventMap["taskpool.task.retry"]>((payload) => {
+        if (enableTraces) {
+          endConcurrentSpan(`taskpool-task:${payload.runId}:${payload.taskId}`, {
+            "taskpool.status": "retry",
+            "taskpool.attempt": payload.attempt,
+            "taskpool.retry_delay_ms": payload.delayMs,
+          });
+        }
+        const taskKey = `${payload.runId}:${payload.taskId}`;
+        const workerTraceId = taskPoolWorkerByTask.get(taskKey);
+        if (workerTraceId) taskPoolWorkers.delete(workerTraceId);
+        taskPoolWorkerByTask.delete(taskKey);
+        cTaskPoolRetries?.add(1, { pool: payload.pool });
+      }),
+    ),
+  );
+  offs.push(
+    bus.on(
+      "taskpool.task.timeout",
+      safe<HookEventMap["taskpool.task.timeout"]>((payload) => {
+        cTaskPoolTimeouts?.add(1, { pool: payload.pool });
+      }),
+    ),
+  );
+  offs.push(
+    bus.on(
+      "taskpool.task.cancel",
+      safe<HookEventMap["taskpool.task.cancel"]>((payload) => {
+        cTaskPoolCancellations?.add(1, { pool: payload.pool });
+        if (enableTraces) {
+          endConcurrentSpan(
+            `taskpool-task:${payload.runId}:${payload.taskId}`,
+            { "taskpool.status": "cancelled" },
+            true,
+          );
+        }
+        const taskKey = `${payload.runId}:${payload.taskId}`;
+        const workerTraceId = taskPoolWorkerByTask.get(taskKey);
+        if (workerTraceId) taskPoolWorkers.delete(workerTraceId);
+        taskPoolWorkerByTask.delete(taskKey);
       }),
     ),
   );
@@ -415,6 +563,31 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
     ),
   );
 
+  offs.push(
+    bus.on(
+      "event.PRODUCT_BEHAVIOR",
+      safe<HookEventMap["event.PRODUCT_BEHAVIOR"]>((payload) => {
+        cProductBehavior?.add(1, {
+          version: payload.version,
+          enabled: String(payload.enabled),
+        });
+      }),
+    ),
+  );
+
+  offs.push(
+    bus.on(
+      "event.PRODUCT_TRAIT_SIGNAL",
+      safe<HookEventMap["event.PRODUCT_TRAIT_SIGNAL"]>((payload) => {
+        cProductTraitSignal?.add(payload.value, {
+          trait: payload.trait,
+          signal: payload.signal,
+          source: payload.source,
+        });
+      }),
+    ),
+  );
+
   // token 花费：event.LOOP_ITERATION 每次 run 收尾发一次，metrics.totalTokensSpent 是本次 run 累计值。
   offs.push(
     bus.on(
@@ -585,6 +758,8 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
         endedCount++;
       }
       concurrentSpans.clear();
+      taskPoolWorkers.clear();
+      taskPoolWorkerByTask.clear();
       traces.clear();
     },
     openSpanCount: () => {

@@ -4,6 +4,40 @@
 版本号沿用 [SemVer](https://semver.org/lang/zh-CN/) 与
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 
+## [Unreleased] —— 三方向 RFC 首期实现 (2026-07-14)
+
+> RFC-005 ModelRuntime + ADR-002、RFC-006 Product Behavior、RFC-007 TaskPool MVD。
+
+### Added
+
+- **`@openintj/model-runtime`**：统一 `resolveLlmClient` / `resolveEmbedder`；`auto` 本地优先（Ollama → Hunyuan → 可见 mock）；显式 `ollama`/`hunyuan` strict fail-closed；embedding 指纹校验。
+- **RFC-006**：`product-behavior.ts`、`trait-scenarios.ts`、`trait-eval.ts`；planning/clarification skills；`planning`/`analysis` 路由护栏；OTel `openintj.product.behavior.injected`。
+- **RFC-006 配置/状态 parity**：CLI `--product-behavior treatment|control`，server 启动配置沿用
+  `OPENINTJ_PRODUCT_BEHAVIOR`；CLI/server/desktop status 暴露行为版本与 treatment/control cohort。
+- **RFC-006 trait 可观测**：确定性 `event.PRODUCT_TRAIT_SIGNAL` 与
+  `openintj.product.trait.signal`，覆盖 planner 多步骤、clarification skill 命中、成功 search-before-answer；
+  指标只代表 lifecycle/tool 事实，不推断模型意图。
+- **RFC-006 确定性基线**：normal CI scripted runner 跑 8 traits / 9 cases 全通过；报告见
+  `docs/architecture/rfc-006-deterministic-baseline.json`，明确不是 live-model score。
+- **RFC-007 TaskPool 完整阶段**：`TaskRun` handle、节点状态机、稳定拓扑/合成、
+  `SharedContext` partial results、DAG 验证、有界并发与失败/取消级联。
+- **RFC-007 reliability**：`AbortSignal` 贯通 Tao/ReAct/tool 边界，timeout/cancel 分离、
+  per-task watchdog、有界指数 backoff retry。
+- **RFC-007 persistence / multi-agent**：`TaskStore` + `SqliteTaskStore` restart recovery；
+  role-based `AgentInstancePool` 与 Zod `Channel` reducer（opt-in，不进入默认路径）。
+- **RFC-007 三端与观测 parity**：CLI `--task-pool`、server status、desktop Settings toggle；
+  TaskPool 对符合条件的复杂任务优先于 self-consistency；完整 lifecycle hooks 与 OTel
+  run/task spans/counters/runId correlation。
+- **桌面 Settings**：LLM `auto`、独立 embed provider、Ollama URL/model 配置项。
+- **文档**：`RFC-006-product-behavior-contract.md`、`RFC-007-task-orchestration.md`（RFC-005 + ADR-002 已有）。
+
+### Changed
+
+- 三端 agent 改用 `@openintj/model-runtime`（移除重复 `pickLlm`/`buildLlm` 与 Ollama→Hunyuan mock 耦合）。
+- 默认 `LLM_PROVIDER=auto`（server/desktop/cli）；`.env.example` 补充 `EMBED_PROVIDER` 与 Ollama 变量。
+- trait evaluation runner 可选返回 `toolsUsed`/`trajectory` 结构化证据；T3 优先验证真实 search 工具，
+  并强化 T4 单句简洁与 T7 约束确认 judge，同时兼容 finalAnswer-only runner。
+
 ## [Unreleased] —— #3 嵌入基准 xenova 真实数字回填 (2026-07-08)
 
 > 收尾项：本机实跑 `RUN_EMBED_COMPARE=1`，把 `xenova`（`Xenova/all-MiniLM-L6-v2`，384 维）真实检索质量回填基准表。

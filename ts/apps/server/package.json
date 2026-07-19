@@ -22,6 +22,7 @@
     "@openintj/dormant": "workspace:*",
     "@openintj/llm-hunyuan": "workspace:*",
     "@openintj/llm-ollama": "workspace:*",
+    "@openintj/model-runtime": "workspace:*",
     "@openintj/llm-openai-compat": "workspace:*",
     "@openintj/plane-control": "workspace:*",
     "@openintj/plane-execution": "workspace:*",

@@ -1,38 +1,20 @@
 # 下一次工作交接备忘
 
 > 本文件用于工作中断 / 多日离开后快速恢复上下文。
-> 上次更新：2026-07-08（**治理接进工具执行**：`ToolHub` gate → `GovernancePlane.checkToolCall`（策略黑名单 +
-> 每分钟工具配额 + 审计）三端接线 + 桌面 workspace IPC 同闸门，补齐 RFC-004 §8；纠正旧盘点「执行工具是 mock」
-> 已过时——fs/命令工具早是真实沙箱。见 §12.3）。
-> 此前 2026-07-08：**检索性能/规模 B**：#10 LanceDB 原生 FTS（存储层 `ensureFtsIndex`/`searchText`
-> + `hybridVectorSearch` RRF 融合，server opt-in `OPENINTJ_LANCE_FTS=1`）+ #3 嵌入基准（双路径 harness +
-> simple 实测归档，xenova/ollama 待回填）；见 §十二 与 `retrieval-benchmark.md`）。
-> 此前 2026-07-08：**桌面「技能审批」UI 面板**：右侧栏「技能」tab——蒸馏 / 审批候选 / 查看
-> 生效技能+权重，把 Phase 2 自学习闭环接到桌面端；见 §11.5）。
-> 此前 2026-07-07：**技能系统 Phase 2**：自学习闭环——outcome 给命中技能加权 + 成功轨迹蒸馏
-> 候选技能 → 人审批 → 写 DB 源并立即重载生效，opt-in `OPENINTJ_SKILLS_LEARN=1` 默认关；见 §11.4）。
-> 此前 2026-07-01：**技能系统 Phase 1**（新包 `@openintj/skills`，作者能力包 `SKILL.md` +
-> 两级「目录 + 嵌入检索」按需注入，opt-in `OPENINTJ_SKILLS=1` 默认关；见 [§十一](#十一技能系统phase-1-作者能力包2026-07-01)）。
-> 此前 2026-06-30：**Memory Flywheel**（A1 增量检索 + A2 长跑验证 + CLF 可强化分类器，见 [§十](#十memory-flywheel增量检索--长跑验证--可强化分类器2026-06-30)）；
-> 再前：7 项定位任务收尾，见 [§九](#九已定位任务批量收尾2026-06-30)）
+> 上次更新：2026-07-14（RFC-007 全计划阶段已实现：可靠状态机、取消/重试/超时、
+> 三端 opt-in、OTel、SQLite recovery 与 opt-in 多 Agent primitives）。
 
 ---
 
-## 🎯 下次会话重点（用户指定 · 2026-07-08）
+## 🎯 下次会话重点（2026-07-14 更新）
 
-回来后优先讨论/推进这三项（均偏设计，先定方向再动手）：
+RFC-005/006/007 已合入工作区，剩项集中在真实外部环境验证：
 
-1. **接入本地模型**：给 LLM 层加本地 provider（如 Ollama / llama.cpp / LM Studio，OpenAI 兼容端点）。
-   现状：`@openintj/embed-ollama` 已有本地**嵌入**；`@openintj/llm-ollama` 已有 client（见 `ts/packages/llm/ollama`），
-   需盘点其成熟度、接进三端 agent 的 provider 选择、以及与 TokenHub/云端的切换与降级策略。
-2. **如何体现 INTJ 特质**：把「INTJ」从项目名落到 agent 行为——如长期规划优先、结构化推理、
-   直言效率、对模糊需求主动澄清等。需先定义可观测/可评估的特质清单，再考虑落到 persona / system prompt /
-   规划器（ControlPlane）/ 分类器路由策略哪一层。
-3. **任务池 + 多线程 的设计与实现**：`@openintj/taskpool` 现有 `MemoryHybridIndex` 等，但「任务池」本体
-   （任务排队 / 调度 / 并发执行 / 优先级 / 依赖）尚未成型。结合已落地的 `@openintj/concurrency`
-   （forkJoin + Semaphore 已接自一致性）设计真正的多任务/多 agent 调度。参见 §11「方向一/二并发原语」。
-
-> 起手建议：先各花 10 分钟盘现状（上面的已有件），再逐项定 RFC/plan，避免直接写码。
+1. **ModelRuntime**：`RUN_OLLAMA_E2E=1` 真机 E2E；Settings 热重载；`llm-openai-compat` 覆盖 LM Studio。
+2. **Product Behavior**：确定性 CI 基线已完成（8 traits / 9 cases 全过，**不是真实模型分数**，
+   见 `rfc-006-deterministic-baseline.json`）；下一步只需跑 live-model A/B 并据数据迭代 prompt。
+3. **TaskPool**：代码内阶段已完成。后续只做 live provider 取消能力核验、真实长任务
+   recovery soak、角色权限/成本基准；动态 LLM 拆图与跨进程调度需另立 RFC，不属于 RFC-007。
 
 ---
 
@@ -97,12 +79,20 @@ $env:OPENINTJ_RATE_LIMIT_QPS="5"
 pnpm --filter @openintj/server exec vitest run __tests__/dormant.spec.ts __tests__/hybrid-retrieve.spec.ts __tests__/rate-limited-llm.spec.ts
 Remove-Item env:OPENINTJ_DORMANT, env:OPENINTJ_RETRIEVAL_MODE, env:OPENINTJ_RATE_LIMIT_QPS
 
+# RFC-006 真实模型 trait A/B（不进 normal CI；需要本机 Ollama 已启动且模型可用）：
+$env:RUN_TRAIT_EVAL="1"
+$env:OPENINTJ_LLM_PROVIDER="ollama"
+pnpm --filter @openintj/cli test -- trait.harness
+Remove-Item env:RUN_TRAIT_EVAL, env:OPENINTJ_LLM_PROVIDER
+
 # 重新生成 Python v2 ↔ TS 行为对齐 fixture（极少需要；Python v2 已冻结）：
 cd F:\openINTJ
 py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture JSON
 ```
 
 > Windows 下 turbo `--concurrency=1` 是统一策略：避免并行 tsc / esbuild 抢内存导致的 V8 OOM 和 esbuild "service was stopped"。
+> RFC-006 当前 live-model 基线阻塞：需要可达、已配置的真实模型 runtime（Ollama 服务/模型或有效 provider 凭据）。
+> normal CI 的 scripted 9/9 只证明评测机械与 judges，严禁记作真实模型质量分。
 > e2e 测试需要 30s 超时（`describe(..., { timeout: 30_000 }, ...)`），LanceDB 首次建表 + 重新打开比较慢。
 > 远端 CI：见 `.github/workflows/ci.yml`，触发条件是 push / PR 改 `ts/**`。
 

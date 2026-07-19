@@ -13,16 +13,24 @@ import { forkJoin } from "@openintj/concurrency";
 import {
   DEFAULT_REACT_CONFIG,
   DEFAULT_TAO_CONFIG,
+  type EmbeddingProvider,
   HookBus,
   type LlmClient,
   ReactStateMachine,
   TaoLoop,
   type TaoResult,
   type TaskTypeType,
+  attachProductTraitSignals,
 } from "@openintj/core";
 import { DormantRuntime, type DormantRuntimeOpts } from "@openintj/dormant";
 import { HunyuanClient, createHunyuanSearchTool } from "@openintj/llm-hunyuan";
-import { OllamaClient } from "@openintj/llm-ollama";
+import {
+  type EmbedProviderId,
+  type LlmProviderId,
+  type ModelRuntimeStatus,
+  resolveLlmClientSync,
+  resolveModelRuntime,
+} from "@openintj/model-runtime";
 import { ControlPlane } from "@openintj/plane-control";
 import {
   Executor,
@@ -35,9 +43,12 @@ import { GovernancePlane, createToolCallGate } from "@openintj/plane-governance"
 import { ContextEngine, MemoryPlane, fragmentsToRanked } from "@openintj/plane-memory";
 import {
   DEFAULT_AGENT_SYSTEM_PROMPT,
+  PRODUCT_BEHAVIOR_VERSION,
   type SelfConsistencyStrategy,
   appendSourcesFooter,
+  assembleSystemPromptPrefix,
   resolvePersonaInjection,
+  resolveProductBehaviorEnabled,
   resolveSelfConsistency,
   resolveWorkspaceConfig,
   selectConsistentAnswer,
@@ -51,12 +62,21 @@ import {
   createLlmSkillDistiller,
   resolveSkillWeightHalfLifeSec,
 } from "@openintj/skills";
-import { MemoryHybridIndex } from "@openintj/taskpool";
+import {
+  MemoryHybridIndex,
+  TaskPool,
+  planGraphToTaskGraph,
+  resolveOrchestrationMode,
+  resolveTaskPoolEnabled,
+  shouldUseTaskPool,
+  synthesizeTaskPoolAnswer,
+} from "@openintj/taskpool";
 
-export type LlmProvider = "auto" | "hunyuan" | "ollama" | "mock";
+export type LlmProvider = LlmProviderId;
 
 export interface AgentOptions {
   llmProvider?: LlmProvider;
+  embedProvider?: EmbedProviderId;
   systemPrompt?: string;
   /** 注入自定义工具实现（覆盖默认的真实工作区工具；测试常用）。 */
   toolHandlers?: {
@@ -73,45 +93,23 @@ export interface AgentOptions {
   enableCommands?: boolean;
   /** 命令白名单（按可执行文件名）；缺省 env OPENINTJ_ALLOWED_COMMANDS（逗号分隔）。 */
   allowedCommands?: string[];
-  /**
-   * RFC-003 方向一/二接入：opt-in 自一致性（并行多采样 + 投票）。
-   * samples>1 时每次 run 用 forkJoin 并行跑 N 个 tao.run，再按 strategy 选最终答案。
-   * 默认关闭；env OPENINTJ_SELF_CONSISTENCY=N / OPENINTJ_SELF_CONSISTENCY_STRATEGY 也可启用。
-   */
   selfConsistency?: {
     samples: number;
     strategy?: SelfConsistencyStrategy;
     maxConcurrency?: number;
   };
-  /**
-   * 前端可强化分类器：开启后每次 run 先分类 → 注入 taskType + 记忆 label，高置信简单类
-   * 路由单次 LLM 降 token，收尾用 outcome 强化。默认关（env OPENINTJ_CLASSIFIER=1 也可开）。
-   */
   enableClassifier?: boolean;
-  /**
-   * 技能系统（Phase 1 作者能力包）：开启后每轮 query 经「目录 + 嵌入检索」两级预筛，
-   * 命中的 SKILL.md 全文注入 system prompt（记忆参考之前），未命中零注入。
-   * 默认关（env OPENINTJ_SKILLS=1 也可开）；技能目录另可用 OPENINTJ_SKILLS_DIR 追加。
-   */
   enableSkills?: boolean;
-  /**
-   * 技能自学习闭环（Phase 2，在 enableSkills 之上）：outcome 加权 + 成功轨迹蒸馏候选技能 → 人审批。
-   * CLI 为内存态（InMemorySkillStore，不跨重启）。默认关（env OPENINTJ_SKILLS_LEARN=1 也可开）。
-   */
   enableSkillLearning?: boolean;
-  /**
-   * RFC-003 方向 3：钝化记忆学习（默认关）。env OPENINTJ_DORMANT=1 也启用。
-   * CLI 为内存态（不挂持久化 adapter，不跨重启）：每轮 record 用户输入，
-   * 已批准 persona 每轮注入 system prompt（无需检索即生效，RFC-003 §3.6）。
-   */
   enableDormant?: boolean;
-  /** DormantRuntime 配置（仅 enableDormant=true 时生效）。 */
   dormantOpts?: DormantRuntimeOpts;
-  /**
-   * 是否把已批准的钝化记忆 persona 注入 system prompt（A/B 杠杆，仅 enableDormant 时有意义）。
-   * 默认开；env `OPENINTJ_PERSONA=0` 关闭 → 无 persona 基线组（RFC-003 §3.6 验收 #3）。
-   */
   enablePersona?: boolean;
+  /** RFC-006 Product Behavior A/B；默认开，env OPENINTJ_PRODUCT_BEHAVIOR=0 可关。 */
+  enableProductBehavior?: boolean;
+  /** RFC-007：opt-in TaskPool。 */
+  enableTaskPool?: boolean;
+  /** 跳过启动期 Ollama 健康探测（单测用）。 */
+  syncLlm?: boolean;
 }
 
 export interface AssembledAgent {
@@ -122,51 +120,43 @@ export interface AssembledAgent {
   memory: MemoryPlane;
   governance: GovernancePlane;
   contextEngine: ContextEngine;
-  /** session 级增量混合检索索引（订阅 event.MEMORY_WRITTEN 自动维护）。 */
   hybridIndex: MemoryHybridIndex;
-  /** 前端可强化分类器；仅 enableClassifier 时存在。 */
   classifier?: ReinforcingClassifier;
-  /** 技能自学习运行时；仅 enableSkillLearning 时存在。 */
   skillLearning?: SkillLearningRuntime;
-  /** 钝化记忆运行时；仅 enableDormant 时存在（CLI 为内存态）。 */
   dormant?: DormantRuntime;
   tao: TaoLoop;
+  modelRuntime?: ModelRuntimeStatus;
+  productBehavior: { version: string; enabled: boolean; cohort: "treatment" | "control" };
+  taskPoolEnabled: boolean;
   run(query: string): Promise<TaoResult>;
 }
 
-const pickLlm = (provider: LlmProvider): LlmClient => {
-  switch (provider) {
-    case "hunyuan":
-      return HunyuanClient.fromEnv();
-    case "ollama":
-      return OllamaClient.fromEnv();
-    case "mock":
-      return new HunyuanClient({ apiKey: "" });
-    default: {
-      // auto: 优先 hunyuan（如有 key），否则 ollama
-      if (process.env["HUNYUAN_API_KEY"]) {
-        return HunyuanClient.fromEnv();
-      }
-      return OllamaClient.fromEnv();
-    }
-  }
-};
-
-export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
+const buildAgentCore = (
+  opts: AgentOptions,
+  llm: LlmClient,
+  llmProviderId: string,
+  embedder?: EmbeddingProvider,
+  modelRuntime?: ModelRuntimeStatus,
+): Omit<AssembledAgent, "run" | "productBehavior"> & {
+  tao: TaoLoop;
+  selfConsistency: ReturnType<typeof resolveSelfConsistency>;
+  classifier?: ReinforcingClassifier;
+  skillLearning?: SkillLearningRuntime;
+  dormant?: DormantRuntime;
+  ensureClassifier: () => Promise<void>;
+  taskPool?: TaskPool;
+  taskPoolEnabled: boolean;
+  productBehaviorEnabled: boolean;
+} => {
   const hooks = new HookBus();
-  const llm = pickLlm(opts.llmProvider ?? "auto");
-
-  // 治理 → 执行 → 记忆 → 控制
+  attachProductTraitSignals(hooks);
   const governance = new GovernancePlane({ hooks });
-  const memory = new MemoryPlane({ hooks });
+  const memory = new MemoryPlane({ hooks, ...(embedder ? { embedder } : {}) });
   const control = new ControlPlane();
-
-  // session 级共享 HybridRetriever：CLI 为内存态，开局 seed 空集，之后订阅 change-feed 增量维护。
   const hybridIndex = new MemoryHybridIndex();
   hybridIndex.seed(memory.store.all);
   hybridIndex.subscribe(hooks);
 
-  // A1.3 opt-in：OPENINTJ_LOOP_HYBRID=1 时主循环检索改走 session 级增量 HybridRetriever。
   const loopHybrid = process.env["OPENINTJ_LOOP_HYBRID"] === "1";
   const candidateRetrieve = loopHybrid
     ? async (query: string, ro: { topK?: number; taskType?: TaskTypeType }) => {
@@ -186,24 +176,19 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
     ...(candidateRetrieve ? { candidateRetrieve } : {}),
   });
 
-  // gate：每次工具调用前跑治理平面（策略黑名单 + 工具配额），拒绝即 success:false + 审计。
   const toolHub = new ToolHub({ hooks, gate: createToolCallGate(governance) });
   const handlers = opts.toolHandlers ?? {};
-
-  // 默认 handler：真实工作区工具（沙箱限定在 workspace 根内，命令默认禁用）。
   const wsTools = createWorkspaceTools(resolveWorkspaceConfig(opts, process.cwd()));
   const defaultSearch = (params: Record<string, unknown>) => ({
     note: "[mock search]",
     query: params["query"],
     hits: [],
   });
-
-  // search 默认优先级：外部 Web Search（Tavily/Brave）> 混元内建联网搜索（仅旧平台有效）> 占位。
   const webSearchCfg = resolveWebSearchConfig();
   const defaultSearchHandler = webSearchCfg
     ? createWebSearchTool(webSearchCfg)
-    : llm instanceof HunyuanClient
-      ? createHunyuanSearchTool(llm)
+    : llmProviderId === "hunyuan"
+      ? createHunyuanSearchTool(HunyuanClient.fromEnv())
       : defaultSearch;
   toolHub.registerBuiltinTools({
     readFile: handlers.readFile ?? wsTools.readFile,
@@ -213,7 +198,6 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
   });
   const execution = new Executor({ toolHub, hooks, registerBuiltins: false });
 
-  // TAO ←→ ReAct 装配
   const react = new ReactStateMachine({
     config: DEFAULT_REACT_CONFIG,
     hooks,
@@ -221,28 +205,25 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
     toolRunner: (
       name: string,
       params: Record<string, unknown>,
-      callOpts?: { traceId?: string; timeoutMs?: number },
+      callOpts?: { traceId?: string; timeoutMs?: number; signal?: AbortSignal },
     ) => toolHub.call(name, params, callOpts ?? {}),
   });
   const baseSystemPrompt = opts.systemPrompt ?? DEFAULT_AGENT_SYSTEM_PROMPT;
 
-  // 钝化记忆（opt-in）：CLI 为内存态（无 adapter，不跨重启），无需 hydrate。
-  // 每轮 record 用户输入喂给挖掘；已批准 persona 每轮注入（受 personaEnabled A/B 杠杆控制）。
   const enableDormant = opts.enableDormant ?? process.env["OPENINTJ_DORMANT"] === "1";
   const dormant = enableDormant
     ? new DormantRuntime({ eventIdPrefix: "cli", ...(opts.dormantOpts ?? {}) })
     : undefined;
   const personaEnabled = resolvePersonaInjection(opts);
+  const productBehaviorEnabled = resolveProductBehaviorEnabled(opts.enableProductBehavior);
+  const taskPoolEnabled = resolveTaskPoolEnabled(opts.enableTaskPool);
+  const taskPool = taskPoolEnabled ? new TaskPool({ hooks }) : undefined;
 
-  // 技能系统（opt-in）：OPENINTJ_SKILLS=1 时装配，复用 store embedder，命中才注入能力包全文。
-  // assembleAgent 为同步工厂，这里持有 Promise，在（异步的）contextProvider 里 await（只解析一次）。
-  // 自学习（Phase 2）：OPENINTJ_SKILLS_LEARN=1 隐含开启注入 + outcome 加权 + 蒸馏/审批闭环。
   const enableSkillLearning =
     opts.enableSkillLearning ?? process.env["OPENINTJ_SKILLS_LEARN"] === "1";
   const enableSkills =
     (opts.enableSkills ?? process.env["OPENINTJ_SKILLS"] === "1") || enableSkillLearning;
 
-  // CLI 内存态：InMemorySkillStore，同步构造 runtime（fresh store 无需 hydrate）。
   const skillLearning = enableSkillLearning
     ? new SkillLearningRuntime({
         store: new InMemorySkillStore(),
@@ -283,8 +264,6 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
     react,
     availableTools: () => toolHub.list(),
     systemPrompt: baseSystemPrompt,
-    // 每轮注入：①已批准的钝化记忆 persona（无需检索）②命中的技能包 ③检索到的 [记忆参考]。
-    // personaEnabled 是 A/B 杠杆：关闭即得到无 persona 基线（RFC-003 §3.6 #3）。
     contextProvider: async ({ query, history, taskType, topK, traceId }) => {
       const persona = personaEnabled ? (dormant?.personaSystemPrompt() ?? "") : "";
       const skillContext = skillContextP ? await skillContextP : undefined;
@@ -294,12 +273,17 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
             ...(traceId ? { traceId } : {}),
           })
         : "";
-      const prefix = [persona, skillBlock].filter((s) => s.length > 0).join("\n\n");
+      const stacked = assembleSystemPromptPrefix({
+        base: baseSystemPrompt,
+        productBehavior: { enabled: productBehaviorEnabled },
+        userPersona: persona,
+        skillBlock,
+      });
       const snap = await contextEngine.build({
         query,
         history,
         taskType,
-        systemPrompt: prefix ? `${baseSystemPrompt}\n\n${prefix}` : baseSystemPrompt,
+        systemPrompt: stacked,
         topK: topK ?? 6,
         ...(traceId ? { traceId } : {}),
       });
@@ -308,8 +292,6 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
   });
 
   const selfConsistency = resolveSelfConsistency(opts.selfConsistency);
-
-  // 前端可强化分类器（opt-in）。CLI 为内存态，无持久化 store；首次 run 懒加载种子。
   const enableClassifier = opts.enableClassifier ?? process.env["OPENINTJ_CLASSIFIER"] === "1";
   const classifier = enableClassifier
     ? new ReinforcingClassifier({ embedder: memory.store.embedder })
@@ -335,70 +317,140 @@ export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
     ...(skillLearning ? { skillLearning } : {}),
     ...(dormant ? { dormant } : {}),
     tao,
-    async run(query: string) {
-      // 钝化记忆：本轮用户输入喂给被动捕获（脱敏后落库）→ 后续 mine() 挖掘长期模式。
-      if (dormant) dormant.record(query, "user", { stage: "run.input" });
-      // 先跑（contextProvider 检索此前记忆），再记录本轮 → 避免检索命中当前输入本身。
-      // 前端分类器：预分类 → taskType + 降 token 路由（高置信简单类走单次 LLM）。
-      let cls: Awaited<ReturnType<ReinforcingClassifier["classify"]>> | undefined;
-      let route: ReturnType<typeof decideRoute> | undefined;
-      if (classifier) {
-        await ensureClassifier();
-        cls = await classifier.classify(query);
-        route = decideRoute(cls);
-      }
-      const taoOpts = (traceId?: string) => ({
-        ...(cls ? { taskType: cls.label } : {}),
-        ...(route?.single ? { enableReact: false } : {}),
-        ...(route ? { topK: route.topK } : {}),
-        ...(traceId ? { traceId } : {}),
-      });
-      let result: TaoResult;
-      if (selfConsistency) {
-        // 方向一/二：并行多采样 + 投票。forkJoin 会发 forkjoin.* 事件 → OTel span/metric。
-        const { fulfilled } = await forkJoin(
-          Array.from({ length: selfConsistency.samples }, (_, i) => i),
-          (i) => tao.run(query, taoOpts(`${randomUUID()}-sc${i}`)),
-          {
-            hooks,
-            group: "self-consistency",
-            minSuccess: 1,
-            ...(selfConsistency.maxConcurrency
-              ? { concurrency: selfConsistency.maxConcurrency }
-              : {}),
-          },
-        );
-        result = selectConsistentAnswer(fulfilled, selfConsistency.strategy) ?? fulfilled[0]!;
-      } else {
-        result = await tao.run(query, taoOpts());
-      }
-      result.finalAnswer = appendSourcesFooter(result.finalAnswer, result.trajectory);
-      // 记忆带上分类 label（与 retriever taskType ×1.3 加成叠加，随使用复利）。
-      const labelTags = cls ? [cls.label] : [];
-      memory.recordUserInput(query, labelTags);
-      memory.recordAssistantOutput(result.finalAnswer, labelTags);
-      // 收尾反馈：用 outcome 强化分类器（与记忆写入同一收尾点）。
-      if (classifier && cls) {
-        await classifier.reinforce(query, cls.label, { signal: outcomeSignal(result.status) });
-      }
-      if (skillLearning) {
-        const toolsUsed = [
-          ...new Set(
-            result.trajectory
-              .map((e) => {
-                const st = (e as { state?: { toolResult?: { toolName?: unknown } } }).state;
-                const name = st?.toolResult?.toolName;
-                return typeof name === "string" ? name : undefined;
-              })
-              .filter((n): n is string => Boolean(n)),
-          ),
-        ];
-        skillLearning.recordOutcome(query, cls?.label, result.status, {
-          finalAnswer: result.finalAnswer,
-          toolsUsed,
-        });
-      }
-      return result;
-    },
+    selfConsistency,
+    ensureClassifier,
+    taskPoolEnabled,
+    productBehaviorEnabled,
+    ...(modelRuntime ? { modelRuntime } : {}),
+    ...(taskPool ? { taskPool } : {}),
   };
+};
+
+const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => ({
+  hooks: core.hooks,
+  llm: core.llm,
+  control: core.control,
+  execution: core.execution,
+  memory: core.memory,
+  governance: core.governance,
+  contextEngine: core.contextEngine,
+  hybridIndex: core.hybridIndex,
+  ...(core.classifier ? { classifier: core.classifier } : {}),
+  ...(core.skillLearning ? { skillLearning: core.skillLearning } : {}),
+  ...(core.dormant ? { dormant: core.dormant } : {}),
+  tao: core.tao,
+  ...(core.modelRuntime ? { modelRuntime: core.modelRuntime } : {}),
+  productBehavior: {
+    version: PRODUCT_BEHAVIOR_VERSION,
+    enabled: core.productBehaviorEnabled,
+    cohort: core.productBehaviorEnabled ? "treatment" : "control",
+  },
+  taskPoolEnabled: core.taskPoolEnabled,
+  async run(query: string) {
+    await core.hooks.emit("event.PRODUCT_BEHAVIOR", {
+      version: PRODUCT_BEHAVIOR_VERSION,
+      enabled: core.productBehaviorEnabled,
+    });
+    if (core.dormant) core.dormant.record(query, "user", { stage: "run.input" });
+    let cls: Awaited<ReturnType<ReinforcingClassifier["classify"]>> | undefined;
+    let route: ReturnType<typeof decideRoute> | undefined;
+    if (core.classifier) {
+      await core.ensureClassifier();
+      cls = await core.classifier.classify(query);
+      route = decideRoute(cls);
+    }
+    const taoOpts = (traceId?: string, signal?: AbortSignal) => ({
+      ...(cls ? { taskType: cls.label } : {}),
+      ...(route?.single ? { enableReact: false } : {}),
+      ...(route ? { topK: route.topK } : {}),
+      ...(traceId ? { traceId } : {}),
+      ...(signal ? { signal } : {}),
+    });
+    let result: TaoResult;
+    const orchestrationMode = resolveOrchestrationMode(
+      Boolean(core.taskPool && cls && shouldUseTaskPool(core.taskPoolEnabled, cls.label)),
+      Boolean(core.selfConsistency),
+    );
+    // Explicit TaskPool wins for eligible complex tasks; self-consistency remains
+    // the fallback for all other tasks.
+    if (orchestrationMode === "taskpool" && core.taskPool && cls) {
+      const { plan } = core.control.processInput(query, cls.label);
+      const graph = planGraphToTaskGraph(plan);
+      const poolResult = await core.taskPool.submitRun(graph, async (node, ctx) => {
+        const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${query}`;
+        return core.tao.run(stepQuery, taoOpts(ctx.traceId, ctx.signal));
+      });
+      result = synthesizeTaskPoolAnswer(poolResult, query);
+    } else if (orchestrationMode === "self-consistency" && core.selfConsistency) {
+      const { fulfilled } = await forkJoin(
+        Array.from({ length: core.selfConsistency.samples }, (_, i) => i),
+        (i) => core.tao.run(query, taoOpts(`${randomUUID()}-sc${i}`)),
+        {
+          hooks: core.hooks,
+          group: "self-consistency",
+          minSuccess: 1,
+          ...(core.selfConsistency.maxConcurrency
+            ? { concurrency: core.selfConsistency.maxConcurrency }
+            : {}),
+        },
+      );
+      result = selectConsistentAnswer(fulfilled, core.selfConsistency.strategy) ?? fulfilled[0]!;
+    } else {
+      result = await core.tao.run(query, taoOpts());
+    }
+    result.finalAnswer = appendSourcesFooter(result.finalAnswer, result.trajectory);
+    const labelTags = cls ? [cls.label] : [];
+    await core.memory.recordUserInputAsync(query, labelTags);
+    await core.memory.recordAssistantOutputAsync(result.finalAnswer, labelTags);
+    if (core.classifier && cls) {
+      await core.classifier.reinforce(query, cls.label, { signal: outcomeSignal(result.status) });
+    }
+    if (core.skillLearning) {
+      const toolsUsed = [
+        ...new Set(
+          result.trajectory
+            .map((e) => {
+              const st = (e as { state?: { toolResult?: { toolName?: unknown } } }).state;
+              const name = st?.toolResult?.toolName;
+              return typeof name === "string" ? name : undefined;
+            })
+            .filter((n): n is string => Boolean(n)),
+        ),
+      ];
+      core.skillLearning.recordOutcome(query, cls?.label, result.status, {
+        finalAnswer: result.finalAnswer,
+        toolsUsed,
+      });
+    }
+    return result;
+  },
+});
+
+/** 异步装配（生产路径：含 Ollama 健康探测与 ADR-002 fallback）。 */
+export const assembleAgentAsync = async (opts: AgentOptions = {}): Promise<AssembledAgent> => {
+  const provider = opts.llmProvider ?? "auto";
+  if (opts.syncLlm) {
+    const resolved = resolveLlmClientSync({ provider });
+    return attachRun(buildAgentCore(opts, resolved.client, resolved.status.provider));
+  }
+  const runtime = await resolveModelRuntime({
+    provider,
+    ...(opts.embedProvider ? { embedProvider: opts.embedProvider } : {}),
+  });
+  const core = buildAgentCore(
+    opts,
+    runtime.llm.client,
+    runtime.status.llm.provider,
+    runtime.embed.embedder,
+    runtime.status,
+  );
+  return attachRun(core);
+};
+
+/** 同步装配（单测快捷路径；跳过 Ollama 探测）。 */
+export const assembleAgent = (opts: AgentOptions = {}): AssembledAgent => {
+  const provider = opts.llmProvider ?? "auto";
+  const resolved = resolveLlmClientSync({ provider });
+  const core = buildAgentCore(opts, resolved.client, resolved.status.provider);
+  return attachRun(core);
 };

@@ -15,6 +15,7 @@ import {
   TaoLoop,
   type TaoResult,
   type TaskTypeType,
+  attachProductTraitSignals,
 } from "@openintj/core";
 import {
   type DormantPersistenceAdapter,
@@ -23,7 +24,13 @@ import {
   runMineInWorker,
 } from "@openintj/dormant";
 import { HunyuanClient, createHunyuanSearchTool } from "@openintj/llm-hunyuan";
-import { OllamaClient } from "@openintj/llm-ollama";
+import {
+  type EmbedProviderId,
+  type LlmProviderId,
+  type ModelRuntimeStatus,
+  resolveModelRuntime,
+  validateEmbeddingFingerprintForDataDir,
+} from "@openintj/model-runtime";
 import { ControlPlane } from "@openintj/plane-control";
 import {
   Executor,
@@ -44,10 +51,13 @@ import {
 } from "@openintj/plane-memory";
 import {
   DEFAULT_AGENT_SYSTEM_PROMPT,
+  PRODUCT_BEHAVIOR_VERSION,
   type ResolvedWorkspaceConfig,
   type SelfConsistencyStrategy,
   appendSourcesFooter,
+  assembleSystemPromptPrefix,
   resolvePersonaInjection,
+  resolveProductBehaviorEnabled,
   resolveSelfConsistency,
   resolveWorkspaceConfig,
   selectConsistentAnswer,
@@ -63,21 +73,33 @@ import {
   resolveSkillWeightHalfLifeSec,
 } from "@openintj/skills";
 import {
+  SqliteTaskStore,
   createSqliteClassifierStore,
   createSqliteDormantStore,
   createSqliteSkillStore,
 } from "@openintj/storage-sqlite";
-import { type HybridConfig, type MemoryHybridHit, MemoryHybridIndex } from "@openintj/taskpool";
+import {
+  type HybridConfig,
+  type MemoryHybridHit,
+  MemoryHybridIndex,
+  TaskPool,
+  planGraphToTaskGraph,
+  resolveOrchestrationMode,
+  resolveTaskPoolEnabled,
+  shouldUseTaskPool,
+  synthesizeTaskPoolAnswer,
+} from "@openintj/taskpool";
 import {
   type AttachOtelOpts,
   type AttachedOtel,
   attachOtelToHooks,
 } from "@openintj/telemetry-otel";
 
-export type LlmProvider = "ollama" | "hunyuan" | "mock";
+export type LlmProvider = LlmProviderId;
 
 export interface DesktopAgentOpts {
-  llmProvider?: LlmProvider;
+  llmProvider?: LlmProviderId;
+  embedProvider?: EmbedProviderId;
   systemPrompt?: string;
   maxTaoIterations?: number;
   /**
@@ -97,6 +119,8 @@ export interface DesktopAgentOpts {
    * 默认开；env `OPENINTJ_PERSONA=0` 关闭 → 无 persona 基线组（RFC-003 §3.6 验收 #3）。
    */
   enablePersona?: boolean;
+  /** RFC-006 Product Behavior A/B；默认开，env OPENINTJ_PRODUCT_BEHAVIOR=0 可关。 */
+  enableProductBehavior?: boolean;
   /**
    * Dormant 持久化策略（仅 enableDormant=true 时生效）。
    * - 'auto'（默认）：跟随主持久化（real → SqliteDormantStore，memory → 不挂 adapter）
@@ -160,12 +184,32 @@ export interface DesktopAgentOpts {
    * 默认关闭；未注册 OTel provider 时 attach 也是 no-op。
    */
   enableOtel?: boolean | AttachOtelOpts;
+  /** RFC-007：opt-in TaskPool（env OPENINTJ_TASK_POOL=1）。 */
+  enableTaskPool?: boolean;
 }
 
-const buildLlm = (provider: LlmProvider): LlmClient => {
-  if (provider === "hunyuan") return new HunyuanClient();
-  if (provider === "ollama") return new OllamaClient();
-  return new HunyuanClient({ apiKey: "" });
+const parseDesktopLlmProvider = (opts: DesktopAgentOpts): LlmProviderId => {
+  if (opts.llmProvider) return opts.llmProvider;
+  const raw = process.env["LLM_PROVIDER"]?.trim().toLowerCase();
+  if (raw === "auto" || raw === "ollama" || raw === "hunyuan" || raw === "mock") return raw;
+  return "auto";
+};
+
+const parseDesktopEmbedProvider = (opts: DesktopAgentOpts): EmbedProviderId | undefined => {
+  if (opts.embedProvider) return opts.embedProvider;
+  const raw = (process.env["EMBEDDING_PROVIDER"] ?? process.env["EMBED_PROVIDER"])
+    ?.trim()
+    .toLowerCase();
+  if (
+    raw === "auto" ||
+    raw === "simple" ||
+    raw === "ollama" ||
+    raw === "xenova" ||
+    raw === "mock"
+  ) {
+    return raw;
+  }
+  return undefined;
 };
 
 const resolvePersistence = (
@@ -289,6 +333,7 @@ export interface DesktopAgent {
   dormantPersistenceInfo?: { adapter: string; dbPath?: string };
   /** OpenTelemetry 接线状态（enableOtel 真值时存在；含 dispose 钩子）。 */
   otel?: AttachedOtel;
+  modelRuntime: ModelRuntimeStatus;
   /**
    * 工作区系统能力面（RFC-004 §8）：与 Agent 的 read_file/write_file 工具**共用同一沙箱**，
    * 供 IPC handler 直接复用，保证 UI 直接读写与 Agent 工具读写遵循完全相同的边界。
@@ -298,12 +343,20 @@ export interface DesktopAgent {
   retrieveHybrid(query: string, opts?: DesktopRetrieveHybridOpts): Promise<DesktopHybridHit[]>;
   run(query: string): Promise<TaoResult>;
   status(): {
-    llm: ReturnType<LlmClient["getStatus"]>;
+    llm: ReturnType<LlmClient["getStatus"]> & { runtime?: ModelRuntimeStatus["llm"] };
+    embed?: ModelRuntimeStatus["embed"];
+    modelRuntime: ModelRuntimeStatus;
     memory: ReturnType<MemoryPlane["getStats"]>;
     governance: ReturnType<GovernancePlane["getStats"]>;
     tools: string[];
     persistence: { mode: PersistenceMode; dataDir?: string };
     retrievalMode: "vector" | "hybrid";
+    taskPool: { enabled: boolean; precedence: "taskpool-before-self-consistency" };
+    productBehavior: {
+      version: string;
+      enabled: boolean;
+      cohort: "treatment" | "control";
+    };
     dormant?: {
       enabled: true;
       passiveSize: number;
@@ -329,13 +382,20 @@ const resolveDesktopOtel = (opts: DesktopAgentOpts): AttachOtelOpts | undefined 
 
 export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise<DesktopAgent> => {
   const hooks = new HookBus();
+  attachProductTraitSignals(hooks);
   const otelOpts = resolveDesktopOtel(opts);
   const otel = otelOpts ? attachOtelToHooks(hooks, otelOpts) : undefined;
-  const rawLlm = buildLlm(opts.llmProvider ?? "mock");
+  const llmProvider = parseDesktopLlmProvider(opts);
+  const embedProvider = parseDesktopEmbedProvider(opts);
+  const runtime = await resolveModelRuntime({
+    provider: llmProvider,
+    ...(embedProvider ? { embedProvider } : {}),
+  });
+  const rawLlm = runtime.llm.client;
   const rateLimit = resolveRateLimit(opts);
   const llm: LlmClient = rateLimit ? new RateLimitedLlmClient(rawLlm, rateLimit) : rawLlm;
   const persistence = resolvePersistence(opts);
-  const embeddingDim = opts.embeddingDim ?? 64;
+  const embeddingDim = runtime.embed.dimension;
   const dormantEnabled = resolveDormantEnabled(opts);
   let dormantAdapter: DormantPersistenceAdapter | undefined;
   let dormantPersistenceInfo: { adapter: string; dbPath?: string } | undefined;
@@ -371,10 +431,14 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
   const retrievalMode = resolveRetrievalMode(opts);
 
   const governance = new GovernancePlane({ hooks });
+  if (persistence.mode === "real" && persistence.dataDir) {
+    await validateEmbeddingFingerprintForDataDir(persistence.dataDir, runtime.embeddingFingerprint);
+  }
   const persistentStore = await createPersistentMemoryStore({
     ...(persistence.dataDir ? { dataDir: persistence.dataDir } : {}),
     mode: persistence.mode,
     embeddingDim,
+    embedder: runtime.embed.embedder,
     storeConfig: { embeddingDim },
     hooks,
   });
@@ -422,8 +486,8 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
   const webSearchCfg = resolveWebSearchConfig();
   const searchHandler = webSearchCfg
     ? createWebSearchTool(webSearchCfg)
-    : rawLlm instanceof HunyuanClient
-      ? createHunyuanSearchTool(rawLlm)
+    : runtime.status.llm.provider === "hunyuan"
+      ? createHunyuanSearchTool(HunyuanClient.fromEnv())
       : noop;
   // 真实工作区工具：read_file / write_file 沙箱限定在 workspace 根内，execute_command 默认禁用。
   const wsConfig = resolveWorkspaceConfig(opts, process.cwd());
@@ -443,11 +507,21 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     toolRunner: (
       name: string,
       params: Record<string, unknown>,
-      callOpts?: { traceId?: string; timeoutMs?: number },
+      callOpts?: { traceId?: string; timeoutMs?: number; signal?: AbortSignal },
     ) => toolHub.call(name, params, callOpts ?? {}),
   });
   const baseSystemPrompt = opts.systemPrompt ?? DEFAULT_AGENT_SYSTEM_PROMPT;
   const personaEnabled = resolvePersonaInjection(opts);
+  const productBehaviorEnabled = resolveProductBehaviorEnabled(opts.enableProductBehavior);
+  const taskPoolEnabled = resolveTaskPoolEnabled(opts.enableTaskPool);
+  const taskStore =
+    taskPoolEnabled && persistence.mode === "real" && persistence.dataDir
+      ? new SqliteTaskStore(`${persistence.dataDir}/taskpool.sqlite`)
+      : undefined;
+  await taskStore?.init();
+  const taskPool = taskPoolEnabled
+    ? new TaskPool({ hooks, ...(taskStore ? { store: taskStore } : {}) })
+    : undefined;
 
   // 技能系统（opt-in）：OPENINTJ_SKILLS=1 时装配，复用 store embedder，命中才注入能力包全文。
   // 自学习（Phase 2）：OPENINTJ_SKILLS_LEARN=1 隐含开启注入 + outcome 加权 + 蒸馏/审批闭环。
@@ -514,12 +588,17 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
             ...(traceId ? { traceId } : {}),
           })
         : "";
-      const prefix = [persona, skillBlock].filter((s) => s.length > 0).join("\n\n");
+      const stacked = assembleSystemPromptPrefix({
+        base: baseSystemPrompt,
+        productBehavior: { enabled: productBehaviorEnabled },
+        userPersona: persona,
+        skillBlock,
+      });
       const snap = await contextEngine.build({
         query,
         history,
         taskType,
-        systemPrompt: prefix ? `${baseSystemPrompt}\n\n${prefix}` : baseSystemPrompt,
+        systemPrompt: stacked,
         topK: topK ?? 6,
         ...(traceId ? { traceId } : {}),
       });
@@ -567,22 +646,40 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     ...(dormant ? { dormant } : {}),
     ...(dormantPersistenceInfo ? { dormantPersistenceInfo } : {}),
     ...(otel ? { otel } : {}),
+    modelRuntime: runtime.status,
     workspace: { config: wsConfig, tools: wsTools },
     retrieveHybrid,
     async run(query: string) {
+      await hooks.emit("event.PRODUCT_BEHAVIOR", {
+        version: PRODUCT_BEHAVIOR_VERSION,
+        enabled: productBehaviorEnabled,
+      });
       if (dormant) dormant.record(query, "user", { stage: "run.input" });
       // 前端分类器：预分类 → taskType + 降 token 路由（高置信简单类走单次 LLM）。
       const cls = classifier ? await classifier.classify(query) : undefined;
       const route = cls ? decideRoute(cls) : undefined;
-      const taoOpts = (traceId?: string) => ({
+      const taoOpts = (traceId?: string, signal?: AbortSignal) => ({
         ...(cls ? { taskType: cls.label } : {}),
         ...(route?.single ? { enableReact: false } : {}),
         ...(route ? { topK: route.topK } : {}),
         ...(traceId ? { traceId } : {}),
+        ...(signal ? { signal } : {}),
       });
       // 先跑（contextProvider 会检索此前已落盘的记忆），再记录本轮 → 避免检索命中当前输入本身。
       let result: TaoResult;
-      if (selfConsistency) {
+      const orchestrationMode = resolveOrchestrationMode(
+        Boolean(taskPool && cls && shouldUseTaskPool(taskPoolEnabled, cls.label)),
+        Boolean(selfConsistency),
+      );
+      if (orchestrationMode === "taskpool" && taskPool && cls) {
+        const { plan } = control.processInput(query, cls.label);
+        const graph = planGraphToTaskGraph(plan);
+        const poolResult = await taskPool.submitRun(graph, async (node, ctx) => {
+          const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${query}`;
+          return tao.run(stepQuery, taoOpts(ctx.traceId, ctx.signal));
+        });
+        result = synthesizeTaskPoolAnswer(poolResult, query);
+      } else if (orchestrationMode === "self-consistency" && selfConsistency) {
         // 方向一/二：并行多采样 + 投票。forkJoin 会发 forkjoin.* 事件 → OTel span/metric。
         const { fulfilled } = await forkJoin(
           Array.from({ length: selfConsistency.samples }, (_, i) => i),
@@ -603,8 +700,8 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       // 把 search 工具命中的联网来源追加到答案末尾 → 随记忆/dormant 一起入库。
       result.finalAnswer = appendSourcesFooter(result.finalAnswer, result.trajectory);
       const labelTags = cls ? [cls.label] : [];
-      memory.recordUserInput(query, labelTags);
-      memory.recordAssistantOutput(result.finalAnswer, labelTags);
+      await memory.recordUserInputAsync(query, labelTags);
+      await memory.recordAssistantOutputAsync(result.finalAnswer, labelTags);
       if (classifier && cls) {
         await classifier.reinforce(query, cls.label, { signal: outcomeSignal(result.status) });
       }
@@ -634,13 +731,25 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       return result;
     },
     status() {
+      const llmSt = llm.getStatus();
       return {
-        llm: llm.getStatus(),
+        llm: { ...llmSt, runtime: runtime.status.llm },
+        embed: runtime.status.embed,
+        modelRuntime: runtime.status,
         memory: memory.getStats(),
         governance: governance.getStats(),
         tools: toolHub.list().map((t) => t.name),
         persistence,
         retrievalMode,
+        taskPool: {
+          enabled: taskPoolEnabled,
+          precedence: "taskpool-before-self-consistency" as const,
+        },
+        productBehavior: {
+          version: PRODUCT_BEHAVIOR_VERSION,
+          enabled: productBehaviorEnabled,
+          cohort: productBehaviorEnabled ? "treatment" : "control",
+        },
         ...(dormant
           ? {
               dormant: {
@@ -668,6 +777,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       if (skillLearning) await skillLearning.close();
       if (otel) otel.dispose();
       if (dormant) await dormant.close();
+      await taskStore?.close();
       await persistentStore.close();
     },
   };

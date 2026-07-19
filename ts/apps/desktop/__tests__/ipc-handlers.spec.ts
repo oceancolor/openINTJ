@@ -173,14 +173,14 @@ describe("IPC handler registration", () => {
       removeHandler: () => {},
     } as unknown as Parameters<typeof registerIpcHandlers>[2];
 
-    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    const agent = await assembleDesktopAgent({ llmProvider: "mock", embedProvider: "simple" });
     registerIpcHandlers(agent, undefined, fakeIpc);
 
-    agent.persistentStore.addLongTerm("machine learning frameworks pytorch", {
+    await agent.persistentStore.addLongTermAsync("machine learning frameworks pytorch", {
       taskTags: ["ml"],
       importance: 0.7,
     });
-    agent.persistentStore.addLongTerm("cooking pasta recipe italian", {
+    await agent.persistentStore.addLongTermAsync("cooking pasta recipe italian", {
       taskTags: ["food"],
       importance: 0.4,
     });

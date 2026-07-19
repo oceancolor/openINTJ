@@ -90,19 +90,26 @@ void app.whenReady().then(async () => {
     savedConfig.workspaceDir ??
     path.join(app.getPath("documents"), "OpenINTJ");
   const llmProvider =
-    (process.env["LLM_PROVIDER"] as "ollama" | "hunyuan" | "mock" | undefined) ??
+    (process.env["LLM_PROVIDER"] as "auto" | "ollama" | "hunyuan" | "mock" | undefined) ??
     savedConfig.llmProvider ??
-    "mock";
+    "auto";
   const envSummary = summarizeLlmEnv();
   console.log(`[OpenINTJ desktop] llm: ${envSummary.summary}`);
   if (llmProvider === "hunyuan" && !envSummary.hunyuan.hasKey) {
     console.warn(
-      "[OpenINTJ desktop] LLM_PROVIDER=hunyuan 但未读到 HUNYUAN_API_KEY —— 客户端会自动降级 mock。\n" +
-        "                  把 HUNYUAN_API_KEY 写进仓库根 .env / .env.local，或在启动前 $env:HUNYUAN_API_KEY=... 注入。",
+      "[OpenINTJ desktop] LLM_PROVIDER=hunyuan 但未读到 HUNYUAN_API_KEY —— strict 模式将报错。\n" +
+        "                  把 HUNYUAN_API_KEY 写进仓库根 .env / .env.local，或用 LLM_PROVIDER=auto。",
     );
   }
+  if (savedConfig.ollamaBaseUrl) process.env["OLLAMA_BASE_URL"] = savedConfig.ollamaBaseUrl;
+  if (savedConfig.ollamaModel) process.env["OLLAMA_MODEL"] = savedConfig.ollamaModel;
+  if (savedConfig.ollamaEmbedModel)
+    process.env["OLLAMA_EMBED_MODEL"] = savedConfig.ollamaEmbedModel;
+  if (savedConfig.embedProvider) process.env["EMBED_PROVIDER"] = savedConfig.embedProvider;
+
   agent = await assembleDesktopAgent({
     llmProvider,
+    ...(savedConfig.embedProvider ? { embedProvider: savedConfig.embedProvider } : {}),
     dataDir,
     workspaceDir,
     ...(savedConfig.retrievalMode ? { retrievalMode: savedConfig.retrievalMode } : {}),
@@ -116,12 +123,18 @@ void app.whenReady().then(async () => {
     ...(savedConfig.enablePersona !== undefined
       ? { enablePersona: savedConfig.enablePersona }
       : {}),
+    ...(savedConfig.enableProductBehavior !== undefined
+      ? { enableProductBehavior: savedConfig.enableProductBehavior }
+      : {}),
     ...(savedConfig.enableSkills !== undefined ? { enableSkills: savedConfig.enableSkills } : {}),
     ...(savedConfig.enableSkillLearning !== undefined
       ? { enableSkillLearning: savedConfig.enableSkillLearning }
       : {}),
     ...(savedConfig.enableClassifier !== undefined
       ? { enableClassifier: savedConfig.enableClassifier }
+      : {}),
+    ...(savedConfig.enableTaskPool !== undefined
+      ? { enableTaskPool: savedConfig.enableTaskPool }
       : {}),
   });
   console.log(

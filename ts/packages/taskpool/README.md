@@ -1,10 +1,7 @@
 # @openintj/taskpool
 
-RFC-003 **方向二（任务池 + 检索）** 的原语库。
-
-> ⚠️ **集成状态**：除 `HybridRetriever` 外，本包其余原语目前**未接入** Agent 主循环
-> （单 Agent 会话不消费任务队列 / 对象池）。它们经过完整单测、可独立使用，但请勿误以为
-> 产品已经在用任务池编排。
+RFC-003 检索原语与 RFC-007 有界任务编排库。TaskPool 已作为三端 opt-in
+产品路径接入；默认关闭，因此简单路径保持不变。
 
 ## 集成状态矩阵
 
@@ -14,8 +11,29 @@ RFC-003 **方向二（任务池 + 检索）** 的原语库。
 | `SharedContext` | 🧪 实验 | 跨任务共享上下文；仅库 + 单测 |
 | `TaskQueue` | 🧪 实验（可观测） | 优先级任务队列；未接入主路径，但已支持 HookBus 可观测 |
 | `ObjectPool` | 🧪 实验 | 对象复用池；未接入主路径 |
+| `TaskPool` / `TaskRun` | ✅ opt-in | 模板 DAG 状态机、有界并发、取消/超时/重试、失败级联 |
+| `TaskStore` | ✅ opt-in | 抽象位于本包；SQLite 实现在 `@openintj/storage-sqlite` |
+| `AgentInstancePool` / `Channel` | 🧪 opt-in | 角色实例边界与 Zod 约束 reducer；不进入默认 run path |
 
-## 可观测性（多任务）
+## TaskPool
+
+启用方式：CLI `chat --task-pool`、`OPENINTJ_TASK_POOL=1`、server/desktop
+`enableTaskPool: true`。仅分类为 `planning` / `analysis` 时生效。若同时启用
+self-consistency，符合条件的 TaskPool 明确优先；其他任务仍走 self-consistency。
+
+`TaskPool.submit()` 返回可取消的 `TaskRun` handle，`submitRun()` 是等待结果的兼容
+便捷方法。节点状态为
+`pending → ready → running → completed|failed|timed_out|cancelled`，重试回到
+`ready`。拓扑与结果合成顺序稳定；缺失依赖、重复 id、环会在运行前拒绝。
+
+worker 通过 `TaskWorkerContext.signal` 接收 cooperative cancellation。每节点可用
+`timeoutMs` 覆盖默认 watchdog。成功的 partial result 同时写入
+`SharedContext` 的 `task:<id>:result`。
+
+真实 data dir 且 TaskPool 开启时，server/desktop 使用 SQLite 快照；默认关闭或
+memory 模式不会创建数据库。`listIncompleteRuns()` 与 `TaskPool.recover()` 用于重启恢复。
+
+## 可观测性
 
 `TaskQueue` 支持注入 `HookBus`，发出任务生命周期事件：
 
@@ -31,13 +49,11 @@ const q = new TaskQueue({ hooks: agent.hooks, name: "dag" });
 
 事件在 mutex 临界区**外**发出，避免 handler 再入队列导致死锁；不传 `hooks` 时零开销。
 
-## 集成路线（若日后要把实验原语接入产品）
+TaskPool 另发出 `run.submit/complete` 与
+`task.ready/start/retry/timeout/cancel/complete`。OTel 产出 run/task spans、runId
+关联属性及 run/task/retry/timeout/cancellation counters。
 
-1. **任务编排**：把用户的一次复杂请求拆成多个子任务投进 `TaskQueue`，由 worker 消费；
-   `SharedContext` 承载子任务间的中间结果。需要先定义子任务的依赖图与失败传播策略。
-2. **对象复用**：用 `ObjectPool` 复用昂贵资源（如 embedder / DB 连接）。
-   当前这些资源在 agent 装配期单例创建，复用收益有限，优先级低。
-3. **检索质量**：`HybridRetriever` 已接入，但目前每次检索重建索引；
-   下一步应让索引随 `PersistentMemoryStore` 增量维护（见 next-session §8 检索基准）。
+## 边界
 
-在落地以上任一条之前，`SharedContext / TaskQueue / ObjectPool` 按「实验库」对待，不计入产品完成度。
+仍不包含 LLM 动态拆图、跨进程/分布式调度、Kubernetes、worker_threads Agent
+承载。多 Agent 原语保持显式 opt-in，等待真实角色策略和安全模型后再接默认路径。

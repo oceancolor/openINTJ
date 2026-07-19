@@ -7,7 +7,10 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
   "files": ["dist"],
   "scripts": {
@@ -23,13 +26,16 @@
     "@openintj/dormant": "workspace:*",
     "@openintj/shared": "workspace:*",
     "@openintj/skills": "workspace:*",
+    "@openintj/taskpool": "workspace:*",
     "zod": "^3.23.8"
   },
   "peerDependencies": {
     "better-sqlite3": "^11.0.0"
   },
   "peerDependenciesMeta": {
-    "better-sqlite3": { "optional": true }
+    "better-sqlite3": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",

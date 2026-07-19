@@ -58,6 +58,19 @@ describe("MemoryStore embedder injection", () => {
     expect(f.embedding).toHaveLength(8);
     expect(e.calls).toContain("hello");
   });
+
+  it("MemoryPlane async recording works with provider-backed embedders", async () => {
+    const e = new StubAsyncEmbedder();
+    const plane = new MemoryPlane({
+      embedder: e,
+      storeConfig: { embeddingDim: e.dimension },
+    });
+    const user = await plane.recordUserInputAsync("hello", ["planning"]);
+    const assistant = await plane.recordAssistantOutputAsync("world");
+    expect(user.taskTags).toEqual(["user_input", "planning"]);
+    expect(assistant.taskTags).toEqual(["assistant_output"]);
+    expect(plane.getStats().total).toBe(2);
+  });
 });
 
 describe("MemoryRetriever async retrieval", () => {

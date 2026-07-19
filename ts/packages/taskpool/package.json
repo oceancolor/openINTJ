@@ -3,11 +3,14 @@
   "version": "3.0.0-alpha.0",
   "private": true,
   "type": "module",
-  "description": "RFC-003 方向二原语库（仅 HybridRetriever 已接入产品；SharedContext/TaskQueue/ObjectPool 为实验性，见 README）",
+  "description": "RFC-003 retrieval primitives and RFC-007 opt-in bounded task orchestration",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
   "files": ["dist"],
   "scripts": {
@@ -18,8 +21,10 @@
     "clean": "rimraf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
+    "@openintj/concurrency": "workspace:*",
     "@openintj/core": "workspace:*",
-    "@openintj/concurrency": "workspace:*"
+    "@openintj/plane-control": "workspace:*",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "rimraf": "^6.0.1",

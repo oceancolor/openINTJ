@@ -10,8 +10,8 @@
 export interface TaskCase {
   id: string;
   query: string;
-  /** 判定 Agent 输出是否完成任务（true = 通过）。 */
-  judge: (answer: string) => boolean | Promise<boolean>;
+  /** 判定 Agent 输出是否完成任务；第二参数可读取可选结构化运行证据。 */
+  judge: (answer: string, output?: RunnerOutput) => boolean | Promise<boolean>;
   /** 可选：人类可读的期望描述（仅用于报告）。 */
   expectation?: string;
 }
@@ -25,6 +25,8 @@ export interface TaskEvalResult {
   durationMs: number;
   /** run 抛错时记录（视为不通过）。 */
   error?: string;
+  /** runner 提供的结构化证据，便于报告/调试；不提供时保持旧行为。 */
+  evidence?: RunEvidence;
 }
 
 export interface TaskEvalReport {
@@ -35,8 +37,16 @@ export interface TaskEvalReport {
   completionRate: number;
 }
 
+export interface RunEvidence {
+  /** 规范化工具调用顺序；T3 等 judge 可据此验证真实工具使用。 */
+  toolsUsed?: readonly string[];
+  /** 原始或精简 trajectory，供调用方自定义 judge。 */
+  trajectory?: readonly unknown[];
+}
+
 export interface RunnerOutput {
   finalAnswer: string;
+  evidence?: RunEvidence;
 }
 
 /**
@@ -52,13 +62,14 @@ export const evaluateTasks = async (
     const t0 = Date.now();
     try {
       const out = await run(t.query);
-      const passed = await t.judge(out.finalAnswer);
+      const passed = await t.judge(out.finalAnswer, out);
       results.push({
         id: t.id,
         query: t.query,
         answer: out.finalAnswer,
         passed,
         durationMs: Date.now() - t0,
+        ...(out.evidence ? { evidence: out.evidence } : {}),
       });
     } catch (e) {
       results.push({

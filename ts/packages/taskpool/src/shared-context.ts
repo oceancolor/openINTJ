@@ -9,8 +9,12 @@ import { Mutex } from "@openintj/concurrency";
  *  - Synthesizer 读全部 partial result 做最终合成
  */
 export class SharedContext {
-  private store = new Map<string, unknown>();
+  private store: Map<string, unknown>;
   private mutex = new Mutex();
+
+  constructor(initial?: Iterable<readonly [string, unknown]>) {
+    this.store = new Map(initial);
+  }
 
   async set<T>(key: string, value: T): Promise<void> {
     await this.mutex.runExclusive(() => {

@@ -16,11 +16,74 @@ afterAll(() => {
 });
 
 describe("assembleAgent E2E (mock LLM)", () => {
+  it("injects Product Behavior by default and emits one treatment event per run", async () => {
+    const agent = assembleAgent({ llmProvider: "mock", maxTaoIterations: 2 });
+    let systemPrompt = "";
+    const cohorts: boolean[] = [];
+    agent.hooks.on("react.beforeThought", (ctx) => {
+      systemPrompt = ctx.payload.context.systemPrompt;
+    });
+    agent.hooks.on("event.PRODUCT_BEHAVIOR", (ctx) => {
+      cohorts.push(ctx.payload.enabled);
+    });
+
+    await agent.run("请简洁回答");
+
+    expect(systemPrompt).toContain("[Product Behavior v1.0.0]");
+    expect(cohorts).toEqual([true]);
+    expect(agent.productBehavior).toEqual({
+      version: "1.0.0",
+      enabled: true,
+      cohort: "treatment",
+    });
+  });
+
+  it("supports an explicit Product Behavior control cohort", async () => {
+    const agent = assembleAgent({
+      llmProvider: "mock",
+      enableProductBehavior: false,
+    });
+    let systemPrompt = "";
+    const cohorts: boolean[] = [];
+    agent.hooks.on("react.beforeThought", (ctx) => {
+      systemPrompt = ctx.payload.context.systemPrompt;
+    });
+    agent.hooks.on("event.PRODUCT_BEHAVIOR", (ctx) => {
+      cohorts.push(ctx.payload.enabled);
+    });
+
+    await agent.run("请简洁回答");
+
+    expect(systemPrompt).not.toContain("[Product Behavior");
+    expect(cohorts).toEqual([false]);
+  });
+
+  it("preserves real prompt marker order: Product Behavior → persona → skills → memory", async () => {
+    const agent = assembleAgent({
+      llmProvider: "mock",
+      enableDormant: true,
+      enableSkills: true,
+      dormantOpts: { initialPersona: { preferences: { style: "偏好阶段计划" } } },
+    });
+    agent.memory.store.addLongTerm("TypeScript CLI 迁移计划需要三个阶段");
+    let systemPrompt = "";
+    agent.hooks.on("react.beforeThought", (ctx) => {
+      systemPrompt = ctx.payload.context.systemPrompt;
+    });
+
+    await agent.run("规划 TypeScript CLI 三阶段迁移计划");
+
+    const markers = ["[Product Behavior", "[用户画像]", "[技能]", "[记忆参考]"];
+    const positions = markers.map((marker) => systemPrompt.indexOf(marker));
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+  });
+
   it("answers a greeting via mock fallback in single tao iter", async () => {
     const agent = assembleAgent({ llmProvider: "mock", maxTaoIterations: 1 });
     const r = await agent.run("你好");
     expect(r.status).toBe("completed");
-    expect(r.finalAnswer).toContain("OpenINTJ");
+    expect(r.finalAnswer).toContain("[mock]");
     expect(r.iterations).toBe(1);
     // memory 至少记录了 user input + assistant output
     expect(agent.memory.getStats().total).toBeGreaterThanOrEqual(2);
@@ -90,6 +153,36 @@ describe("assembleAgent E2E (mock LLM)", () => {
     expect(joinPayload?.fulfilled).toBe(3);
   });
 
+  it("TaskPool is inert when disabled and orchestrates eligible planning when enabled", async () => {
+    const query = "帮我规划一个 TypeScript CLI 迁移方案";
+    const disabled = assembleAgent({
+      llmProvider: "mock",
+      maxTaoIterations: 1,
+      enableClassifier: true,
+      enableTaskPool: false,
+    });
+    let disabledSubmits = 0;
+    disabled.hooks.on("taskpool.run.submit", () => disabledSubmits++);
+    const simpleResult = await disabled.run(query);
+    expect(simpleResult.status).toBe("completed");
+    expect(disabledSubmits).toBe(0);
+
+    const enabled = assembleAgent({
+      llmProvider: "mock",
+      maxTaoIterations: 1,
+      enableClassifier: true,
+      enableTaskPool: true,
+    });
+    let submits = 0;
+    let starts = 0;
+    enabled.hooks.on("taskpool.run.submit", () => submits++);
+    enabled.hooks.on("taskpool.task.start", () => starts++);
+    const pooledResult = await enabled.run(query);
+    expect(pooledResult.status).toBe("completed");
+    expect(submits).toBe(1);
+    expect(starts).toBeGreaterThanOrEqual(3);
+  });
+
   it("registers 4 builtin tools via toolHub", () => {
     const agent = assembleAgent({ llmProvider: "mock" });
     const names = agent.execution.toolHub.list().map((t) => t.name);
@@ -108,11 +201,12 @@ describe("assembleAgent E2E (mock LLM)", () => {
     expect(memHits).toBe(1);
   });
 
-  it("getStatus returns mock mode by default with empty key", () => {
+  it("getStatus returns explicit mock mode (MockLlmClient)", () => {
     const agent = assembleAgent({ llmProvider: "mock" });
     const s = agent.llm.getStatus();
     expect(s.mode).toBe("mock");
-    expect(s.status).toBe("missing_api_key");
+    expect(s.status).toBe("connected");
+    expect(s.provider).toBe("mock");
   });
 
   // RFC-003 方向 3：钝化记忆 persona 注入（CLI 内存态）。

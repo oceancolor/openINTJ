@@ -1,0 +1,34 @@
+{
+  "name": "@openintj/model-runtime",
+  "version": "3.0.0-alpha.0",
+  "private": true,
+  "type": "module",
+  "description": "Unified local-first LLM and embedding provider runtime",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests --pool=forks --poolOptions.forks.singleFork=true",
+    "clean": "rimraf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@openintj/core": "workspace:*",
+    "@openintj/embed-ollama": "workspace:*",
+    "@openintj/embed-xenova": "workspace:*",
+    "@openintj/llm-hunyuan": "workspace:*",
+    "@openintj/llm-ollama": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@openintj/embed-xenova": { "optional": true }
+  },
+  "devDependencies": {
+    "rimraf": "^6.0.1",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5"
+  }
+}

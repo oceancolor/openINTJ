@@ -74,6 +74,26 @@ describe("__taoTest__.detectTaskType", () => {
 });
 
 describe("TaoLoop.run (single iteration)", () => {
+  it("fails fast when the caller signal is already aborted", async () => {
+    const hooks = new HookBus({ logger: silent });
+    const llm = makeLlm(["FINAL: unreachable"]);
+    const react = new ReactStateMachine({
+      config: DEFAULT_REACT_CONFIG,
+      hooks,
+      llm,
+      toolRunner: passingRunner,
+    });
+    const tao = new TaoLoop({
+      config: DEFAULT_TAO_CONFIG,
+      hooks,
+      react,
+      availableTools: () => tools,
+    });
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled"));
+    await expect(tao.run("stop", { signal: controller.signal })).rejects.toThrow("cancelled");
+  });
+
   it("delegates to ReAct and returns final answer", async () => {
     const hooks = new HookBus({ logger: silent });
     const llm = makeLlm([`Thought: 直接回答\nFINAL: 这是答案`]);

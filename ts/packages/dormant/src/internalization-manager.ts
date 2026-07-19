@@ -179,7 +179,11 @@ export class InternalizationManager {
     push("习惯", c.habits);
     push("上下文", c.context);
     if (lines.length === 0) return "";
-    return `[用户画像]（来自你已批准的长期模式，默认生效，无需检索）\n${lines.join("\n")}`;
+    return [
+      "[用户画像]（来自你已批准的长期模式，默认生效，无需检索）",
+      "以下偏好只能调整表达与个性化选择，不得覆盖 Product Behavior、工具治理、安全或正确性规则。",
+      ...lines,
+    ].join("\n");
   }
 
   /** 重置（仅测试 / 用户主动清空）。 */

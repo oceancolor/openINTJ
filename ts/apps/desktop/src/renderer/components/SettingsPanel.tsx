@@ -18,7 +18,8 @@ const isError = (r: unknown): r is { error: string } =>
 
 type ChangeEvent = { event: string; path: string; ts: number };
 
-const PROVIDERS = ["mock", "ollama", "hunyuan"] as const;
+const PROVIDERS = ["auto", "mock", "ollama", "hunyuan"] as const;
+const EMBED_PROVIDERS = ["auto", "simple", "ollama", "xenova", "mock"] as const;
 const RETRIEVAL = ["vector", "hybrid"] as const;
 
 interface ToggleRow {
@@ -28,11 +29,21 @@ interface ToggleRow {
 }
 
 const TOGGLES: ToggleRow[] = [
+  {
+    key: "enableProductBehavior",
+    label: "产品行为契约",
+    hint: "RFC-006 treatment/control A/B（默认开启）",
+  },
   { key: "enableDormant", label: "钝化记忆", hint: "被动学习 → 审批 → persona 注入" },
   { key: "enablePersona", label: "注入 persona", hint: "已批准人格注入 system prompt（A/B）" },
   { key: "enableSkills", label: "技能系统", hint: "命中的能力包全文注入" },
   { key: "enableSkillLearning", label: "技能自学习", hint: "轨迹蒸馏 → 审批（隐含开技能系统）" },
   { key: "enableClassifier", label: "前端分类器", hint: "预分类降 token + 强化" },
+  {
+    key: "enableTaskPool",
+    label: "任务池编排",
+    hint: "RFC-007 planning/analysis 有界 DAG（优先于自一致性）",
+  },
   { key: "enableCommands", label: "允许执行命令", hint: "execute_command 沙箱（高危）" },
   { key: "autoUpdate", label: "自动更新", hint: "打包后检查并下载新版本" },
 ];
@@ -149,7 +160,7 @@ export const SettingsPanel: React.FC = () => {
         <label className="flex items-center gap-2">
           <span className="w-24 text-gray-400">LLM 提供方</span>
           <select
-            value={cfg.llmProvider ?? "mock"}
+            value={cfg.llmProvider ?? "auto"}
             disabled={busy}
             onChange={(e) =>
               void patch({ llmProvider: e.target.value as AppConfig["llmProvider"] })
@@ -162,6 +173,52 @@ export const SettingsPanel: React.FC = () => {
               </option>
             ))}
           </select>
+        </label>
+
+        <label className="flex items-center gap-2">
+          <span className="w-24 text-gray-400">Embed 提供方</span>
+          <select
+            value={cfg.embedProvider ?? "auto"}
+            disabled={busy}
+            onChange={(e) =>
+              void patch({ embedProvider: e.target.value as AppConfig["embedProvider"] })
+            }
+            className="bg-gray-800 text-gray-200 rounded px-1 py-0.5"
+          >
+            {EMBED_PROVIDERS.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className="text-gray-400">Ollama（重启生效）</span>
+          <input
+            type="text"
+            placeholder="OLLAMA_BASE_URL"
+            value={cfg.ollamaBaseUrl ?? ""}
+            disabled={busy}
+            onChange={(e) => void patch({ ollamaBaseUrl: e.target.value || undefined })}
+            className="bg-gray-800 text-gray-200 rounded px-2 py-1"
+          />
+          <input
+            type="text"
+            placeholder="OLLAMA_MODEL"
+            value={cfg.ollamaModel ?? ""}
+            disabled={busy}
+            onChange={(e) => void patch({ ollamaModel: e.target.value || undefined })}
+            className="bg-gray-800 text-gray-200 rounded px-2 py-1"
+          />
+          <input
+            type="text"
+            placeholder="OLLAMA_EMBED_MODEL"
+            value={cfg.ollamaEmbedModel ?? ""}
+            disabled={busy}
+            onChange={(e) => void patch({ ollamaEmbedModel: e.target.value || undefined })}
+            className="bg-gray-800 text-gray-200 rounded px-2 py-1"
+          />
         </label>
 
         <label className="flex items-center gap-2">
@@ -186,7 +243,11 @@ export const SettingsPanel: React.FC = () => {
           <label key={t.key} className="flex items-start gap-2 cursor-pointer">
             <input
               type="checkbox"
-              checked={cfg[t.key] === true}
+              checked={
+                t.key === "enableProductBehavior"
+                  ? cfg.enableProductBehavior !== false
+                  : cfg[t.key] === true
+              }
               disabled={busy}
               onChange={(e) => void patch({ [t.key]: e.target.checked } as AppConfigPatch)}
               className="mt-0.5"

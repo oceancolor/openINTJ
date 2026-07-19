@@ -83,6 +83,41 @@ describe("longrun harness (gated)", () => {
     600_000,
   );
 
+  it.runIf(RUN)(
+    "RFC-006 Product Behavior on vs off：长跑完成率不得显著回退",
+    async () => {
+      const provider = (process.env["OPENINTJ_LLM_PROVIDER"] as LlmProvider) ?? "auto";
+      const makeAdapter =
+        (enableProductBehavior: boolean): (() => LongRunAgent) =>
+        () => {
+          const agent = assembleAgent({
+            llmProvider: provider,
+            maxTaoIterations: 2,
+            enableProductBehavior,
+          });
+          return async (query) => {
+            const r = await agent.run(query);
+            return { finalAnswer: r.finalAnswer, tokensSpent: r.totalTokensSpent };
+          };
+        };
+      for (const script of LONGRUN_SCENARIOS) {
+        const report = await runLongRunAb(
+          {
+            "product-behavior-off": makeAdapter(false),
+            "product-behavior-on": makeAdapter(true),
+          },
+          script,
+        );
+        console.log(`\n${formatLongRunAb(report)}`);
+        const on = report.variants.find((v) => v.variant === "product-behavior-on")!;
+        const off = report.variants.find((v) => v.variant === "product-behavior-off")!;
+        const perTurn = 1 / Math.max(1, script.turns.length);
+        expect(on.session.recallRate).toBeGreaterThanOrEqual(off.session.recallRate - perTurn);
+      }
+    },
+    600_000,
+  );
+
   it("harness 模块在常规 CI 下可被引用（占位，确保 import 不破）", () => {
     expect(typeof runLongRunSession).toBe("function");
     expect(typeof runLongRunAb).toBe("function");

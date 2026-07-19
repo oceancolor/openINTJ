@@ -175,8 +175,11 @@ export class TaoLoop {
       enableReact?: boolean;
       /** 本次 run 的检索 topK（外部路由降 token 时传入；透传给 contextProvider）。 */
       topK?: number;
+      /** Cooperative cancellation propagated into ReAct and tool execution. */
+      signal?: AbortSignal;
     } = {},
   ): Promise<TaoResult> {
+    opts.signal?.throwIfAborted();
     const traceId = opts.traceId ?? randomUUID();
     const startTime = Date.now();
     const taskType = opts.taskType ?? this.classifier(query);
@@ -203,6 +206,7 @@ export class TaoLoop {
     // ============================================================
     const runStart = Date.now();
     while (true) {
+      opts.signal?.throwIfAborted();
       ctx.iteration++;
       if (ctx.iteration > this._config.maxTaoIterations) {
         ctx.iteration = this._config.maxTaoIterations;
@@ -277,7 +281,9 @@ export class TaoLoop {
         systemPrompt: finalSystemPrompt,
       };
 
-      const reactOpts = traceId ? { traceId } : undefined;
+      const reactOpts: { traceId?: string; signal?: AbortSignal } = {};
+      if (traceId) reactOpts.traceId = traceId;
+      if (opts.signal) reactOpts.signal = opts.signal;
       // enableReact=false 退化为单次 LLM 调用（不跑微循环、不下发工具）。
       const react = enableReact
         ? await this._react.run(reactInput, reactOpts)

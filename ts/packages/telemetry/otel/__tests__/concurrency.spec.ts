@@ -150,6 +150,60 @@ describe("attachOtelToHooks — concurrency", () => {
     otel.dispose();
   });
 
+  it("correlates TaskPool worker Tao spans with their run and task", async () => {
+    const bus = new HookBus();
+    const otel = attachOtelToHooks(bus);
+    await bus.emit("taskpool.run.submit", {
+      pool: "p",
+      runId: "run-1",
+      planId: "plan-1",
+      taskCount: 1,
+    });
+    await bus.emit("taskpool.task.start", {
+      pool: "p",
+      runId: "run-1",
+      taskId: "task-1",
+      action: "think",
+      attempt: 1,
+      workerTraceId: "worker-1",
+    });
+    await bus.emit("tao.beforeThink", { query: "q", iteration: 1 }, { traceId: "worker-1" });
+    await bus.emit(
+      "tao.afterObserve",
+      { needsContinue: false, iteration: 1 },
+      { traceId: "worker-1" },
+    );
+    await bus.emit("taskpool.task.complete", {
+      pool: "p",
+      runId: "run-1",
+      taskId: "task-1",
+      success: true,
+      status: "completed",
+      attempt: 1,
+    });
+    await bus.emit("taskpool.run.complete", {
+      pool: "p",
+      runId: "run-1",
+      planId: "plan-1",
+      status: "completed",
+      completed: 1,
+      failed: 0,
+      cancelled: 0,
+      timedOut: 0,
+    });
+
+    const taoSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "openintj.tao.iteration");
+    expect(taoSpan?.attributes).toMatchObject({
+      "taskpool.run_id": "run-1",
+      "taskpool.task_id": "task-1",
+      "taskpool.attempt": 1,
+    });
+    expect(otel.openSpanCount()).toBe(0);
+    otel.dispose();
+  });
+
   it("dispose 兜底结束未完成的并发 span", async () => {
     const bus = new HookBus();
     const otel = attachOtelToHooks(bus);

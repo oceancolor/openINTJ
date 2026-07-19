@@ -8,30 +8,37 @@
  *  4. /api/memory?mode=hybrid&rrf=true 启用 RRF 融合（components 带 rrf 字段）
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { type ServerAgent, assembleServerAgent } from "../src/agent.js";
+import {
+  type ServerAgent,
+  type ServerAgentOpts,
+  assembleServerAgent as assembleServerAgentRuntime,
+} from "../src/agent.js";
 import { retrieveHybrid } from "../src/hybrid-retrieve.js";
 import { buildApp } from "../src/routes.js";
+
+const assembleServerAgent = (opts: ServerAgentOpts = {}): Promise<ServerAgent> =>
+  assembleServerAgentRuntime({ embedProvider: "simple", ...opts });
 
 const seed = async (agent: ServerAgent): Promise<void> => {
   // 一组刻意构造的"长尾"语料：vector 检索单看 embedding 不一定能区分，
   // BM25 通过精确词项匹配能把 keyword 命中拉前。
-  agent.persistentStore.addLongTerm("machine learning frameworks pytorch tensorflow", {
+  await agent.persistentStore.addLongTermAsync("machine learning frameworks pytorch tensorflow", {
     taskTags: ["ml"],
     importance: 0.7,
   });
-  agent.persistentStore.addLongTerm("deep learning research paper survey", {
+  await agent.persistentStore.addLongTermAsync("deep learning research paper survey", {
     taskTags: ["ml"],
     importance: 0.6,
   });
-  agent.persistentStore.addLongTerm("machine learning tutorials beginner", {
+  await agent.persistentStore.addLongTermAsync("machine learning tutorials beginner", {
     taskTags: ["ml"],
     importance: 0.5,
   });
-  agent.persistentStore.addLongTerm("cooking recipe italian pasta", {
+  await agent.persistentStore.addLongTermAsync("cooking recipe italian pasta", {
     taskTags: ["food"],
     importance: 0.4,
   });
-  agent.persistentStore.addLongTerm("travel guide kyoto temple", {
+  await agent.persistentStore.addLongTermAsync("travel guide kyoto temple", {
     taskTags: ["travel"],
     importance: 0.3,
   });

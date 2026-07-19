@@ -297,6 +297,109 @@ describe("attachOtelToHooks — metrics", () => {
     otel.dispose();
   });
 
+  it("records Product Behavior treatment and control cohorts", async () => {
+    const bus = new HookBus();
+    const otel = attachOtelToHooks(bus);
+
+    await bus.emit("event.PRODUCT_BEHAVIOR", { version: "1.0.0", enabled: true });
+    await bus.emit("event.PRODUCT_BEHAVIOR", { version: "1.0.0", enabled: false });
+
+    const series = (await flush()).filter((s) => s.name === "openintj.product.behavior.injected");
+    expect(series.reduce((sum, item) => sum + item.sum, 0)).toBe(2);
+    expect(series.some((s) => s.attrs["enabled"] === "true")).toBe(true);
+    expect(series.some((s) => s.attrs["enabled"] === "false")).toBe(true);
+    expect(series.every((s) => s.attrs["version"] === "1.0.0")).toBe(true);
+
+    otel.dispose();
+  });
+
+  it("records deterministic trait signals with explicit semantics", async () => {
+    const bus = new HookBus();
+    const otel = attachOtelToHooks(bus);
+
+    await bus.emit("event.PRODUCT_TRAIT_SIGNAL", {
+      trait: "T3_evidence_first",
+      signal: "search_before_answer",
+      value: 1,
+      source: "tool.afterCall",
+    });
+
+    const series = (await flush()).filter((s) => s.name === "openintj.product.trait.signal");
+    expect(series.reduce((sum, item) => sum + item.sum, 0)).toBe(1);
+    expect(series[0]?.attrs).toMatchObject({
+      trait: "T3_evidence_first",
+      signal: "search_before_answer",
+      source: "tool.afterCall",
+    });
+
+    otel.dispose();
+  });
+
+  it("records TaskPool lifecycle counters with run correlation", async () => {
+    const bus = new HookBus();
+    const otel = attachOtelToHooks(bus);
+    await bus.emit("taskpool.run.submit", {
+      pool: "test",
+      runId: "r1",
+      planId: "p1",
+      taskCount: 1,
+    });
+    await bus.emit("taskpool.task.start", {
+      pool: "test",
+      runId: "r1",
+      taskId: "a",
+      action: "think",
+      attempt: 1,
+      workerTraceId: "r1:a:1",
+    });
+    await bus.emit("taskpool.task.retry", {
+      pool: "test",
+      runId: "r1",
+      taskId: "a",
+      attempt: 1,
+      delayMs: 1,
+      error: "transient",
+    });
+    await bus.emit("taskpool.task.timeout", {
+      pool: "test",
+      runId: "r1",
+      taskId: "b",
+      attempt: 1,
+      timeoutMs: 10,
+    });
+    await bus.emit("taskpool.task.cancel", {
+      pool: "test",
+      runId: "r1",
+      taskId: "c",
+      reason: "caller cancelled",
+    });
+    await bus.emit("taskpool.task.complete", {
+      pool: "test",
+      runId: "r1",
+      taskId: "a",
+      success: true,
+      status: "completed",
+      attempt: 2,
+    });
+    await bus.emit("taskpool.run.complete", {
+      pool: "test",
+      runId: "r1",
+      planId: "p1",
+      status: "completed",
+      completed: 1,
+      failed: 0,
+      cancelled: 0,
+      timedOut: 0,
+    });
+    const series = await flush();
+    expect(series.find((s) => s.name === "openintj.taskpool.runs")?.sum).toBe(1);
+    expect(series.find((s) => s.name === "openintj.taskpool.tasks")?.sum).toBe(1);
+    expect(series.find((s) => s.name === "openintj.taskpool.retries")?.sum).toBe(1);
+    expect(series.find((s) => s.name === "openintj.taskpool.timeouts")?.sum).toBe(1);
+    expect(series.find((s) => s.name === "openintj.taskpool.cancellations")?.sum).toBe(1);
+    otel.dispose();
+  });
+
   it("respects disableMetrics flag", async () => {
     const bus = new HookBus();
     const otel = attachOtelToHooks(bus, { disableMetrics: true });

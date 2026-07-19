@@ -38,6 +38,11 @@ describe("decideRoute", () => {
     expect(r.topK).toBe(6);
   });
 
+  it("planning / analysis 复杂类永不 single（RFC-006 护栏）", () => {
+    expect(decideRoute(cls({ label: TaskType.PLANNING, confidence: 0.99 })).single).toBe(false);
+    expect(decideRoute(cls({ label: TaskType.ANALYSIS, confidence: 0.99 })).single).toBe(false);
+  });
+
   it("policy 可覆盖简单类集合 / 阈值 / topK", () => {
     const r = decideRoute(cls({ label: TaskType.CODE_GENERATION, confidence: 0.65 }), {
       simpleTypes: [TaskType.CODE_GENERATION],

@@ -137,9 +137,11 @@ export const summarizeLlmEnv = (
   provider: string;
   hunyuan: { hasKey: boolean; baseUrl: string; model: string; search: boolean };
   ollama: { baseUrl: string; model: string };
+  embedProvider: string;
   summary: string;
 } => {
-  const provider = env["LLM_PROVIDER"] ?? "mock";
+  const provider = env["LLM_PROVIDER"] ?? "auto";
+  const embedProvider = env["EMBEDDING_PROVIDER"] ?? env["EMBED_PROVIDER"] ?? "auto";
   const isTruthy = (raw: string | undefined): boolean => {
     if (!raw) return false;
     const v = raw.trim().toLowerCase();
@@ -153,18 +155,21 @@ export const summarizeLlmEnv = (
   };
   const ollama = {
     baseUrl: env["OLLAMA_BASE_URL"] ?? "http://127.0.0.1:11434",
-    model: env["OLLAMA_MODEL"] ?? "qwen2:7b",
+    model: env["OLLAMA_MODEL"] ?? "qwen2.5:7b",
   };
   const tail =
     provider === "hunyuan"
       ? `hunyuanApiKey=${hunyuan.hasKey ? "set" : "MISSING"} model=${hunyuan.model} search=${hunyuan.search ? "on" : "off"}`
       : provider === "ollama"
         ? `ollamaModel=${ollama.model} baseUrl=${ollama.baseUrl}`
-        : "(mock — no remote LLM call)";
+        : provider === "auto"
+          ? `auto(local-first) ollama=${ollama.baseUrl} hunyuanKey=${hunyuan.hasKey ? "set" : "MISSING"}`
+          : "(explicit mock)";
   return {
     provider,
     hunyuan,
     ollama,
-    summary: `provider=${provider} ${tail}`,
+    embedProvider,
+    summary: `provider=${provider} embed=${embedProvider} ${tail}`,
   };
 };

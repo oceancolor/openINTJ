@@ -82,8 +82,9 @@ export class ToolHub {
   async call(
     name: string,
     params: Record<string, unknown>,
-    opts?: { traceId?: string; timeoutMs?: number },
+    opts?: { traceId?: string; timeoutMs?: number; signal?: AbortSignal },
   ): Promise<ToolCallResult> {
+    opts?.signal?.throwIfAborted();
     const descriptor = this.tools.get(name);
     if (!descriptor) {
       const result: ToolCallResult = {
@@ -163,7 +164,7 @@ export class ToolHub {
       const timeoutMs = opts?.timeoutMs ?? descriptor.timeoutS * 1000;
       const output =
         handler !== undefined
-          ? await runWithTimeout(handler(params), timeoutMs, name)
+          ? await runWithTimeout(handler(params), timeoutMs, name, opts?.signal)
           : { status: "no_handler", params };
 
       result = {
@@ -176,6 +177,7 @@ export class ToolHub {
       };
       breaker?.recordSuccess();
     } catch (err) {
+      if (opts?.signal?.aborted) throw opts.signal.reason ?? err;
       const errorMessage = err instanceof Error ? err.message : String(err);
       result = {
         toolName: name,
@@ -281,23 +283,40 @@ const runWithTimeout = async <T>(
   task: T | Promise<T>,
   timeoutMs: number,
   toolName: string,
+  signal?: AbortSignal,
 ): Promise<T> => {
   if (!(task instanceof Promise)) return task;
-  return await Promise.race([
-    task,
-    new Promise<T>((_, reject) =>
-      setTimeout(
-        () =>
-          reject(
-            new AgentError({
-              code: ErrorCode.TIMEOUT,
-              message: `工具 ${toolName} 调用超时 (${timeoutMs}ms)`,
-              retriable: true,
-              details: { tool: toolName, timeoutMs },
-            }),
-          ),
-        timeoutMs,
-      ),
-    ),
-  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      task,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new AgentError({
+                code: ErrorCode.TIMEOUT,
+                message: `工具 ${toolName} 调用超时 (${timeoutMs}ms)`,
+                retriable: true,
+                details: { tool: toolName, timeoutMs },
+              }),
+            ),
+          timeoutMs,
+        );
+      }),
+      ...(signal
+        ? [
+            new Promise<T>((_, reject) =>
+              signal.addEventListener(
+                "abort",
+                () => reject(signal.reason ?? new Error("tool call cancelled")),
+                { once: true },
+              ),
+            ),
+          ]
+        : []),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 };

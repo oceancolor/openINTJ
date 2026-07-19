@@ -31,6 +31,7 @@
     "@openintj/dormant": "workspace:*",
     "@openintj/llm-hunyuan": "workspace:*",
     "@openintj/llm-ollama": "workspace:*",
+    "@openintj/model-runtime": "workspace:*",
     "@openintj/plane-control": "workspace:*",
     "@openintj/plane-execution": "workspace:*",
     "@openintj/plane-governance": "workspace:*",

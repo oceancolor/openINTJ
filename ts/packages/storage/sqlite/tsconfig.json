@@ -12,6 +12,7 @@
     { "path": "../../shared" },
     { "path": "../../dormant" },
     { "path": "../../classifier" },
-    { "path": "../../skills" }
+    { "path": "../../skills" },
+    { "path": "../../taskpool" }
   ]
 }

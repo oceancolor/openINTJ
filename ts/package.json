@@ -30,5 +30,8 @@
     "turbo": "^2.3.0",
     "typescript": "^5.6.3",
     "vitest": "^2.1.5"
+  },
+  "dependencies": {
+    "@xenova/transformers": "^2.17.2"
   }
 }

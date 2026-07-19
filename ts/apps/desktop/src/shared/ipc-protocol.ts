@@ -29,6 +29,58 @@ export const StatusResponseSchema = z.object({
     provider: z.string(),
     status: z.string(),
     model: z.string().optional(),
+    mode: z.string().optional(),
+    runtime: z
+      .object({
+        requestedProvider: z.string(),
+        provider: z.string(),
+        model: z.string(),
+        mode: z.string(),
+        status: z.string(),
+        fallbackFrom: z.string().optional(),
+        lastError: z.string().optional(),
+      })
+      .optional(),
+  }),
+  embed: z
+    .object({
+      requestedProvider: z.string(),
+      provider: z.string(),
+      model: z.string(),
+      dimension: z.number(),
+      mode: z.string(),
+      fallbackFrom: z.string().optional(),
+      lastError: z.string().optional(),
+      attempts: z
+        .array(z.object({ provider: z.string(), ok: z.boolean(), reason: z.string().optional() }))
+        .optional(),
+    })
+    .optional(),
+  modelRuntime: z.object({
+    llm: z.object({
+      requestedProvider: z.string(),
+      provider: z.string(),
+      model: z.string(),
+      mode: z.string(),
+      status: z.string(),
+      fallbackFrom: z.string().optional(),
+      lastError: z.string().optional(),
+      attempts: z.array(
+        z.object({ provider: z.string(), ok: z.boolean(), reason: z.string().optional() }),
+      ),
+    }),
+    embed: z.object({
+      requestedProvider: z.string(),
+      provider: z.string(),
+      model: z.string(),
+      dimension: z.number(),
+      mode: z.string(),
+      fallbackFrom: z.string().optional(),
+      lastError: z.string().optional(),
+      attempts: z.array(
+        z.object({ provider: z.string(), ok: z.boolean(), reason: z.string().optional() }),
+      ),
+    }),
   }),
   memory: z.object({
     counts: z.record(z.string(), z.number()),
@@ -52,6 +104,20 @@ export const StatusResponseSchema = z.object({
     .optional(),
   /** Phase 3.3 ?????????vector / hybrid???*/
   retrievalMode: z.enum(["vector", "hybrid"]).optional(),
+  taskPool: z
+    .object({
+      enabled: z.boolean(),
+      precedence: z.literal("taskpool-before-self-consistency"),
+    })
+    .optional(),
+  /** RFC-006 当前行为契约版本与 A/B cohort。 */
+  productBehavior: z
+    .object({
+      version: z.string(),
+      enabled: z.boolean(),
+      cohort: z.enum(["treatment", "control"]),
+    })
+    .optional(),
   /** Phase 3.3/3.4 ??Dormant ???????????????*/
   dormant: z
     .object({
@@ -338,19 +404,27 @@ export type WorkspaceError = z.infer<typeof WorkspaceErrorSchema>;
  * ?????????????????updateConfig ?????? * ??????**????**??????????workspaceDir ????????fs.watch ?????? */
 export const AppConfigSchema = z.object({
   workspaceDir: z.string().optional(),
-  llmProvider: z.enum(["ollama", "hunyuan", "mock"]).optional(),
+  llmProvider: z.enum(["auto", "ollama", "hunyuan", "mock"]).optional(),
+  embedProvider: z.enum(["auto", "simple", "ollama", "xenova", "mock"]).optional(),
+  ollamaBaseUrl: z.string().optional(),
+  ollamaModel: z.string().optional(),
+  ollamaEmbedModel: z.string().optional(),
   retrievalMode: z.enum(["vector", "hybrid"]).optional(),
   enableCommands: z.boolean().optional(),
   allowedCommands: z.array(z.string()).optional(),
   enableDormant: z.boolean().optional(),
   /** 是否注入已批准的钝化记忆 persona（A/B 杠杆，仅 enableDormant 时有意义）。 */
   enablePersona: z.boolean().optional(),
+  /** RFC-006 Product Behavior treatment/control A/B。 */
+  enableProductBehavior: z.boolean().optional(),
   /** 技能系统（Phase 1 作者能力包）。 */
   enableSkills: z.boolean().optional(),
   /** 技能自学习闭环（Phase 2，隐含开启 enableSkills）。 */
   enableSkillLearning: z.boolean().optional(),
   /** 前端可强化分类器。 */
   enableClassifier: z.boolean().optional(),
+  /** RFC-007 bounded DAG orchestration for planning/analysis. */
+  enableTaskPool: z.boolean().optional(),
   autoUpdate: z.boolean().optional(),
 });
 export type AppConfig = z.infer<typeof AppConfigSchema>;

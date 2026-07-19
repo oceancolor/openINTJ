@@ -100,6 +100,7 @@ export const loadOllamaEmbedderConfigFromEnv = (
   const cfg: Partial<OllamaEmbedderConfig> = {};
   if (env.OLLAMA_EMBED_ENDPOINT) cfg.endpoint = env.OLLAMA_EMBED_ENDPOINT;
   else if (env.OLLAMA_ENDPOINT) cfg.endpoint = env.OLLAMA_ENDPOINT;
+  else if (env.OLLAMA_BASE_URL) cfg.endpoint = env.OLLAMA_BASE_URL;
   if (env.OLLAMA_EMBED_MODEL) cfg.model = env.OLLAMA_EMBED_MODEL;
   if (env.OLLAMA_EMBED_DIMENSION) {
     const d = Number.parseInt(env.OLLAMA_EMBED_DIMENSION, 10);

@@ -1,3 +1,4 @@
+import type { ProductTraitId } from "@openintj/shared";
 import type { Command } from "../types/command-event.js";
 import type { MemoryFragment } from "../types/memory-fragment.js";
 import type { LODLevelType, ShaderModeType } from "../types/shader.js";
@@ -218,6 +219,90 @@ export interface HookEventMap {
     success: boolean;
     durationMs: number;
   };
+  /** TaskPool（RFC-007）：一次 DAG run 提交。 */
+  "taskpool.run.submit": {
+    pool: string;
+    runId: string;
+    planId: string;
+    taskCount: number;
+  };
+  /** TaskPool：run 结束。 */
+  "taskpool.run.complete": {
+    pool: string;
+    runId: string;
+    planId: string;
+    status: string;
+    completed: number;
+    failed: number;
+    cancelled: number;
+    timedOut: number;
+  };
+  /** TaskPool：依赖满足，task 可调度。 */
+  "taskpool.task.ready": {
+    pool: string;
+    runId: string;
+    taskId: string;
+    attempt: number;
+  };
+  /** TaskPool：单 task 开始。 */
+  "taskpool.task.start": {
+    pool: string;
+    runId: string;
+    taskId: string;
+    action: string;
+    attempt: number;
+    /** Trace id used by the worker's Tao/ReAct/tool lifecycle. */
+    workerTraceId: string;
+  };
+  /** TaskPool：task 失败后进入有界重试。 */
+  "taskpool.task.retry": {
+    pool: string;
+    runId: string;
+    taskId: string;
+    attempt: number;
+    delayMs: number;
+    error: string;
+  };
+  /** TaskPool：task 触发运行 watchdog。 */
+  "taskpool.task.timeout": {
+    pool: string;
+    runId: string;
+    taskId: string;
+    attempt: number;
+    timeoutMs: number;
+  };
+  /** TaskPool：task 被显式取消或由依赖级联取消。 */
+  "taskpool.task.cancel": {
+    pool: string;
+    runId: string;
+    taskId: string;
+    reason: string;
+  };
+  /** TaskPool：单 task 结束。 */
+  "taskpool.task.complete": {
+    pool: string;
+    runId: string;
+    taskId: string;
+    success: boolean;
+    status: string;
+    attempt: number;
+    error?: string;
+  };
+  /** Product Behavior（RFC-006）：本轮 run 注入的行为版本。 */
+  "event.PRODUCT_BEHAVIOR": {
+    version: string;
+    enabled: boolean;
+  };
+  /**
+   * RFC-006 trait signal derived from deterministic framework evidence.
+   * It records an observed lifecycle/tool fact, never inferred model intent.
+   */
+  "event.PRODUCT_TRAIT_SIGNAL": {
+    trait: ProductTraitId;
+    signal: "plan_decomposed" | "clarification_skill_selected" | "search_before_answer";
+    value: number;
+    source: "tao.afterThink" | "event.SKILL_SELECTED" | "tool.afterCall";
+  };
 }
 
 /** 哪些事件允许 handler 调用 ctx.cancel()。 */
@@ -236,5 +321,6 @@ export const eventCategory = (event: string): HookCategory => {
   if (event.startsWith("pool.") || event.startsWith("forkjoin.") || event.startsWith("task.")) {
     return "concurrency";
   }
+  if (event.startsWith("taskpool.")) return "concurrency";
   return "lifecycle";
 };

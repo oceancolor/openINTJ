@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parseFrontmatter } from "../src/frontmatter.js";
-import { FsSkillSource, resolveSkillDirs } from "../src/fs-source.js";
+import { FsSkillSource, builtinSkillsDir, resolveSkillDirs } from "../src/fs-source.js";
 
 describe("parseFrontmatter", () => {
   it("解析标量 / 内联数组 / 块状列表 / 引号", () => {
@@ -114,5 +114,15 @@ describe("FsSkillSource", () => {
   it("目录不存在时返回空、不抛错", async () => {
     const src = new FsSkillSource({ dirs: [join(root, "nope")] });
     await expect(src.load()).resolves.toEqual([]);
+  });
+
+  it("ships RFC-006 planning and clarification skills with deterministic triggers", async () => {
+    const skills = await new FsSkillSource({ dirs: [builtinSkillsDir()] }).load();
+    const planning = skills.find((s) => s.id === "planning");
+    const clarification = skills.find((s) => s.id === "clarification");
+    expect(planning?.taskTypes).toEqual(expect.arrayContaining(["planning", "analysis"]));
+    expect(planning?.triggers).toContain("规划");
+    expect(clarification?.taskTypes).toContain("planning");
+    expect(clarification?.triggers).toContain("澄清");
   });
 });

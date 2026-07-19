@@ -21,7 +21,7 @@ import type {
 export type ReactToolRunner = (
   toolName: string,
   params: Record<string, unknown>,
-  opts?: { traceId?: string; timeoutMs?: number },
+  opts?: { traceId?: string; timeoutMs?: number; signal?: AbortSignal },
 ) => Promise<ToolCallResult>;
 
 export interface ReactDeps {
@@ -33,6 +33,7 @@ export interface ReactDeps {
 
 export interface ReactRunOptions {
   traceId?: string;
+  signal?: AbortSignal;
 }
 
 /**
@@ -167,6 +168,7 @@ export class ReactStateMachine {
   }
 
   async run(input: ReactInput, opts: ReactRunOptions = {}): Promise<ReactOutput> {
+    opts.signal?.throwIfAborted();
     const trajectory: TrajectoryEntry[] = [];
     const traceId = opts.traceId;
     const conversation: ChatMessage[] = [
@@ -181,6 +183,7 @@ export class ReactStateMachine {
     let iter = 0;
 
     while (iter < this._config.maxIterations) {
+      opts.signal?.throwIfAborted();
       iter++;
 
       // ============================================================
@@ -327,10 +330,11 @@ export class ReactStateMachine {
         beforeActionOpts,
       );
 
-      const callOpts: { traceId?: string; timeoutMs: number } = {
+      const callOpts: { traceId?: string; timeoutMs: number; signal?: AbortSignal } = {
         timeoutMs: this._config.stepTimeoutMs,
       };
       if (traceId) callOpts.traceId = traceId;
+      if (opts.signal) callOpts.signal = opts.signal;
       const toolResult = await this._toolRunner(
         actionPayload.tool,
         (actionPayload.params as Record<string, unknown>) ?? parsed.action.params,
@@ -413,6 +417,7 @@ export class ReactStateMachine {
    * 省 token、省时延。仍发出 react.beforeThought / afterThought / onStopCondition 以保持可观测一致。
    */
   async runSingle(input: ReactInput, opts: ReactRunOptions = {}): Promise<ReactOutput> {
+    opts.signal?.throwIfAborted();
     const traceId = opts.traceId;
     const hookOpts = traceId ? { traceId } : undefined;
 
@@ -428,6 +433,7 @@ export class ReactStateMachine {
     ];
     const t0 = Date.now();
     const llmText = await this._llm.chat(conversation, { temperature: 0.4, maxTokens: 1024 });
+    opts.signal?.throwIfAborted();
     const answer = llmText.trim();
 
     await this._hooks.emit(

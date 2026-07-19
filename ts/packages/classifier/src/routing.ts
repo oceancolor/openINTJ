@@ -15,6 +15,8 @@ export interface RouteDecision {
 export interface RoutingPolicy {
   /** 视为「简单、可单次」的任务类型。 */
   simpleTypes?: readonly TaskTypeType[];
+  /** 永不走 single 路由的复杂任务类型（RFC-006 护栏）。 */
+  complexTypes?: readonly TaskTypeType[];
   /** 触发单次路由的最低置信度。 */
   minConfidence?: number;
   /** 简单类 topK。 */
@@ -28,6 +30,10 @@ export interface RoutingPolicy {
  * 兜底分类（fallback=true）一律不激进路由，避免误判把复杂任务降级。
  */
 export const decideRoute = (r: ClassifyResult, policy: RoutingPolicy = {}): RouteDecision => {
+  const complexTypes = policy.complexTypes ?? [TaskType.PLANNING, TaskType.ANALYSIS];
+  if (complexTypes.includes(r.label)) {
+    return { single: false, topK: policy.defaultTopK ?? 6 };
+  }
   const simpleTypes = policy.simpleTypes ?? [TaskType.QUICK_RESPONSE, TaskType.GENERAL_CHAT];
   const minConfidence = policy.minConfidence ?? 0.6;
   const single = !r.fallback && r.confidence >= minConfidence && simpleTypes.includes(r.label);

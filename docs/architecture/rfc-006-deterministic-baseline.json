@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "label": "deterministic-scripted-baseline",
+  "rfc": "RFC-006",
+  "date": "2026-07-14",
+  "realModelScore": false,
+  "runner": "scripted/stub",
+  "scenarioCount": 9,
+  "traitCount": 8,
+  "passed": 9,
+  "completionRate": 1,
+  "baselineMet": true,
+  "notes": [
+    "This artifact proves the evaluation harness and all deterministic judges execute in normal CI.",
+    "It is not evidence of live-model quality and must not be compared as a model benchmark.",
+    "T3 uses structured toolsUsed evidence containing search; finalAnswer-only runners retain a conservative compatibility fallback."
+  ],
+  "liveModelCommand": "RUN_TRAIT_EVAL=1 OPENINTJ_LLM_PROVIDER=ollama pnpm --filter @openintj/cli test -- trait.harness",
+  "liveModelBlocker": "Requires a reachable configured live model runtime (for example a running Ollama service/model or valid provider credentials)."
+}

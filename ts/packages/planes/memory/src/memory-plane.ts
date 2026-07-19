@@ -60,8 +60,28 @@ export class MemoryPlane {
     });
   }
 
+  async recordUserInputAsync(
+    content: string,
+    extraTags: readonly string[] = [],
+  ): Promise<MemoryFragment> {
+    return this.store.addShortTermAsync(content, {
+      taskTags: ["user_input", ...extraTags],
+      importance: 0.6,
+    });
+  }
+
   recordAssistantOutput(content: string, extraTags: readonly string[] = []): MemoryFragment {
     return this.store.addShortTerm(content, {
+      taskTags: ["assistant_output", ...extraTags],
+      importance: 0.5,
+    });
+  }
+
+  async recordAssistantOutputAsync(
+    content: string,
+    extraTags: readonly string[] = [],
+  ): Promise<MemoryFragment> {
+    return this.store.addShortTermAsync(content, {
       taskTags: ["assistant_output", ...extraTags],
       importance: 0.5,
     });

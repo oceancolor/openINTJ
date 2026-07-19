@@ -7,5 +7,9 @@
     "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
   "include": ["src/**/*"],
-  "references": [{ "path": "../core" }, { "path": "../concurrency" }]
+  "references": [
+    { "path": "../core" },
+    { "path": "../concurrency" },
+    { "path": "../planes/control" }
+  ]
 }

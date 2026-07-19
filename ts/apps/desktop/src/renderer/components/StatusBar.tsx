@@ -10,8 +10,10 @@ export const StatusBar: React.FC<{ status: StatusSnapshot | undefined }> = ({ st
       <div className="px-4 py-1 text-xs text-gray-500 border-t border-gray-800">加载状态中...</div>
     );
   }
+  const runtimeLlm = status.modelRuntime.llm;
+  const runtimeEmbed = status.modelRuntime.embed;
   const dotColor =
-    status.llm.status === "connected"
+    runtimeLlm.status === "connected" && !runtimeLlm.fallbackFrom
       ? "bg-green-400"
       : status.llm.status === "degraded"
         ? "bg-yellow-400"
@@ -20,8 +22,13 @@ export const StatusBar: React.FC<{ status: StatusSnapshot | undefined }> = ({ st
     <div className="flex items-center gap-4 px-4 py-1 text-xs text-gray-400 border-t border-gray-800 bg-[#181825]">
       <span className="flex items-center gap-1">
         <span className={`inline-block w-2 h-2 rounded-full ${dotColor}`} />
-        LLM: {status.llm.provider}
-        {status.llm.model ? ` (${status.llm.model})` : ""} · {status.llm.status}
+        LLM: {runtimeLlm.provider} ({runtimeLlm.model}) · {runtimeLlm.mode}
+        {runtimeLlm.fallbackFrom ? ` ← ${runtimeLlm.fallbackFrom}` : ""}
+      </span>
+      <span className={runtimeEmbed.fallbackFrom ? "text-yellow-300" : "text-gray-400"}>
+        Embed: {runtimeEmbed.provider} ({runtimeEmbed.model}, {runtimeEmbed.dimension}d) ·{" "}
+        {runtimeEmbed.mode}
+        {runtimeEmbed.fallbackFrom ? ` ← ${runtimeEmbed.fallbackFrom}` : ""}
       </span>
       <span>记忆: {status.memory.total}</span>
       <span>

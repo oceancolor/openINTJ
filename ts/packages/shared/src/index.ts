@@ -19,5 +19,8 @@ export * from "./persona-config.js";
 export * from "./task-eval.js";
 export * from "./longrun-eval.js";
 export * from "./longrun-scenarios.js";
+export * from "./product-behavior.js";
+export * from "./trait-scenarios.js";
+export * from "./trait-eval.js";
 
 export const __sharedPlaceholder = true;
