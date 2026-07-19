@@ -206,6 +206,7 @@ export class ReactStateMachine {
       const llmText = await this._llm.chat(conversation, {
         temperature: 0.4,
         maxTokens: 1024,
+        ...(opts.signal ? { signal: opts.signal } : {}),
       });
       const parsed = parseLlmThought(llmText);
       totalTokens += estimateTokens(llmText);
@@ -432,7 +433,11 @@ export class ReactStateMachine {
       ...input.messages,
     ];
     const t0 = Date.now();
-    const llmText = await this._llm.chat(conversation, { temperature: 0.4, maxTokens: 1024 });
+    const llmText = await this._llm.chat(conversation, {
+      temperature: 0.4,
+      maxTokens: 1024,
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
     opts.signal?.throwIfAborted();
     const answer = llmText.trim();
 

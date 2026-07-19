@@ -245,6 +245,8 @@ stateDiagram-v2
 > 实现状态（2026-07-19）：真实 adapter 已完全移除 mock 生成与 `isMockMode`；
 > Ollama 网络/HTTP/非法响应、Hunyuan 缺 key/鉴权/HTTP/非法响应均抛结构化 `AgentError`。
 > `MockLlmClient` 是唯一 LLM mock 实现，只有显式 `mock` 或 `auto` 状态机可见回退才会构造。
+> `ChatOptions.signal` 会传入 Ollama/Hunyuan fetch；调用方取消保留原始 reason，且与
+> provider 自身的 timeout 错误分开处理。
 
 ### 7.3 Embedding 独立状态机
 

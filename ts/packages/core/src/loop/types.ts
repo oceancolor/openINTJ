@@ -173,6 +173,8 @@ export interface ChatOptions {
   temperature?: number;
   maxTokens?: number;
   topP?: number;
+  /** Cancels an in-flight provider request, not just the surrounding loop. */
+  signal?: AbortSignal;
   /** 工具调用支持（OpenAI function calling）。 */
   tools?: ToolDescriptor[];
   /** 强制返回 final answer（用于 ReAct 收敛）。 */

@@ -51,7 +51,8 @@ Hook 事件：
 
 1. **MVD hardening**：`TaskRun` handle、完整节点状态机、稳定拓扑/合成、partial
    `SharedContext`、图验证、失败/取消级联与并发 peak 测试。
-2. **可靠性**：`AbortSignal` 从 TaskPool 贯通 Tao/ReAct/tool 调用边界；取消与超时分离；
+2. **可靠性**：`AbortSignal` 从 TaskPool 贯通 Tao/ReAct/tool 及 `LlmClient.chat` 调用边界，
+   Ollama/Hunyuan 会中止在途 provider fetch；调用方取消与 provider timeout 分离；
    per-task timeout、watchdog、有界指数 backoff 重试。
 3. **三端 parity**：CLI `--task-pool`、server env/config/status、desktop AppConfig/Settings；
    符合条件时 TaskPool 明确优先于 self-consistency，默认简单路径不变。
@@ -66,8 +67,8 @@ Hook 事件：
 
 - LLM 动态生成/修订 DAG 需要独立安全与验证 RFC。
 - 跨进程、分布式或 Kubernetes 调度不在本 RFC 范围。
-- 底层 provider 是否能中止已发出的网络请求取决于其客户端 API；当前在 Tao/ReAct/tool
-  边界 cooperative fail-fast，TaskPool watchdog 保证 run 不被无限阻塞。
+- 内置 Ollama/Hunyuan adapter 已消费 `ChatOptions.signal` 并中止在途 fetch；后续新增
+  provider 必须遵守同一取消契约。TaskPool watchdog 继续作为不遵守 signal 的第三方实现兜底。
 - 自动 resume 不提供 exactly-once 外部副作用保证，因此默认策略为 cancel。只有调用方确认
   worker 可安全重放时才应启用 resume。
 - 多 Agent 默认启用仍需真实角色策略、prompt 隔离、权限与成本基准。
@@ -78,4 +79,5 @@ Hook 事件：
 - TaskPool 关闭时零行为变化
 - 开启时并发不超过配置上限
 - timeout/cancel/retry、失败级联、SQLite restart recovery 均有确定性测试
+- TaskPool cancel 可中止 ReAct 内在途 LLM 请求，Ollama/Hunyuan adapter 有 fetch abort 回归测试
 - server 显式 resume 与 desktop 默认 cancel 均有真实 SQLite 应用级 E2E

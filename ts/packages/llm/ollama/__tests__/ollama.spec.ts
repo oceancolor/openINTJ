@@ -43,6 +43,28 @@ describe("OllamaClient", () => {
     expect(c.getStatus()).toMatchObject({ mode: "live", status: "degraded" });
   });
 
+  it("aborts an in-flight HTTP request when the caller cancels", async () => {
+    let fetchSignal: AbortSignal | undefined;
+    globalThis.fetch = ((_url: unknown, init?: RequestInit) => {
+      const signal = init?.signal as AbortSignal;
+      fetchSignal = signal;
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    }) as typeof fetch;
+    const c = new OllamaClient({ baseUrl: "http://localhost:11434" });
+    const controller = new AbortController();
+    const pending = c.chat([{ role: "user", content: "wait" }], {
+      signal: controller.signal,
+    });
+    const reason = new Error("caller cancelled Ollama");
+
+    controller.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
+    expect(fetchSignal?.aborted).toBe(true);
+  });
+
   it("fails closed on HTTP errors without returning generated content", async () => {
     globalThis.fetch = (async () =>
       new Response("model not found", { status: 404 })) as unknown as typeof fetch;

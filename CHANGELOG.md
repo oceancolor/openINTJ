@@ -38,6 +38,9 @@
 
 ### Changed
 
+- **LLM 在途取消传播**：`ChatOptions` 新增 `AbortSignal`，TaskPool worker cancellation 经
+  Tao/ReAct（含 `runSingle`）传入 Ollama/Hunyuan fetch。调用方取消立即终止 HTTP 请求并
+  保留原始 reason，不再等待 provider timeout；provider 自身超时仍报告 `TIMEOUT`。
 - **真实 provider fail-closed**：从 Ollama/Hunyuan adapter 删除内部 mock 生成器与
   `isMockMode` 旁路。Ollama 网络/HTTP/非法响应、Hunyuan 缺 key/鉴权/HTTP/非法响应
   现在统一显式失败并更新 degraded/unauthorized 状态；显式 mock 仅由 ModelRuntime

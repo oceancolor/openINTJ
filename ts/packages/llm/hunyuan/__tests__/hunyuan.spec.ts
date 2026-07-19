@@ -52,6 +52,28 @@ describe("HunyuanClient (live mode with fetch mock)", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it("aborts an in-flight HTTP request when the caller cancels", async () => {
+    let fetchSignal: AbortSignal | undefined;
+    globalThis.fetch = ((_url: unknown, init?: RequestInit) => {
+      const signal = init?.signal as AbortSignal;
+      fetchSignal = signal;
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    }) as typeof fetch;
+    const c = new HunyuanClient({ apiKey: "k" });
+    const controller = new AbortController();
+    const pending = c.chat([{ role: "user", content: "wait" }], {
+      signal: controller.signal,
+    });
+    const reason = new Error("caller cancelled Hunyuan");
+
+    controller.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
+    expect(fetchSignal?.aborted).toBe(true);
+  });
+
   it("omits search params by default", async () => {
     let body: Record<string, unknown> = {};
     globalThis.fetch = (async (_url: unknown, init: unknown) => {

@@ -17,8 +17,10 @@ RFC-005/006/007 的核心库、三端 opt-in 接线与确定性测试已经落�
    mock 生成器；缺配置、鉴权、网络、HTTP 与非法响应均显式抛结构化错误，状态同步转为
    unauthorized/degraded。显式 mock 只由 ModelRuntime 构造；adapter/runtime 单测、
    Ollama 真机 4/4 与 Desktop mock smoke 5/5 通过。
-3. **LLM 取消传播**：把 `AbortSignal` 从 TaskPool/Tao/ReAct 传入 `LlmClient.chat` 和 provider fetch，
-   使取消不必等待网络超时。
+3. ~~**LLM 取消传播**~~：✅ 2026-07-19 完成。`ChatOptions.signal` 从
+   TaskPool → Tao → ReAct（含 micro-loop / `runSingle`）进入 Ollama/Hunyuan provider fetch；
+   外部取消保留原始 reason，provider timeout 仍独立报告。core、TaskPool 与两 adapter
+   在途请求取消回归测试通过。
 4. **ModelRuntime 生命周期与可观测性**：补健康刷新、结构化错误、`model.provider.*` /
    `model.embedding.fingerprint.*` hooks 与 OTel。
 5. **TaskPool 激活契约**：显式处理 classifier 依赖、CLI 持久化边界，并修正配置提示，避免“开关已开但不执行”。

@@ -338,4 +338,57 @@ describe("ReactStateMachine.run", () => {
     });
     expect(captured["modified"]).toBe(true);
   });
+
+  it.each(["run", "runSingle"] as const)(
+    "%s propagates cancellation into an in-flight LLM call",
+    async (method) => {
+      const controller = new AbortController();
+      let receivedSignal: AbortSignal | undefined;
+      let markStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      const llm: LlmClient = {
+        chat: async (_messages, opts) => {
+          receivedSignal = opts?.signal;
+          markStarted();
+          return await new Promise<string>((_resolve, reject) => {
+            opts?.signal?.addEventListener("abort", () => reject(opts.signal?.reason), {
+              once: true,
+            });
+          });
+        },
+        visionChat: async () => "unused",
+        getStatus: () => ({
+          provider: "test",
+          model: "test",
+          available: true,
+          mode: "live",
+          status: "connected",
+          visionSupported: false,
+        }),
+      };
+      const sm = new ReactStateMachine({
+        config: baseConfig,
+        hooks: new HookBus({ logger: silentLogger }),
+        llm,
+        toolRunner: makeToolRunner({}),
+      });
+      const pending = sm[method](
+        {
+          messages: [{ role: "user", content: "cancel me" }],
+          availableTools: tools,
+          taoIteration: 1,
+          systemPrompt: "",
+        },
+        { signal: controller.signal },
+      );
+
+      await started;
+      controller.abort(new Error("cancelled in flight"));
+
+      await expect(pending).rejects.toThrow("cancelled in flight");
+      expect(receivedSignal).toBe(controller.signal);
+    },
+  );
 });

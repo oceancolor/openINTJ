@@ -1,4 +1,5 @@
-import type { EmbeddingProvider, LlmClient } from "@openintj/core";
+import type { EmbeddingProvider, HookBus, LlmClient } from "@openintj/core";
+import type { ModelRuntimeErrorCode } from "./errors.js";
 
 /** LLM provider 标识（requested / actual）。 */
 export type LlmProviderId = "auto" | "ollama" | "hunyuan" | "mock";
@@ -10,8 +11,21 @@ export type ProviderMode = "live" | "mock" | "fallback";
 
 export interface ProviderAttempt {
   provider: string;
+  outcome: "selected" | "unhealthy" | "model_missing" | "ineligible" | "failed";
+  durationMs: number;
+  errorCode?: ModelRuntimeErrorCode;
+  errorMessage?: string;
+  /** @deprecated Use outcome. Retained for status wire compatibility. */
   ok: boolean;
+  /** @deprecated Use errorMessage. Retained for status wire compatibility. */
   reason?: string;
+}
+
+export interface RuntimeErrorInfo {
+  code: ModelRuntimeErrorCode;
+  message: string;
+  retriable: boolean;
+  at: number;
 }
 
 export interface LlmRuntimeStatus {
@@ -21,7 +35,7 @@ export interface LlmRuntimeStatus {
   mode: ProviderMode;
   status: "connected" | "degraded" | "unauthorized" | "missing_api_key";
   fallbackFrom?: string;
-  lastError?: string;
+  lastError?: RuntimeErrorInfo;
   attempts: ProviderAttempt[];
 }
 
@@ -32,7 +46,7 @@ export interface EmbedRuntimeStatus {
   dimension: number;
   mode: ProviderMode;
   fallbackFrom?: string;
-  lastError?: string;
+  lastError?: RuntimeErrorInfo;
   attempts: ProviderAttempt[];
 }
 
@@ -45,6 +59,8 @@ export interface ResolveLlmOpts {
   provider?: LlmProviderId;
   env?: NodeJS.ProcessEnv;
   fetch?: typeof globalThis.fetch;
+  hooks?: HookBus;
+  now?: () => number;
 }
 
 export interface ResolveEmbedOpts {
@@ -54,10 +70,13 @@ export interface ResolveEmbedOpts {
   provider?: EmbedProviderId;
   env?: NodeJS.ProcessEnv;
   fetch?: typeof globalThis.fetch;
+  now?: () => number;
 }
 
 export interface ResolveModelRuntimeOpts extends ResolveLlmOpts {
   embedProvider?: EmbedProviderId;
+  /** Minimum interval between network health refreshes. */
+  healthRefreshIntervalMs?: number;
 }
 
 export interface ResolvedLlm {
@@ -77,6 +96,16 @@ export interface EmbeddingFingerprint {
   provider: string;
   model: string;
   dimension: number;
+}
+
+export interface ModelRuntime {
+  readonly llm: ResolvedLlm;
+  readonly embed: ResolvedEmbed;
+  readonly embeddingFingerprint: EmbeddingFingerprint;
+  readonly status: ModelRuntimeStatus;
+  getStatus(): ModelRuntimeStatus;
+  refreshHealth(): Promise<ModelRuntimeStatus>;
+  close(): Promise<void>;
 }
 
 export const EMBEDDING_FINGERPRINT_FILENAME = "embedding-fingerprint.json";

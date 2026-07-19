@@ -116,7 +116,14 @@ export class OllamaClient implements LlmClient {
     };
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    let timedOut = false;
+    const abortFromCaller = (): void => controller.abort(opts.signal?.reason);
+    if (opts.signal?.aborted) abortFromCaller();
+    else opts.signal?.addEventListener("abort", abortFromCaller, { once: true });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.config.timeoutMs);
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -169,10 +176,23 @@ export class OllamaClient implements LlmClient {
     } catch (err) {
       this.connected = false;
       if (err instanceof AgentError) throw err;
+      if (opts.signal?.aborted) {
+        const reason = opts.signal.reason;
+        if (reason instanceof Error) throw reason;
+        throw new AgentError({
+          code: ErrorCode.EXECUTION_FAILED,
+          message: "Ollama 调用已取消",
+          retriable: false,
+          details: { provider: "ollama" },
+        });
+      }
       const message = err instanceof Error ? err.message : String(err);
       this.lastError = message;
       this.lastErrorType = "network_error";
-      if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
+      if (
+        timedOut ||
+        (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))
+      ) {
         throw new AgentError({
           code: ErrorCode.TIMEOUT,
           message: `Ollama 调用超时: ${message}`,
@@ -189,6 +209,7 @@ export class OllamaClient implements LlmClient {
       });
     } finally {
       clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", abortFromCaller);
     }
   }
 }

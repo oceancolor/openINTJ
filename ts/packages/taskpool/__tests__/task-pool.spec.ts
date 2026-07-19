@@ -1,4 +1,4 @@
-import { HookBus } from "@openintj/core";
+import { DEFAULT_REACT_CONFIG, HookBus, type LlmClient, ReactStateMachine } from "@openintj/core";
 import { GoalParser, Planner } from "@openintj/plane-control";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -151,6 +151,67 @@ describe("TaskPool MVD", () => {
     const cancelled = await handle.result;
     expect(cancelled.status).toBe("cancelled");
     expect(cancelled.states.get("b")).toBe("cancelled");
+  });
+
+  it("propagates TaskPool cancellation into an in-flight ReAct LLM call", async () => {
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let llmSignal: AbortSignal | undefined;
+    const llm: LlmClient = {
+      chat: async (_messages, opts) => {
+        llmSignal = opts?.signal;
+        markStarted();
+        return await new Promise<string>((_resolve, reject) => {
+          opts?.signal?.addEventListener("abort", () => reject(opts.signal?.reason), {
+            once: true,
+          });
+        });
+      },
+      visionChat: async () => "unused",
+      getStatus: () => ({
+        provider: "test",
+        model: "test",
+        available: true,
+        mode: "live",
+        status: "connected",
+        visionSupported: false,
+      }),
+    };
+    const react = new ReactStateMachine({
+      config: DEFAULT_REACT_CONFIG,
+      hooks: new HookBus(),
+      llm,
+      toolRunner: async () => {
+        throw new Error("unexpected tool call");
+      },
+    });
+    const handle = new TaskPool().submit(
+      {
+        planId: "llm-cancel",
+        goalIntent: "test",
+        goalInput: "cancel the request",
+        nodes: [{ id: "a", deps: [], action: "x", description: "x" }],
+      },
+      async (_node, ctx) =>
+        react.runSingle(
+          {
+            messages: [{ role: "user", content: ctx.goalInput }],
+            availableTools: [],
+            taoIteration: 1,
+            systemPrompt: "",
+          },
+          { signal: ctx.signal },
+        ),
+    );
+
+    await started;
+    handle.cancel("stop LLM");
+    const result = await handle.result;
+
+    expect(result.status).toBe("cancelled");
+    expect(llmSignal?.aborted).toBe(true);
   });
 
   it("persists lifecycle snapshots and lists no completed run", async () => {

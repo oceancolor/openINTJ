@@ -167,7 +167,14 @@ export class HunyuanClient implements LlmClient {
     };
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    let timedOut = false;
+    const abortFromCaller = (): void => controller.abort(opts.signal?.reason);
+    if (opts.signal?.aborted) abortFromCaller();
+    else opts.signal?.addEventListener("abort", abortFromCaller, { once: true });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.config.timeoutMs);
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -232,18 +239,30 @@ export class HunyuanClient implements LlmClient {
       return content;
     } catch (err) {
       if (err instanceof AgentError) throw err;
+      if (opts.signal?.aborted) {
+        this.connected = false;
+        const reason = opts.signal.reason;
+        if (reason instanceof Error) throw reason;
+        throw new AgentError({
+          code: ErrorCode.EXECUTION_FAILED,
+          message: "Hunyuan 调用已取消",
+          retriable: false,
+          details: { provider: "hunyuan" },
+        });
+      }
       const message = err instanceof Error ? err.message : String(err);
       this.connected = false;
       this.lastError = message;
       this.lastErrorType = "network_error";
       throw new AgentError({
-        code: ErrorCode.INTERNAL_ERROR,
-        message: `Hunyuan 网络/超时: ${message}`,
+        code: timedOut ? ErrorCode.TIMEOUT : ErrorCode.INTERNAL_ERROR,
+        message: timedOut ? `Hunyuan 调用超时: ${message}` : `Hunyuan 网络错误: ${message}`,
         retriable: true,
         cause: err,
       });
     } finally {
       clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", abortFromCaller);
     }
   }
 
