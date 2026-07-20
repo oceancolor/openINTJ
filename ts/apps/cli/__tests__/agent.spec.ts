@@ -75,6 +75,18 @@ describe("assembleAgent E2E (mock LLM)", () => {
     expect(thoughtCalls).toBe(0);
   });
 
+  it("grounds direct recall in prior user memory without another model call", async () => {
+    const agent = assembleAgent({ llmProvider: "mock" });
+    await agent.run("约束 A：数据库必须用 SQLite，不能引入外部服务。");
+    await agent.run("约束 B：向量检索用 LanceDB 本地嵌入。");
+
+    const recalled = await agent.run("向量检索用什么？");
+
+    expect(recalled.finalAnswer).toBe("约束 B：向量检索用 LanceDB 本地嵌入。");
+    expect(recalled.totalTokensSpent).toBe(0);
+    expect(recalled.metrics["productBehaviorPreflight"]).toBe(1);
+  });
+
   it("preserves real prompt marker order: Product Behavior → persona → skills → memory", async () => {
     const agent = assembleAgent({
       llmProvider: "mock",

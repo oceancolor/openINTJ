@@ -8,6 +8,7 @@
  *
  * 输入：query + 候选 documents（带 vector），输出按融合分排序。
  */
+import { tokenizeLexical } from "@openintj/core";
 
 export interface HybridDoc {
   id: string;
@@ -46,13 +47,6 @@ export const DEFAULT_HYBRID_CONFIG: HybridConfig = {
   useRRF: false,
   rrfK: 60,
 };
-
-const tokenize = (text: string): string[] =>
-  text
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .split(/\s+/)
-    .filter((t) => t.length > 0);
 
 const cosine = (a: readonly number[], b: readonly number[]): number => {
   if (a.length === 0 || a.length !== b.length) return 0;
@@ -98,7 +92,7 @@ export class HybridRetriever<D extends HybridDoc = HybridDoc> {
   /** 全量（重）建索引。等价于 clear() + 逐条 upsert，但一次性算更快。 */
   index(docs: readonly D[]): void {
     this.docs = [...docs];
-    this.docTokens = this.docs.map((d) => tokenize(d.text));
+    this.docTokens = this.docs.map((d) => tokenizeLexical(d.text));
     this.totalLen = 0;
     this.docFreq.clear();
     this.idIndex.clear();
@@ -143,7 +137,7 @@ export class HybridRetriever<D extends HybridDoc = HybridDoc> {
    * 避免每次都全量 index() 重建——支撑"记忆随对话增量入库"的产品路径（roadmap #10）。
    */
   upsert(doc: D): void {
-    const tokens = tokenize(doc.text);
+    const tokens = tokenizeLexical(doc.text);
     const pos = this.idIndex.get(doc.id);
     if (pos !== undefined) {
       this.removeDocStats(this.docTokens[pos]!);
@@ -204,7 +198,7 @@ export class HybridRetriever<D extends HybridDoc = HybridDoc> {
     // 融合权重（alpha/beta/k1/b/useRRF/rrfK）全是 search-time 量，不影响已建索引 →
     // 允许按查询覆盖（如 /api/memory 的 rrf 开关），无需重建。
     const cfg = configOverride ? { ...this.config, ...configOverride } : this.config;
-    const qTokens = tokenize(query);
+    const qTokens = tokenizeLexical(query);
     const N = this.docs.length;
 
     // BM25 + cosine 双路打分

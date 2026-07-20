@@ -7,6 +7,7 @@ import {
   type TaskTypeType,
   cosineSimilarity,
   decayImportance,
+  tokenizeLexical,
 } from "@openintj/core";
 import type { MemoryStore } from "./store.js";
 
@@ -69,12 +70,8 @@ export class MemoryRetriever {
       }
       qEmb = r;
     }
-    const qKeywords = new Set(
-      query
-        .toLowerCase()
-        .split(/\s+/)
-        .filter((s) => s.length > 0),
-    );
+    const qKeywords = new Set(tokenizeLexical(query));
+    const cjkQuery = /\p{Script=Han}/u.test(query);
     const halfLife = this.shaderConfig.recencyHalfLifeHours;
     const now = this.clock();
 
@@ -85,12 +82,7 @@ export class MemoryRetriever {
       if (decayed < minImportance) continue;
 
       const relevance = cosineSimilarity(qEmb, fragment.embedding);
-      const contentWords = new Set(
-        fragment.content
-          .toLowerCase()
-          .split(/\s+/)
-          .filter((s) => s.length > 0),
-      );
+      const contentWords = new Set(tokenizeLexical(fragment.content));
       let overlap = 0;
       for (const w of qKeywords) if (contentWords.has(w)) overlap++;
       const keyword = overlap / Math.max(1, qKeywords.size);
@@ -101,6 +93,9 @@ export class MemoryRetriever {
         this.shaderConfig.relevanceWeight * relevance +
         this.shaderConfig.recencyWeight * keyword +
         this.shaderConfig.importanceWeight * recency;
+      // 中文短问句常只与事实句共享一两个关键二元组；语义向量（尤其 simple/hash fallback）
+      // 的随机波动不应盖过这个确定性命中。英文路径保持 Python v2 的原始权重。
+      if (cjkQuery) score += 0.5 * keyword;
 
       // 任务标签加权（与 Python v2 一致：×1.3）
       if (opts.taskType && fragment.taskTags.includes(opts.taskType)) {

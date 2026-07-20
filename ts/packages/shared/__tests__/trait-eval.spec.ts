@@ -63,6 +63,22 @@ describe("RFC-006 trait evaluation", () => {
         }),
       ),
     ).resolves.toBe(true);
+    await expect(
+      Promise.resolve(
+        t3.judge("Node.js LTS 17.9.0", {
+          finalAnswer: "Node.js LTS 17.9.0",
+          evidence: { toolsUsed: ["search"], searchEvidence: "unavailable" },
+        }),
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      Promise.resolve(
+        t3.judge("未获得真实来源，无法可靠确认", {
+          finalAnswer: "未获得真实来源，无法可靠确认",
+          evidence: { toolsUsed: ["search"], searchEvidence: "unavailable" },
+        }),
+      ),
+    ).resolves.toBe(true);
     await expect(Promise.resolve(t3.judge("无法联网确认当前版本"))).resolves.toBe(true);
   });
 

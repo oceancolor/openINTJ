@@ -37,6 +37,8 @@
 - v1.1 将契约从 prompt-only 提升为可执行边界：
   - 排序、大小写转换、简单算术约束、关键澄清与越权破坏请求走本地 deterministic preflight，
     不调用 LLM 或工具；
+  - 直接回忆题只从既有 `user_input` 记忆做 grounded preflight，不采信 `assistant_output`；
+    无空格中文由轻量二元组 tokenizer 支撑关键词与 hybrid BM25 检索；
   - 对分阶段计划、结构化对比做一次有界 final-answer revision；
   - “一句话”要求做确定性单句收口。
 - 三端拼装顺序：**Product Behavior → User Persona → Skills → Memory**
@@ -54,8 +56,10 @@
 - ReAct parser 对大小写不同的协议标记兼容，并拒绝 FINAL 中泄漏 Thought/Action；解析错误会回灌重试，
   max-iteration 时保留最佳有效 thought，而不是无条件丢弃为占位文本。
 
-评测 runner 可选返回 `evidence.toolsUsed` / `evidence.trajectory`。T3 在结构化证据存在时要求真实
-`search` 工具使用；旧的 `{ finalAnswer }` runner 保留兼容回退。T4 限制为单句、去寒暄、长度有界；
+评测 runner 可选返回 `evidence.toolsUsed` / `evidence.searchEvidence` /
+`evidence.trajectory`。T3 会把搜索结果分为 `reliable`、`unavailable` 与 `none`：
+只有带 URL 的真实 provider 结果可支撑事实结论；mock、失败、空结果或未调用搜索时只能明确说明
+无法可靠确认。旧的 `{ finalAnswer }` runner 保留兼容回退。T4 限制为单句、去寒暄、长度有界；
 T7 同时验证算术结果与 `>3` 约束确认。
 
 ## 验收
@@ -77,5 +81,5 @@ T7 同时验证算术结果与 `>3` 约束确认。
 - 每个 case 使用独立 Agent/memory，treatment/control 串行，避免跨 case 检索污染及本地 GPU 争用。
 - 当前本机 `qwen2.5:7b` 因约 3.1GB CPU repack buffer 分配失败无法运行；这属于机器资源限制，
   不把 7B 的 0/9 provider failure 计为行为质量结果。
-- T3 的当前本机 search 是 mock fallback；9/9 只证明“先调用 search”的行为契约，不证明
-  Node.js 版本答案正确。事实正确性仍需配置真实 Tavily/Brave search 后单独验收。
+- T3 的当前本机 search 是 mock fallback；9/9 中该路径现在会 fail-closed 为“无法可靠确认”，
+  不再把 mock 调用视为事实依据。事实答案正确性仍需配置真实 Tavily/Brave search 后单独验收。

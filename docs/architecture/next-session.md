@@ -38,10 +38,12 @@ RFC-005/006/007 的核心库、三端 opt-in 接线与确定性测试已经落�
 
 - Ollama runtime E2E 4/4；RFC-006 Product Behavior v1.1 后，`qwen2.5:0.5b`
   live trait A/B 连续两次 treatment **9/9**，control **5/9** / **4/9**，
-  baseline 已关闭。T3 当前只验证 mock search 调用顺序，不代表事实答案正确。
-- `nomic-embed-text` embedding 基准两条路径均 nDCG@4 **1.000**；live longrun 的
-  user-preferences recall **50%**，tech-decisions recall **33.3%** / pass **83.3%**，
-  表明链路可用但“越用越好”的质量证据仍不足。
+  baseline 已关闭。T3 的 mock/失败/空搜索结果现在会 fail-closed 为无法可靠确认，不再作为
+  事实结论证据；真实答案正确性仍待 Tavily/Brave provider 验收。
+- `nomic-embed-text` embedding 基准两条路径均 nDCG@4 **1.000**。修复中文无空格分词、
+  quick-response 路由并加入“只从 user_input 回答直接回忆题”的 grounded preflight 后，
+  `qwen2.5:0.5b` live longrun 连续两轮 user-preferences / tech-decisions 均为
+  recall **100%**、pass **100%**；回忆轮为 0 token，且不会被 assistant_output 污染。
 - TaskPool 真 Ollama provider 取消 3 轮 + recovery 25 轮 soak 通过；新增 gated harness。
 - Windows 未签名 NSIS 安装包已成功产出，并修复 electron-builder 跟随 pnpm workspace
   symlink 越出 appDir 的打包错误。签名 release 仍被品牌图标、证书 secrets、合入 main 与正式 tag 阻塞。
@@ -438,9 +440,11 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 仍弱 / 待补：
 - 性能基准已经存在，但只守灾难性回退，不等于生产负载容量测试。
 - 记忆召回已有 simple/xenova/Ollama 固定小语料指标；真实业务语料与大规模容量结果仍缺。
-- live-model trait A/B 已连续两次 9/9；longrun recall 仍仅 33.3%–50%，且 T3 使用 mock
-  search，仍需真实搜索 provider、更强模型和多次运行建立事实质量与长期质量置信区间。
-- fs/命令工具已是真实沙箱；联网 search 未配置 provider 时仍会走 mock 兜底，不能把该路径当真实任务完成证据。
+- live-model trait A/B 已连续两次 9/9；直接事实/约束 longrun recall 也连续两轮 100%。
+  该结果只覆盖脚本化直接回忆，不代表开放式长期记忆质量；T3 已拒绝把 mock search 当成事实证据，
+  但仍需真实搜索 provider、更强模型和更广语料建立事实质量与长期质量置信区间。
+- fs/命令工具已是真实沙箱；联网 search 未配置 provider 时仍会走 mock 兜底，但 Product
+  Behavior 会把该结果收口为“无法可靠确认”，不会把该路径当真实任务完成证据。
 - OTel hooks/span/metric 与 ModelRuntime provider/fingerprint 事件已落地但默认 opt-in，尚无现成 dashboard/SLO。
 
 ### 8.4 五项推进计划（2026-05-30 全部落地）

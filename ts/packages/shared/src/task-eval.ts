@@ -40,6 +40,8 @@ export interface TaskEvalReport {
 export interface RunEvidence {
   /** 规范化工具调用顺序；T3 等 judge 可据此验证真实工具使用。 */
   toolsUsed?: readonly string[];
+  /** 搜索结果是否包含可核验来源；区分真实 provider 与 mock/失败兜底。 */
+  searchEvidence?: "none" | "unavailable" | "reliable";
   /** 原始或精简 trajectory，供调用方自定义 judge。 */
   trajectory?: readonly unknown[];
 }

@@ -77,95 +77,103 @@ const createWindow = (): BrowserWindow => {
   return win;
 };
 
-void app.whenReady().then(async () => {
-  // 持久化的应用配置（用户在 UI 里改的偏好）。优先级：显式 env > 已存配置 > 默认。
-  config = createConfigService(path.join(app.getPath("userData"), "config.json"));
-  const savedConfig = config.get();
+void app
+  .whenReady()
+  .then(async () => {
+    // 持久化的应用配置（用户在 UI 里改的偏好）。优先级：显式 env > 已存配置 > 默认。
+    config = createConfigService(path.join(app.getPath("userData"), "config.json"));
+    const savedConfig = config.get();
 
-  const dataDir =
-    process.env["OPENINTJ_DATA_DIR"] ?? path.join(app.getPath("userData"), "memory-store");
-  // 工作区根（read_file / write_file 沙箱根）：默认 documents 下的 OpenINTJ 目录，避免落到随机 cwd。
-  const workspaceDir =
-    process.env["OPENINTJ_WORKSPACE_DIR"] ??
-    savedConfig.workspaceDir ??
-    path.join(app.getPath("documents"), "OpenINTJ");
-  const llmProvider =
-    (process.env["LLM_PROVIDER"] as "auto" | "ollama" | "hunyuan" | "mock" | undefined) ??
-    savedConfig.llmProvider ??
-    "auto";
-  const envSummary = summarizeLlmEnv();
-  console.log(`[OpenINTJ desktop] llm: ${envSummary.summary}`);
-  if (llmProvider === "hunyuan" && !envSummary.hunyuan.hasKey) {
-    console.warn(
-      "[OpenINTJ desktop] LLM_PROVIDER=hunyuan 但未读到 HUNYUAN_API_KEY —— strict 模式将报错。\n" +
-        "                  把 HUNYUAN_API_KEY 写进仓库根 .env / .env.local，或用 LLM_PROVIDER=auto。",
-    );
-  }
-  if (savedConfig.ollamaBaseUrl) process.env["OLLAMA_BASE_URL"] = savedConfig.ollamaBaseUrl;
-  if (savedConfig.ollamaModel) process.env["OLLAMA_MODEL"] = savedConfig.ollamaModel;
-  if (savedConfig.ollamaEmbedModel)
-    process.env["OLLAMA_EMBED_MODEL"] = savedConfig.ollamaEmbedModel;
-  if (savedConfig.embedProvider) process.env["EMBED_PROVIDER"] = savedConfig.embedProvider;
-
-  agent = await assembleDesktopAgent({
-    llmProvider,
-    ...(savedConfig.embedProvider ? { embedProvider: savedConfig.embedProvider } : {}),
-    dataDir,
-    workspaceDir,
-    ...(savedConfig.retrievalMode ? { retrievalMode: savedConfig.retrievalMode } : {}),
-    ...(savedConfig.enableCommands !== undefined
-      ? { enableCommands: savedConfig.enableCommands }
-      : {}),
-    ...(savedConfig.allowedCommands ? { allowedCommands: savedConfig.allowedCommands } : {}),
-    ...(savedConfig.enableDormant !== undefined
-      ? { enableDormant: savedConfig.enableDormant }
-      : {}),
-    ...(savedConfig.enablePersona !== undefined
-      ? { enablePersona: savedConfig.enablePersona }
-      : {}),
-    ...(savedConfig.enableProductBehavior !== undefined
-      ? { enableProductBehavior: savedConfig.enableProductBehavior }
-      : {}),
-    ...(savedConfig.enableSkills !== undefined ? { enableSkills: savedConfig.enableSkills } : {}),
-    ...(savedConfig.enableSkillLearning !== undefined
-      ? { enableSkillLearning: savedConfig.enableSkillLearning }
-      : {}),
-    ...(savedConfig.enableClassifier !== undefined
-      ? { enableClassifier: savedConfig.enableClassifier }
-      : {}),
-    ...(savedConfig.enableTaskPool !== undefined
-      ? { enableTaskPool: savedConfig.enableTaskPool }
-      : {}),
-  });
-  console.log(
-    `[OpenINTJ desktop] persistence=${agent.persistenceInfo.mode} dataDir=${agent.persistenceInfo.dataDir ?? "<in-memory>"}`,
-  );
-  mainWindow = createWindow();
-
-  // 弹系统目录选择框，选定后即时持久化为新工作区根（下次启动生效）。
-  const pickDirectory = async (): Promise<string | null> => {
-    const res = await dialog.showOpenDialog(mainWindow!, {
-      properties: ["openDirectory", "createDirectory"],
-      title: "选择 OpenINTJ 工作区目录",
-    });
-    if (res.canceled || res.filePaths.length === 0) return null;
-    const picked = res.filePaths[0]!;
-    config?.update({ workspaceDir: picked });
-    return picked;
-  };
-  const ipcDeps: IpcDeps = { pickDirectory, ...(config ? { config } : {}) };
-  registerIpcHandlers(agent, mainWindow.webContents, undefined, ipcDeps);
-
-  // #6 自动更新：仅打包后真正生效；dev/测试为 no-op。
-  updater = initAutoUpdater({ getWebContents: () => mainWindow?.webContents });
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      mainWindow = createWindow();
-      if (agent) registerIpcHandlers(agent, mainWindow.webContents, undefined, ipcDeps);
+    const dataDir =
+      process.env["OPENINTJ_DATA_DIR"] ?? path.join(app.getPath("userData"), "memory-store");
+    // 工作区根（read_file / write_file 沙箱根）：默认 documents 下的 OpenINTJ 目录，避免落到随机 cwd。
+    const workspaceDir =
+      process.env["OPENINTJ_WORKSPACE_DIR"] ??
+      savedConfig.workspaceDir ??
+      path.join(app.getPath("documents"), "OpenINTJ");
+    const llmProvider =
+      (process.env["LLM_PROVIDER"] as "auto" | "ollama" | "hunyuan" | "mock" | undefined) ??
+      savedConfig.llmProvider ??
+      "auto";
+    const envSummary = summarizeLlmEnv();
+    console.log(`[OpenINTJ desktop] llm: ${envSummary.summary}`);
+    if (llmProvider === "hunyuan" && !envSummary.hunyuan.hasKey) {
+      console.warn(
+        "[OpenINTJ desktop] LLM_PROVIDER=hunyuan 但未读到 HUNYUAN_API_KEY —— strict 模式将报错。\n" +
+          "                  把 HUNYUAN_API_KEY 写进仓库根 .env / .env.local，或用 LLM_PROVIDER=auto。",
+      );
     }
+    if (savedConfig.ollamaBaseUrl) process.env["OLLAMA_BASE_URL"] = savedConfig.ollamaBaseUrl;
+    if (savedConfig.ollamaModel) process.env["OLLAMA_MODEL"] = savedConfig.ollamaModel;
+    if (savedConfig.ollamaEmbedModel)
+      process.env["OLLAMA_EMBED_MODEL"] = savedConfig.ollamaEmbedModel;
+    if (savedConfig.embedProvider) process.env["EMBED_PROVIDER"] = savedConfig.embedProvider;
+
+    agent = await assembleDesktopAgent({
+      llmProvider,
+      ...(savedConfig.embedProvider ? { embedProvider: savedConfig.embedProvider } : {}),
+      dataDir,
+      workspaceDir,
+      ...(savedConfig.retrievalMode ? { retrievalMode: savedConfig.retrievalMode } : {}),
+      ...(savedConfig.enableCommands !== undefined
+        ? { enableCommands: savedConfig.enableCommands }
+        : {}),
+      ...(savedConfig.allowedCommands ? { allowedCommands: savedConfig.allowedCommands } : {}),
+      ...(savedConfig.enableDormant !== undefined
+        ? { enableDormant: savedConfig.enableDormant }
+        : {}),
+      ...(savedConfig.enablePersona !== undefined
+        ? { enablePersona: savedConfig.enablePersona }
+        : {}),
+      ...(savedConfig.enableProductBehavior !== undefined
+        ? { enableProductBehavior: savedConfig.enableProductBehavior }
+        : {}),
+      ...(savedConfig.enableSkills !== undefined ? { enableSkills: savedConfig.enableSkills } : {}),
+      ...(savedConfig.enableSkillLearning !== undefined
+        ? { enableSkillLearning: savedConfig.enableSkillLearning }
+        : {}),
+      ...(savedConfig.enableClassifier !== undefined
+        ? { enableClassifier: savedConfig.enableClassifier }
+        : {}),
+      ...(savedConfig.enableTaskPool !== undefined
+        ? { enableTaskPool: savedConfig.enableTaskPool }
+        : {}),
+    });
+    console.log(
+      `[OpenINTJ desktop] persistence=${agent.persistenceInfo.mode} dataDir=${agent.persistenceInfo.dataDir ?? "<in-memory>"}`,
+    );
+    mainWindow = createWindow();
+
+    // 弹系统目录选择框，选定后即时持久化为新工作区根（下次启动生效）。
+    const pickDirectory = async (): Promise<string | null> => {
+      const res = await dialog.showOpenDialog(mainWindow!, {
+        properties: ["openDirectory", "createDirectory"],
+        title: "选择 OpenINTJ 工作区目录",
+      });
+      if (res.canceled || res.filePaths.length === 0) return null;
+      const picked = res.filePaths[0]!;
+      config?.update({ workspaceDir: picked });
+      return picked;
+    };
+    const ipcDeps: IpcDeps = { pickDirectory, ...(config ? { config } : {}) };
+    registerIpcHandlers(agent, mainWindow.webContents, undefined, ipcDeps);
+
+    // #6 自动更新：仅打包后真正生效；dev/测试为 no-op。
+    updater = initAutoUpdater({ getWebContents: () => mainWindow?.webContents });
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        mainWindow = createWindow();
+        if (agent) registerIpcHandlers(agent, mainWindow.webContents, undefined, ipcDeps);
+      }
+    });
+  })
+  .catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[OpenINTJ desktop] startup failed:", error);
+    dialog.showErrorBox("OpenINTJ 启动失败", message);
+    app.quit();
   });
-});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

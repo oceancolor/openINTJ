@@ -5,7 +5,9 @@ import {
   assembleSystemPromptPrefix,
   buildProductBehaviorPrompt,
   enforceProductBehaviorAnswer,
+  resolveDeterministicProductBehaviorAnswer,
   resolveProductBehaviorEnabled,
+  resolveSearchEvidenceStatus,
 } from "../src/product-behavior.js";
 
 describe("Product Behavior contract", () => {
@@ -103,5 +105,72 @@ describe("Product Behavior contract", () => {
       answer: "REST 是一种资源导向的架构风格。",
       guards: ["single-sentence"],
     });
+  });
+
+  it("fails closed when current facts have no verifiable search source", async () => {
+    const mockTrajectory = [
+      {
+        state: {
+          type: "observation",
+          toolResult: {
+            toolName: "search",
+            success: true,
+            output: { note: "[mock search]", hits: [] },
+          },
+        },
+      },
+    ];
+    const realTrajectory = [
+      {
+        state: {
+          type: "observation",
+          toolResult: {
+            toolName: "search",
+            success: true,
+            output: {
+              ok: true,
+              provider: "brave",
+              results: [{ title: "Node.js", url: "https://nodejs.org/", snippet: "LTS" }],
+            },
+          },
+        },
+      },
+    ];
+    expect(resolveSearchEvidenceStatus(mockTrajectory)).toBe("unavailable");
+    expect(resolveSearchEvidenceStatus(realTrajectory)).toBe("reliable");
+    await expect(
+      enforceProductBehaviorAnswer({
+        query: "今天最新 Node.js LTS 是什么？请查证。",
+        draft: "17.9.0",
+        searchEvidence: "unavailable",
+      }),
+    ).resolves.toMatchObject({
+      answer: expect.stringContaining("无法可靠确认"),
+      guards: ["search-evidence:unavailable"],
+    });
+  });
+
+  it("answers direct recall questions only from prior user memories", () => {
+    const memories = [
+      {
+        content: "约束 A：数据库必须用 SQLite，不能引入外部服务。",
+        taskTags: ["user_input"],
+      },
+      {
+        content: "约束 B：向量检索用 LanceDB 本地嵌入。",
+        taskTags: ["user_input"],
+      },
+      {
+        content: "向量检索用 SQLite。",
+        taskTags: ["assistant_output"],
+      },
+    ];
+    expect(resolveDeterministicProductBehaviorAnswer("向量检索用什么？", { memories })).toEqual({
+      answer: "约束 B：向量检索用 LanceDB 本地嵌入。",
+      guard: "memory-recall",
+    });
+    expect(resolveDeterministicProductBehaviorAnswer("请设计向量检索方案", { memories })).toBe(
+      undefined,
+    );
   });
 });

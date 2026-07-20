@@ -14,6 +14,7 @@ import {
   ReactStateMachine,
   TaoLoop,
   type TaoResult,
+  TaskType,
   type TaskTypeType,
   attachProductTraitSignals,
   detectTaskType,
@@ -62,6 +63,7 @@ import {
   resolveDeterministicProductBehaviorAnswer,
   resolvePersonaInjection,
   resolveProductBehaviorEnabled,
+  resolveSearchEvidenceStatus,
   resolveSelfConsistency,
   resolveWorkspaceConfig,
   selectConsistentAnswer,
@@ -695,14 +697,17 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       });
       if (dormant) dormant.record(query, "user", { stage: "run.input" });
       const preflight = productBehaviorEnabled
-        ? resolveDeterministicProductBehaviorAnswer(query)
+        ? resolveDeterministicProductBehaviorAnswer(query, { memories: memory.store.all })
         : undefined;
       // 前端分类器：预分类 → taskType + 降 token 路由（高置信简单类走单次 LLM）。
       const cls = !preflight && classifier ? await classifier.classify(query) : undefined;
       const route = cls ? decideRoute(cls) : undefined;
+      const routedTaskType = cls?.label ?? detectTaskType(query);
       const taoOpts = (traceId?: string, signal?: AbortSignal) => ({
-        ...(cls ? { taskType: cls.label } : {}),
-        ...(route?.single ? { enableReact: false } : {}),
+        taskType: routedTaskType,
+        ...(route?.single || (!cls && routedTaskType === TaskType.QUICK_RESPONSE)
+          ? { enableReact: false }
+          : {}),
         ...(route ? { topK: route.topK } : {}),
         ...(traceId ? { traceId } : {}),
         ...(signal ? { signal } : {}),
@@ -766,6 +771,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
         const enforced = await enforceProductBehaviorAnswer({
           query,
           draft: result.finalAnswer,
+          searchEvidence: resolveSearchEvidenceStatus(result.trajectory),
           revise: async (instruction) =>
             llm.chat(
               [

@@ -4,7 +4,12 @@
  * RUN_TRAIT_EVAL=1 OPENINTJ_LLM_PROVIDER=ollama \
  *   pnpm --filter @openintj/cli test -- trait.harness
  */
-import { TRAIT_SCENARIOS, evaluateTraitAb, evaluateTraits } from "@openintj/shared";
+import {
+  TRAIT_SCENARIOS,
+  evaluateTraitAb,
+  evaluateTraits,
+  resolveSearchEvidenceStatus,
+} from "@openintj/shared";
 import { describe, expect, it } from "vitest";
 import { type AssembledAgent, type LlmProvider, assembleAgentAsync } from "../src/agent.js";
 
@@ -19,6 +24,7 @@ describe("RFC-006 trait baseline (gated)", () => {
         finalAnswer: result.finalAnswer,
         evidence: {
           trajectory: result.trajectory,
+          searchEvidence: resolveSearchEvidenceStatus(result.trajectory),
           toolsUsed: result.trajectory
             .map((entry) => {
               const state = entry.state as {

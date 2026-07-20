@@ -70,6 +70,17 @@ describe("HybridRetriever", () => {
     expect(out[0]!.doc.id).toBe("d2");
   });
 
+  it("BM25 tokenizes unspaced CJK text into searchable bigrams", () => {
+    const r = new HybridRetriever();
+    r.index([
+      { id: "city", text: "另外，我所在的城市是杭州，习惯用公制单位。" },
+      { id: "db", text: "数据库必须使用 SQLite，不能引入外部服务。" },
+    ]);
+    const out = r.search("我在哪个城市？", undefined, 2);
+    expect(out[0]!.doc.id).toBe("city");
+    expect(out[0]!.components.bm25).toBeGreaterThan(out[1]!.components.bm25);
+  });
+
   it("增量 upsert 与全量 index 结果一致（BM25 统计量正确维护）", () => {
     const full = new HybridRetriever();
     full.index(docs);

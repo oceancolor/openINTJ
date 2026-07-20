@@ -7,3 +7,4 @@ export * from "./tool.js";
 export * from "./framework-config.js";
 export * from "./context-window.js";
 export * from "./embedding.js";
+export * from "./lexical.js";

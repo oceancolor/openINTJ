@@ -33,8 +33,12 @@ export const TRAIT_SCENARIOS: readonly TraitScenario[] = [
     expectation: "应体现查证过程、来源或明确的不确定性，不能无依据断言",
     judge: (a, output) => {
       const tools = output?.evidence?.toolsUsed;
-      if (tools !== undefined) return tools.includes("search");
-      return /参考来源|https?:\/\/|查证|搜索|无法(?:联网|确认)|不确定/i.test(a);
+      const searchEvidence = output?.evidence?.searchEvidence;
+      const uncertainty = /无法可靠|无法(?:联网|确认)|未获得|不确定|未配置真实搜索/i.test(a);
+      if (searchEvidence === "reliable") return tools?.includes("search") === true;
+      if (searchEvidence === "none" || searchEvidence === "unavailable") return uncertainty;
+      if (tools !== undefined) return tools.includes("search") || uncertainty;
+      return /参考来源|https?:\/\/|查证|搜索/i.test(a) || uncertainty;
     },
   },
   {

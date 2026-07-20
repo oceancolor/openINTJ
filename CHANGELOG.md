@@ -46,6 +46,10 @@
 - **Product Behavior v1.1 可执行契约**：确定性排序/转换/算术约束/关键澄清/越权破坏请求
   在 LLM 与工具前本地处理；结构化对比和分阶段计划支持一次有界答案修订；单句要求确定性收口。
   ReAct parser 兼容大小写协议标记、拒绝 FINAL 内部标记泄漏，并在 max-iteration 保留最佳 thought。
+  T3 进一步区分带 URL 的真实搜索来源与 mock/失败/空结果，后者对时效性事实 fail-closed 为
+  “无法可靠确认”，不再把一次 mock 工具调用当作事实依据。直接回忆题只从 `user_input`
+  做 grounded preflight，避免错误 assistant 输出污染；中英文 tokenizer 修复无空格中文的
+  keyword/BM25 召回。`qwen2.5:0.5b` longrun 两类场景连续两轮 recall/pass 均为 100%。
   三端行为一致。
 - **TaskPool 激活与三端 parity**：TaskPool opt-in 自动启用必需的 classifier；CLI/server/
   desktop 状态统一返回 activation reason、prerequisite、persistence/recovery capability。

@@ -97,7 +97,52 @@ export interface EnforceProductBehaviorAnswerOpts {
   query: string;
   draft: string;
   revise?: (instruction: string) => Promise<string>;
+  searchEvidence?: SearchEvidenceStatus;
 }
+
+export type SearchEvidenceStatus = "none" | "unavailable" | "reliable";
+
+interface SearchTrajectoryEntry {
+  state?: {
+    type?: string;
+    toolResult?: {
+      toolName?: string;
+      success?: boolean;
+      output?: unknown;
+    };
+  };
+}
+
+const hasSearchSource = (output: unknown): boolean => {
+  if (!output || typeof output !== "object") return false;
+  const record = output as Record<string, unknown>;
+  if (record["ok"] === false || typeof record["note"] === "string") return false;
+  const items = Array.isArray(record["results"])
+    ? record["results"]
+    : Array.isArray(record["hits"])
+      ? record["hits"]
+      : [];
+  return items.some(
+    (item) =>
+      item !== null &&
+      typeof item === "object" &&
+      typeof (item as Record<string, unknown>)["url"] === "string" &&
+      ((item as Record<string, unknown>)["url"] as string).length > 0,
+  );
+};
+
+export const resolveSearchEvidenceStatus = (
+  trajectory: readonly unknown[],
+): SearchEvidenceStatus => {
+  let attempted = false;
+  for (const entry of trajectory as readonly SearchTrajectoryEntry[]) {
+    const result = entry.state?.toolResult;
+    if (entry.state?.type !== "observation" || result?.toolName !== "search") continue;
+    attempted = true;
+    if (result.success && hasSearchSource(result.output)) return "reliable";
+  }
+  return attempted ? "unavailable" : "none";
+};
 
 const hasUnsafeDestructiveIntent = (query: string): boolean =>
   /(?:删除|清空|格式化|rm\s+-rf|del(?:ete)?\b)/i.test(query) &&
@@ -186,9 +231,60 @@ const deterministicAnswer = (query: string): { answer: string; guard: string } |
   return undefined;
 };
 
+export interface ProductBehaviorMemoryCandidate {
+  content: string;
+  taskTags?: readonly string[];
+}
+
+const recallTokens = (text: string): string[] => {
+  const segments = text
+    .toLowerCase()
+    .normalize("NFKC")
+    .match(/[\p{Script=Han}]+|[\p{L}\p{N}]+/gu);
+  const tokens: string[] = [];
+  for (const segment of segments ?? []) {
+    if (/^[\p{Script=Han}]+$/u.test(segment) && segment.length > 1) {
+      for (let i = 0; i < segment.length - 1; i++) tokens.push(segment.slice(i, i + 2));
+    } else {
+      tokens.push(segment);
+    }
+  }
+  return tokens;
+};
+
+const resolveMemoryRecallAnswer = (
+  query: string,
+  memories: readonly ProductBehaviorMemoryCandidate[],
+): string | undefined => {
+  if (!/(?:什么|叫什么|哪里|哪个城市|名字是|约束是什么)[？?]?\s*$/.test(query.trim())) {
+    return undefined;
+  }
+  const queryTokens = new Set(recallTokens(query));
+  if (queryTokens.size === 0) return undefined;
+  let best: { content: string; score: number } | undefined;
+  for (const memory of memories) {
+    if (memory.taskTags && !memory.taskTags.includes("user_input")) continue;
+    if (/[？?]\s*$/.test(memory.content.trim())) continue;
+    const memoryTokens = new Set(recallTokens(memory.content));
+    let overlap = 0;
+    for (const token of queryTokens) if (memoryTokens.has(token)) overlap++;
+    const score = overlap / queryTokens.size;
+    if (score >= 0.18 && (!best || score > best.score)) {
+      best = { content: memory.content.trim(), score };
+    }
+  }
+  return best?.content.replace(/^(?:记住|另外|顺便一提)\s*[：,，]?\s*/, "");
+};
+
 export const resolveDeterministicProductBehaviorAnswer = (
   query: string,
-): { answer: string; guard: string } | undefined => deterministicAnswer(query);
+  opts: { memories?: readonly ProductBehaviorMemoryCandidate[] } = {},
+): { answer: string; guard: string } | undefined => {
+  const deterministic = deterministicAnswer(query);
+  if (deterministic) return deterministic;
+  const memoryAnswer = opts.memories ? resolveMemoryRecallAnswer(query, opts.memories) : undefined;
+  return memoryAnswer ? { answer: memoryAnswer, guard: "memory-recall" } : undefined;
+};
 
 const firstSentence = (answer: string): string | undefined => {
   const match = answer.trim().match(/^([\s\S]*?[。！？!?])/);
@@ -291,6 +387,19 @@ export const enforceProductBehaviorAnswer = async (
   const deterministic = deterministicAnswer(opts.query);
   if (deterministic) {
     return { answer: deterministic.answer, revised: false, guards: [deterministic.guard] };
+  }
+
+  if (
+    opts.searchEvidence !== undefined &&
+    opts.searchEvidence !== "reliable" &&
+    /(?:今天|当前|最新|实时|查证|核实|来源|today|current|latest|verify|source)/i.test(opts.query)
+  ) {
+    return {
+      answer:
+        "当前未获得带可核验来源的真实搜索结果，因此无法可靠确认该时效性事实；请配置真实搜索提供方后重试。",
+      revised: false,
+      guards: [`search-evidence:${opts.searchEvidence}`],
+    };
   }
 
   let answer = opts.draft.trim();

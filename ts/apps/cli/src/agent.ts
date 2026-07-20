@@ -19,6 +19,7 @@ import {
   ReactStateMachine,
   TaoLoop,
   type TaoResult,
+  TaskType,
   type TaskTypeType,
   attachProductTraitSignals,
   detectTaskType,
@@ -54,6 +55,7 @@ import {
   resolveDeterministicProductBehaviorAnswer,
   resolvePersonaInjection,
   resolveProductBehaviorEnabled,
+  resolveSearchEvidenceStatus,
   resolveSelfConsistency,
   resolveWorkspaceConfig,
   selectConsistentAnswer,
@@ -380,7 +382,7 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
     });
     if (core.dormant) core.dormant.record(query, "user", { stage: "run.input" });
     const preflight = core.productBehaviorEnabled
-      ? resolveDeterministicProductBehaviorAnswer(query)
+      ? resolveDeterministicProductBehaviorAnswer(query, { memories: core.memory.store.all })
       : undefined;
     let cls: Awaited<ReturnType<ReinforcingClassifier["classify"]>> | undefined;
     let route: ReturnType<typeof decideRoute> | undefined;
@@ -389,9 +391,12 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
       cls = await core.classifier.classify(query);
       route = decideRoute(cls);
     }
+    const routedTaskType = cls?.label ?? detectTaskType(query);
     const taoOpts = (traceId?: string, signal?: AbortSignal) => ({
-      ...(cls ? { taskType: cls.label } : {}),
-      ...(route?.single ? { enableReact: false } : {}),
+      taskType: routedTaskType,
+      ...(route?.single || (!cls && routedTaskType === TaskType.QUICK_RESPONSE)
+        ? { enableReact: false }
+        : {}),
       ...(route ? { topK: route.topK } : {}),
       ...(traceId ? { traceId } : {}),
       ...(signal ? { signal } : {}),
@@ -455,6 +460,7 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
       const enforced = await enforceProductBehaviorAnswer({
         query,
         draft: result.finalAnswer,
+        searchEvidence: resolveSearchEvidenceStatus(result.trajectory),
         revise: async (instruction) =>
           core.llm.chat(
             [

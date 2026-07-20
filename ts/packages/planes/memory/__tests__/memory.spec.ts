@@ -101,6 +101,20 @@ describe("MemoryRetriever", () => {
     expect(ranked[0]!.score).toBeGreaterThanOrEqual(ranked[1]!.score);
   });
 
+  it("uses CJK bigrams for zero-dependency keyword recall", () => {
+    const s = new MemoryStore();
+    s.addShortTerm("另外，我所在的城市是杭州，习惯用公制单位。");
+    s.addShortTerm("约束 A：数据库必须用 SQLite，不能引入外部服务。");
+    const r = new MemoryRetriever(s, {
+      relevanceWeight: 0,
+      recencyWeight: 1,
+      importanceWeight: 0,
+    });
+    const ranked = r.retrieve("我在哪个城市？", { topK: 2 });
+    expect(ranked[0]!.fragment.content).toContain("杭州");
+    expect(ranked[0]!.components.keyword).toBeGreaterThan(ranked[1]!.components.keyword);
+  });
+
   it("filters by minImportance after decay", () => {
     const now = 1_000_000;
     const s = new MemoryStore();
