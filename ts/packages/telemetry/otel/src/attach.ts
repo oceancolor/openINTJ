@@ -132,6 +132,10 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
     "openintj.product.trait.signal",
     "确定性 RFC-006 trait 信号（attributes=trait,signal,source；不表示模型意图）",
   );
+  const cInputStructure = c(
+    "openintj.input.structure",
+    "输入结构化事件次数（attributes=outcome,mode,ambiguity_band；不记录原文）",
+  );
   const cTokensSpent = c("openintj.tokens.spent", "TAO run 累计 token 花费");
   const cSearchSources = c("openintj.search.sources", "search 工具命中的联网来源数");
   // 并发 / 多任务 / 多 Agent（RFC-003 方向一/二）
@@ -666,6 +670,39 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
           trait: payload.trait,
           signal: payload.signal,
           source: payload.source,
+        });
+      }),
+    ),
+  );
+
+  offs.push(
+    bus.on(
+      "event.INPUT_STRUCTURE_COMPLETED",
+      safe<HookEventMap["event.INPUT_STRUCTURE_COMPLETED"]>((payload) => {
+        cInputStructure?.add(1, {
+          outcome: "completed",
+          mode: payload.mode,
+          ambiguity_band: payload.ambiguityBand,
+        });
+      }),
+    ),
+    bus.on(
+      "event.INPUT_STRUCTURE_CLARIFICATION",
+      safe<HookEventMap["event.INPUT_STRUCTURE_CLARIFICATION"]>((payload) => {
+        cInputStructure?.add(1, {
+          outcome: "clarification",
+          mode: payload.mode,
+          ambiguity_band: payload.ambiguityBand,
+        });
+      }),
+    ),
+    bus.on(
+      "event.INPUT_STRUCTURE_FALLBACK",
+      safe<HookEventMap["event.INPUT_STRUCTURE_FALLBACK"]>(() => {
+        cInputStructure?.add(1, {
+          outcome: "fallback",
+          mode: "fallback",
+          ambiguity_band: "low",
         });
       }),
     ),

@@ -3,7 +3,7 @@
  * 不声称 MBTI 类型；只定义可观察工程行为。
  */
 
-export const PRODUCT_BEHAVIOR_VERSION = "1.1.0";
+export const PRODUCT_BEHAVIOR_VERSION = "1.2.0";
 
 /** 可机器评测的行为 trait 标识。 */
 export const ProductTrait = {

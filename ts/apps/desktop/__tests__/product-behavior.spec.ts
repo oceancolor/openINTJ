@@ -28,7 +28,7 @@ describe("desktop RFC-006 Product Behavior regression", () => {
 
     expect(cohorts).toEqual([true]);
     expect(agent.status().productBehavior).toEqual({
-      version: "1.1.0",
+      version: "1.2.0",
       enabled: true,
       cohort: "treatment",
     });
@@ -57,6 +57,43 @@ describe("desktop RFC-006 Product Behavior regression", () => {
     expect(systemPrompt).not.toContain("[Product Behavior");
     expect(cohorts).toEqual([false]);
     expect(agent.status().productBehavior.cohort).toBe("control");
+  });
+
+  it("RFC-008: clarifies material ambiguity without entering ReAct and keeps original memory", async () => {
+    agent = await assembleDesktopAgent({
+      llmProvider: "mock",
+      embedProvider: "simple",
+      inputStructuring: "adaptive",
+    });
+    let thoughtCalls = 0;
+    agent.hooks.on("react.beforeThought", () => {
+      thoughtCalls++;
+    });
+
+    const simple = await agent.run("你好");
+    expect(simple.inputStructure?.mode).toBe("pass-through");
+
+    thoughtCalls = 0;
+    const clarified = await agent.run("部署到生产。");
+    expect(clarified.inputStructure?.action).toBe("clarify");
+    expect(clarified.finalAnswer).toMatch(/环境|集群|域名/);
+    expect(thoughtCalls).toBe(0);
+
+    const original = "规划 TypeScript CLI 三阶段迁移方案，并列出每阶段交付物";
+    await agent.run(original);
+    expect(agent.memory.store.all.some((fragment) => fragment.content === original)).toBe(true);
+  });
+
+  it("RFC-008: Product Behavior control disables input structuring", async () => {
+    agent = await assembleDesktopAgent({
+      llmProvider: "mock",
+      embedProvider: "simple",
+      enableProductBehavior: false,
+      inputStructuring: "always",
+    });
+    const result = await agent.run("设计并执行完整迁移方案，并列出依赖与交付物");
+    expect(result.inputStructure?.mode).toBe("pass-through");
+    expect(result.metrics["inputStructured"]).toBeUndefined();
   });
 
   it("TaskPool opt-in implies its classifier prerequisite and reports activation", async () => {

@@ -63,10 +63,13 @@ export const TRAIT_SCENARIOS: readonly TraitScenario[] = [
     query: "把 hello 转大写。",
     expectation: "直接给出 HELLO，不应反问平台/语言",
     judge: judgeContainsAll("HELLO"),
-    counterExample: {
-      query: "部署到生产。",
-      judge: (a) => /环境|集群|域名|确认|哪个/i.test(a),
-    },
+  },
+  {
+    id: "T5-material-clarify",
+    trait: ProductTrait.CLARIFY_WHEN_NEEDED,
+    query: "部署到生产。",
+    expectation: "关键歧义必须追问环境/集群/域名等会改变执行结果的约束",
+    judge: (a) => /环境|集群|域名|确认|哪个/i.test(a),
   },
   {
     id: "T6-independent-execution",

@@ -181,6 +181,40 @@ describe("IPC handler registration", () => {
     workbench.close();
   });
 
+  it("CHAT persists clarification understanding cards without auto-writing artifacts", async () => {
+    let seq = 0;
+    const handlers: Handlers = new Map();
+    const root = mkdtempSync(join(tmpdir(), "openintj-ipc-clarify-"));
+    const workbench = createWorkbenchStore({
+      dbPath: ":memory:",
+      defaultWorkspaceRoot: root,
+      now: () => 3_000 + seq++,
+    });
+    const conversation = workbench.bootstrap().conversations[0]!;
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers), { workbench });
+
+    const result = (await handlers.get(IPC.CHAT)?.(
+      {},
+      { query: "部署到生产。", conversationId: conversation.id },
+    )) as {
+      finalAnswer: string;
+      inputStructure?: { action: string; questions: string[] };
+    };
+
+    expect(result.inputStructure?.action).toBe("clarify");
+    expect(result.finalAnswer).toMatch(/环境|集群|域名/);
+    const messages = workbench.listMessages(conversation.id);
+    expect(messages.map((entry) => entry.role)).toEqual(["user", "assistant"]);
+    expect(messages[0]?.content).toBe("部署到生产。");
+    expect(messages[1]).toMatchObject({
+      messageKind: "clarification",
+      inputStructure: { action: "clarify" },
+    });
+    workbench.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("CHAT materializes a requested file when the model omits write_file", async () => {
     const handlers: Handlers = new Map();
     const root = mkdtempSync(join(tmpdir(), "openintj-artifact-"));

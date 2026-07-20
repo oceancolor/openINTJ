@@ -18,6 +18,29 @@ export const ChatRequestSchema = z.object({
 });
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 
+export const StructuredTaskSchema = z.object({
+  goal: z.string(),
+  context: z.array(z.string()),
+  relations: z.array(z.string()),
+  constraints: z.array(z.string()),
+  deliverables: z.array(z.string()),
+  dependencies: z.array(z.string()),
+  assumptions: z.array(z.string()),
+});
+
+export const InputStructureSchema = z.object({
+  action: z.enum(["proceed", "clarify"]),
+  mode: z.enum(["pass-through", "structured", "fallback", "clarification"]),
+  executionInput: z.string(),
+  structure: StructuredTaskSchema,
+  ambiguityScore: z.number().min(0).max(1),
+  questions: z.array(z.string()).max(3),
+  tokensSpent: z.number().int().nonnegative(),
+  durationMs: z.number().nonnegative(),
+  reason: z.string().optional(),
+});
+export type InputStructure = z.infer<typeof InputStructureSchema>;
+
 export const ChatResponseSchema = z.object({
   finalAnswer: z.string(),
   iterations: z.number().int().nonnegative(),
@@ -25,6 +48,7 @@ export const ChatResponseSchema = z.object({
   traceId: z.string(),
   provider: z.string().optional(),
   model: z.string().optional(),
+  inputStructure: InputStructureSchema.optional(),
 });
 export type ChatResponse = z.infer<typeof ChatResponseSchema>;
 
@@ -522,6 +546,8 @@ export const WorkbenchMessageSchema = z.object({
   traceId: z.string().optional(),
   tokens: z.number().int().nonnegative().optional(),
   status: z.string().optional(),
+  messageKind: z.enum(["message", "answer", "clarification"]).default("message"),
+  inputStructure: InputStructureSchema.optional(),
   createdAt: z.number(),
 });
 export type WorkbenchMessage = z.infer<typeof WorkbenchMessageSchema>;

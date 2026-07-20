@@ -139,6 +139,30 @@ export interface HookEventMap {
     compactedMessages: number;
     newBudgetUsage: number;
   };
+  "event.INPUT_STRUCTURE_STARTED": {
+    policy: "off" | "adaptive" | "always";
+    triggered: boolean;
+    inputLength: number;
+  };
+  "event.INPUT_STRUCTURE_COMPLETED": {
+    action: "proceed";
+    mode: "pass-through" | "structured" | "fallback";
+    ambiguityBand: "low" | "medium" | "high";
+    tokensSpent: number;
+    durationMs: number;
+  };
+  "event.INPUT_STRUCTURE_CLARIFICATION": {
+    action: "clarify";
+    mode: "clarification";
+    ambiguityBand: "low" | "medium" | "high";
+    tokensSpent: number;
+    durationMs: number;
+    questionCount: number;
+  };
+  "event.INPUT_STRUCTURE_FALLBACK": {
+    reason: string;
+    durationMs: number;
+  };
   "event.SHADER_APPLIED": { mode: ShaderModeType; lod: LODLevelType };
   "event.POLICY_BLOCKED": { command: Command; reason: string };
   "event.CIRCUIT_OPENED": { tool: string; failureCount: number };

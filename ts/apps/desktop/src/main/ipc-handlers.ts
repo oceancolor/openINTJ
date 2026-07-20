@@ -240,6 +240,7 @@ export const registerIpcHandlers = (
           conversationId: selected.conversation.id,
           role: "user",
           content: parsed.data.query,
+          messageKind: "message",
         });
       }
       const result = await withRootSpan(
@@ -264,6 +265,7 @@ export const registerIpcHandlers = (
       let finalAnswer = result.finalAnswer;
       if (
         selected &&
+        result.inputStructure?.action !== "clarify" &&
         requestsFileArtifact(parsed.data.query) &&
         !hasSuccessfulFileWrite(result.trajectory)
       ) {
@@ -282,6 +284,8 @@ export const registerIpcHandlers = (
           traceId: result.traceId,
           tokens: result.totalTokensSpent,
           status: result.status,
+          messageKind: result.inputStructure?.action === "clarify" ? "clarification" : "answer",
+          ...(result.inputStructure ? { inputStructure: result.inputStructure } : {}),
         });
       }
       const modelStatus = selectedLlm?.getStatus();
@@ -290,6 +294,7 @@ export const registerIpcHandlers = (
         iterations: result.iterations,
         status: result.status,
         traceId: result.traceId,
+        ...(result.inputStructure ? { inputStructure: result.inputStructure } : {}),
         ...(modelStatus ? { provider: modelStatus.provider, model: modelStatus.model } : {}),
       };
     } catch (error) {
@@ -299,6 +304,7 @@ export const registerIpcHandlers = (
           role: "assistant",
           content: error instanceof Error ? error.message : String(error),
           status: "failed",
+          messageKind: "answer",
         });
       }
       throw error;

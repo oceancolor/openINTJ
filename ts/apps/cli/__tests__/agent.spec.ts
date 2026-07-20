@@ -29,13 +29,52 @@ describe("assembleAgent E2E (mock LLM)", () => {
 
     await agent.run("请简洁回答");
 
-    expect(systemPrompt).toContain("[Product Behavior v1.1.0]");
+    expect(systemPrompt).toContain("[Product Behavior v1.2.0]");
     expect(cohorts).toEqual([true]);
     expect(agent.productBehavior).toEqual({
-      version: "1.1.0",
+      version: "1.2.0",
       enabled: true,
       cohort: "treatment",
     });
+  });
+
+  it("structures complex input adaptively and keeps original query in memory", async () => {
+    const agent = assembleAgent({
+      llmProvider: "mock",
+      inputStructuring: "adaptive",
+    });
+    let thoughtCalls = 0;
+    agent.hooks.on("react.beforeThought", () => {
+      thoughtCalls++;
+    });
+
+    const simple = await agent.run("你好");
+    expect(simple.metrics["inputStructured"]).toBeUndefined();
+    expect(simple.inputStructure?.mode).toBe("pass-through");
+
+    thoughtCalls = 0;
+    const clarified = await agent.run("部署到生产。");
+    expect(clarified.inputStructure?.action).toBe("clarify");
+    expect(clarified.finalAnswer).toMatch(/环境|集群|域名/);
+    expect(thoughtCalls).toBe(0);
+
+    const original = "规划 TypeScript CLI 三阶段迁移方案，并列出每阶段交付物";
+    const structured = await agent.run(original);
+    expect(structured.inputStructure?.action).toBe("proceed");
+    // Invalid mock JSON falls soft; original user text must still be the memory source.
+    expect(agent.memory.store.all.some((fragment) => fragment.content === original)).toBe(true);
+  });
+
+  it("disables input structuring in Product Behavior control cohort", async () => {
+    const agent = assembleAgent({
+      llmProvider: "mock",
+      enableProductBehavior: false,
+      inputStructuring: "always",
+    });
+    const result = await agent.run("设计并执行完整迁移方案，并列出依赖与交付物");
+    expect(agent.inputStructuringConfig.policy).toBe("off");
+    expect(result.inputStructure?.mode).toBe("pass-through");
+    expect(result.metrics["inputStructured"]).toBeUndefined();
   });
 
   it("supports an explicit Product Behavior control cohort", async () => {

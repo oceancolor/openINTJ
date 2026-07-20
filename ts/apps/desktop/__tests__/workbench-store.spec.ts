@@ -53,6 +53,58 @@ describe("WorkbenchStore", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it("persists understanding cards and clarification message kinds", () => {
+    let seq = 0;
+    const root = mkdtempSync(join(tmpdir(), "openintj-workbench-"));
+    const store = createWorkbenchStore({
+      dbPath: ":memory:",
+      defaultWorkspaceRoot: root,
+      now: () => 2_000 + seq++,
+    });
+    const conversation = store.bootstrap().conversations[0]!;
+    store.appendMessage({
+      conversationId: conversation.id,
+      role: "user",
+      content: "部署到生产",
+    });
+    store.appendMessage({
+      conversationId: conversation.id,
+      role: "assistant",
+      content: "1. 部署到哪个环境？",
+      messageKind: "clarification",
+      status: "completed",
+      inputStructure: {
+        action: "clarify",
+        mode: "clarification",
+        executionInput: "",
+        structure: {
+          goal: "部署到生产",
+          context: [],
+          relations: [],
+          constraints: [],
+          deliverables: [],
+          dependencies: [],
+          assumptions: [],
+        },
+        ambiguityScore: 1,
+        questions: ["部署到哪个环境？"],
+        tokensSpent: 0,
+        durationMs: 0,
+      },
+    });
+
+    const messages = store.listMessages(conversation.id);
+    expect(messages[1]).toMatchObject({
+      messageKind: "clarification",
+      inputStructure: {
+        action: "clarify",
+        questions: ["部署到哪个环境？"],
+      },
+    });
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("physically creates workspace directories and archives without deleting conversations", () => {
     const root = mkdtempSync(join(tmpdir(), "openintj-workbench-"));
     const createdRoot = join(root, "created-workspace");

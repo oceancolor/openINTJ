@@ -11,15 +11,20 @@ import {
   DEFAULT_REACT_CONFIG,
   DEFAULT_TAO_CONFIG,
   HookBus,
+  type InputStructuredTaoResult,
+  type InputStructuringPolicy,
   type LlmClient,
   ReactStateMachine,
   TaoLoop,
-  type TaoResult,
   TaskType,
   type TaskTypeType,
   attachProductTraitSignals,
   detectTaskType,
   getShaderForTask,
+  inputClarificationFromPreflight,
+  inputClarificationResult,
+  resolveInputStructuringConfig,
+  structureUserInput,
 } from "@openintj/core";
 import {
   type DormantPersistenceAdapter,
@@ -133,6 +138,8 @@ export interface DesktopAgentOpts {
   enablePersona?: boolean;
   /** RFC-006 Product Behavior A/B；默认开，env OPENINTJ_PRODUCT_BEHAVIOR=0 可关。 */
   enableProductBehavior?: boolean;
+  /** RFC-008 输入结构化；Product Behavior control 组强制关闭。 */
+  inputStructuring?: InputStructuringPolicy;
   /**
    * Dormant 持久化策略（仅 enableDormant=true 时生效）。
    * - 'auto'（默认）：跟随主持久化（real → SqliteDormantStore，memory → 不挂 adapter）
@@ -361,7 +368,7 @@ export interface DesktopAgent {
   workspace: { config: ResolvedWorkspaceConfig; tools: WorkspaceTools };
   /** 基于 HybridRetriever 的检索辅助；无论 retrievalMode 都可用。 */
   retrieveHybrid(query: string, opts?: DesktopRetrieveHybridOpts): Promise<DesktopHybridHit[]>;
-  run(query: string, opts?: DesktopRunOptions): Promise<TaoResult>;
+  run(query: string, opts?: DesktopRunOptions): Promise<InputStructuredTaoResult>;
   status(): {
     llm: ReturnType<LlmClient["getStatus"]> & { runtime?: ModelRuntimeStatus["llm"] };
     embed?: ModelRuntimeStatus["embed"];
@@ -560,6 +567,9 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     ].join("\n");
   const personaEnabled = resolvePersonaInjection(opts);
   const productBehaviorEnabled = resolveProductBehaviorEnabled(opts.enableProductBehavior);
+  const inputStructuringConfig = resolveInputStructuringConfig(
+    productBehaviorEnabled ? opts.inputStructuring : "off",
+  );
   const taskPoolEnabled = resolveTaskPoolEnabled(opts.enableTaskPool);
   const classifierConfigured = opts.enableClassifier ?? process.env["OPENINTJ_CLASSIFIER"] === "1";
   const enableClassifier = taskPoolEnabled || classifierConfigured;
@@ -728,13 +738,31 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
         productBehaviorEnabled && !artifactRequest
           ? resolveDeterministicProductBehaviorAnswer(query, { memories: scopedMemories })
           : undefined;
+      const structuringLlm = runOpts.llm ?? llm;
+      const inputStructure =
+        preflight?.guard === "material-clarification"
+          ? inputClarificationFromPreflight(query, preflight.answer)
+          : !preflight
+            ? await structureUserInput({
+                input: query,
+                llm: structuringLlm,
+                ...inputStructuringConfig,
+                hooks,
+                ...(runOpts.history ? { history: runOpts.history } : {}),
+                ...(runOpts.signal ? { signal: runOpts.signal } : {}),
+              })
+            : undefined;
+      const executionQuery =
+        inputStructure?.action === "proceed" ? inputStructure.executionInput : query;
       // 前端分类器：预分类 → taskType + 降 token 路由（高置信简单类走单次 LLM）。
       const cls =
-        !preflight && !artifactRequest && classifier ? await classifier.classify(query) : undefined;
+        !preflight && inputStructure?.action !== "clarify" && !artifactRequest && classifier
+          ? await classifier.classify(executionQuery)
+          : undefined;
       const route = cls ? decideRoute(cls) : undefined;
       const routedTaskType = artifactRequest
         ? TaskType.CODE_GENERATION
-        : (cls?.label ?? detectTaskType(query));
+        : (cls?.label ?? detectTaskType(executionQuery));
       const taoOpts = (traceId?: string, signal: AbortSignal | undefined = runOpts.signal) => ({
         taskType: routedTaskType,
         ...(route?.single || (!cls && routedTaskType === TaskType.QUICK_RESPONSE)
@@ -747,8 +775,10 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
         ...(runOpts.llm ? { llm: runOpts.llm } : {}),
       });
       // 先跑（contextProvider 会检索此前已落盘的记忆），再记录本轮 → 避免检索命中当前输入本身。
-      let result: TaoResult;
-      if (preflight) {
+      let result: InputStructuredTaoResult;
+      if (inputStructure?.action === "clarify") {
+        result = inputClarificationResult(inputStructure);
+      } else if (preflight) {
         const taskType = detectTaskType(query);
         result = {
           traceId: randomUUID(),
@@ -775,18 +805,18 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
           Boolean(selfConsistency),
         );
         if (orchestrationMode === "taskpool" && taskPool && cls) {
-          const { plan } = control.processInput(query, cls.label);
+          const { plan } = control.processInput(executionQuery, cls.label);
           const graph = planGraphToTaskGraph(plan);
           const poolResult = await taskPool.submitRun(graph, async (node, ctx) => {
             const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
             return tao.run(stepQuery, taoOpts(ctx.traceId, ctx.signal));
           });
-          result = synthesizeTaskPoolAnswer(poolResult, query);
+          result = synthesizeTaskPoolAnswer(poolResult, executionQuery);
         } else if (orchestrationMode === "self-consistency" && selfConsistency) {
           // 方向一/二：并行多采样 + 投票。forkJoin 会发 forkjoin.* 事件 → OTel span/metric。
           const { fulfilled } = await forkJoin(
             Array.from({ length: selfConsistency.samples }, (_, i) => i),
-            (i) => tao.run(query, taoOpts(`${randomUUID()}-sc${i}`)),
+            (i) => tao.run(executionQuery, taoOpts(`${randomUUID()}-sc${i}`)),
             {
               hooks,
               group: "self-consistency",
@@ -798,10 +828,18 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
           );
           result = selectConsistentAnswer(fulfilled, selfConsistency.strategy) ?? fulfilled[0]!;
         } else {
-          result = await tao.run(query, taoOpts());
+          result = await tao.run(executionQuery, taoOpts());
         }
       }
-      if (productBehaviorEnabled) {
+      if (inputStructure?.action === "proceed") {
+        result.inputStructure = inputStructure;
+        result.totalTokensSpent += inputStructure.tokensSpent;
+        result.durationMs += inputStructure.durationMs;
+        result.metrics.inputStructuringTokens = inputStructure.tokensSpent;
+        if (inputStructure.mode === "structured") result.metrics.inputStructured = 1;
+        if (inputStructure.mode === "fallback") result.metrics.inputStructuringFallback = 1;
+      }
+      if (productBehaviorEnabled && inputStructure?.action !== "clarify") {
         const enforced = await enforceProductBehaviorAnswer({
           query,
           draft: result.finalAnswer,
@@ -826,7 +864,9 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       await memory.recordUserInputAsync(query, labelTags);
       await memory.recordAssistantOutputAsync(result.finalAnswer, labelTags);
       if (classifier && cls) {
-        await classifier.reinforce(query, cls.label, { signal: outcomeSignal(result.status) });
+        await classifier.reinforce(executionQuery, cls.label, {
+          signal: outcomeSignal(result.status),
+        });
       }
       if (skillLearning) {
         const toolsUsed = [

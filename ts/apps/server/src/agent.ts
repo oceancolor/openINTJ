@@ -7,18 +7,24 @@ import {
 } from "@openintj/classifier";
 import { forkJoin } from "@openintj/concurrency";
 import {
+  type ChatMessage,
   DEFAULT_REACT_CONFIG,
   DEFAULT_TAO_CONFIG,
   HookBus,
+  type InputStructuredTaoResult,
+  type InputStructuringPolicy,
   type LlmClient,
   ReactStateMachine,
   TaoLoop,
-  type TaoResult,
   TaskType,
   type TaskTypeType,
   attachProductTraitSignals,
   detectTaskType,
   getShaderForTask,
+  inputClarificationFromPreflight,
+  inputClarificationResult,
+  resolveInputStructuringConfig,
+  structureUserInput,
 } from "@openintj/core";
 import {
   type DormantPersistenceAdapter,
@@ -143,6 +149,7 @@ export interface ServerAgentOpts {
   enablePersona?: boolean;
   /** RFC-006 Product Behavior A/B；默认开，env OPENINTJ_PRODUCT_BEHAVIOR=0 可关。 */
   enableProductBehavior?: boolean;
+  inputStructuring?: InputStructuringPolicy;
   /**
    * 默认检索路径：
    *  - 'vector'（默认）：MemoryPlane.retrieve（cosine + 朴素 keyword + recency 衰减）
@@ -247,7 +254,7 @@ export interface ServerAgent {
   refreshModelRuntime(): Promise<ModelRuntimeStatus>;
   /** real data dir + TaskPool 开启时的启动恢复结果。 */
   taskPoolRecovery?: TaskPoolRecoverySummary;
-  run(query: string): Promise<TaoResult>;
+  run(query: string, opts?: ServerRunOptions): Promise<InputStructuredTaoResult>;
   status(): Promise<{
     llm: ReturnType<LlmClient["getStatus"]> & { runtime?: ModelRuntimeStatus["llm"] };
     embed?: ModelRuntimeStatus["embed"];
@@ -272,6 +279,12 @@ export interface ServerAgent {
     };
   }>;
   close(): Promise<void>;
+}
+
+export interface ServerRunOptions {
+  signal?: AbortSignal;
+  history?: readonly ChatMessage[];
+  llm?: LlmClient;
 }
 
 const parseServerLlmProvider = (opts: ServerAgentOpts): LlmProviderId => {
@@ -515,6 +528,9 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
   const baseSystemPrompt = opts.systemPrompt ?? DEFAULT_AGENT_SYSTEM_PROMPT;
   const personaEnabled = resolvePersonaInjection(opts);
   const productBehaviorEnabled = resolveProductBehaviorEnabled(opts.enableProductBehavior);
+  const inputStructuringConfig = resolveInputStructuringConfig(
+    productBehaviorEnabled ? opts.inputStructuring : "off",
+  );
   const taskPoolEnabled = resolveTaskPoolEnabled(opts.enableTaskPool);
   const classifierConfigured = opts.enableClassifier ?? process.env["OPENINTJ_CLASSIFIER"] === "1";
   const enableClassifier = taskPoolEnabled || classifierConfigured;
@@ -665,7 +681,7 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
     refreshModelRuntime: () => runtime.refreshHealth(),
     ...(taskPoolRecovery ? { taskPoolRecovery } : {}),
     ...(otel ? { otel } : {}),
-    async run(query: string) {
+    async run(query: string, runOpts: ServerRunOptions = {}) {
       await hooks.emit("event.PRODUCT_BEHAVIOR", {
         version: PRODUCT_BEHAVIOR_VERSION,
         enabled: productBehaviorEnabled,
@@ -674,11 +690,29 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
       const preflight = productBehaviorEnabled
         ? resolveDeterministicProductBehaviorAnswer(query, { memories: memory.store.all })
         : undefined;
+      const inputStructure =
+        preflight?.guard === "material-clarification"
+          ? inputClarificationFromPreflight(query, preflight.answer)
+          : !preflight
+            ? await structureUserInput({
+                input: query,
+                llm: runOpts.llm ?? llm,
+                ...inputStructuringConfig,
+                hooks,
+                ...(runOpts.history ? { history: runOpts.history } : {}),
+                ...(runOpts.signal ? { signal: runOpts.signal } : {}),
+              })
+            : undefined;
+      const executionQuery =
+        inputStructure?.action === "proceed" ? inputStructure.executionInput : query;
       // 前端分类器：预分类 → taskType + 降 token 路由（高置信简单类走单次 LLM）。
-      const cls = !preflight && classifier ? await classifier.classify(query) : undefined;
+      const cls =
+        !preflight && inputStructure?.action !== "clarify" && classifier
+          ? await classifier.classify(executionQuery)
+          : undefined;
       const route = cls ? decideRoute(cls) : undefined;
-      const routedTaskType = cls?.label ?? detectTaskType(query);
-      const taoOpts = (traceId?: string, signal?: AbortSignal) => ({
+      const routedTaskType = cls?.label ?? detectTaskType(executionQuery);
+      const taoOpts = (traceId?: string, signal: AbortSignal | undefined = runOpts.signal) => ({
         taskType: routedTaskType,
         ...(route?.single || (!cls && routedTaskType === TaskType.QUICK_RESPONSE)
           ? { enableReact: false }
@@ -686,10 +720,14 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
         ...(route ? { topK: route.topK } : {}),
         ...(traceId ? { traceId } : {}),
         ...(signal ? { signal } : {}),
+        ...(runOpts.history ? { history: runOpts.history } : {}),
+        ...(runOpts.llm ? { llm: runOpts.llm } : {}),
       });
       // 先跑（contextProvider 会检索此前已落盘的记忆），再记录本轮 → 避免检索命中当前输入本身。
-      let result: TaoResult;
-      if (preflight) {
+      let result: InputStructuredTaoResult;
+      if (inputStructure?.action === "clarify") {
+        result = inputClarificationResult(inputStructure);
+      } else if (preflight) {
         const taskType = detectTaskType(query);
         result = {
           traceId: randomUUID(),
@@ -716,18 +754,18 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
           Boolean(selfConsistency),
         );
         if (orchestrationMode === "taskpool" && taskPool && cls) {
-          const { plan } = control.processInput(query, cls.label);
+          const { plan } = control.processInput(executionQuery, cls.label);
           const graph = planGraphToTaskGraph(plan);
           const poolResult = await taskPool.submitRun(graph, async (node, ctx) => {
             const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
             return tao.run(stepQuery, taoOpts(ctx.traceId, ctx.signal));
           });
-          result = synthesizeTaskPoolAnswer(poolResult, query);
+          result = synthesizeTaskPoolAnswer(poolResult, executionQuery);
         } else if (orchestrationMode === "self-consistency" && selfConsistency) {
           // 方向一/二：并行多采样 + 投票。forkJoin 会发 forkjoin.* 事件 → OTel span/metric。
           const { fulfilled } = await forkJoin(
             Array.from({ length: selfConsistency.samples }, (_, i) => i),
-            (i) => tao.run(query, taoOpts(`${randomUUID()}-sc${i}`)),
+            (i) => tao.run(executionQuery, taoOpts(`${randomUUID()}-sc${i}`)),
             {
               hooks,
               group: "self-consistency",
@@ -739,16 +777,24 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
           );
           result = selectConsistentAnswer(fulfilled, selfConsistency.strategy) ?? fulfilled[0]!;
         } else {
-          result = await tao.run(query, taoOpts());
+          result = await tao.run(executionQuery, taoOpts());
         }
       }
-      if (productBehaviorEnabled) {
+      if (inputStructure?.action === "proceed") {
+        result.inputStructure = inputStructure;
+        result.totalTokensSpent += inputStructure.tokensSpent;
+        result.durationMs += inputStructure.durationMs;
+        result.metrics.inputStructuringTokens = inputStructure.tokensSpent;
+        if (inputStructure.mode === "structured") result.metrics.inputStructured = 1;
+        if (inputStructure.mode === "fallback") result.metrics.inputStructuringFallback = 1;
+      }
+      if (productBehaviorEnabled && inputStructure?.action !== "clarify") {
         const enforced = await enforceProductBehaviorAnswer({
           query,
           draft: result.finalAnswer,
           searchEvidence: resolveSearchEvidenceStatus(result.trajectory),
           revise: async (instruction) =>
-            llm.chat(
+            (runOpts.llm ?? llm).chat(
               [
                 {
                   role: "system",
@@ -756,7 +802,11 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
                 },
                 { role: "user", content: instruction },
               ],
-              { temperature: 0, maxTokens: 768 },
+              {
+                temperature: 0,
+                maxTokens: 768,
+                ...(runOpts.signal ? { signal: runOpts.signal } : {}),
+              },
             ),
         });
         result.finalAnswer = enforced.answer;
@@ -767,7 +817,9 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
       await memory.recordUserInputAsync(query, labelTags);
       await memory.recordAssistantOutputAsync(result.finalAnswer, labelTags);
       if (classifier && cls) {
-        await classifier.reinforce(query, cls.label, { signal: outcomeSignal(result.status) });
+        await classifier.reinforce(executionQuery, cls.label, {
+          signal: outcomeSignal(result.status),
+        });
       }
       if (skillLearning) {
         // 命中技能按 outcome 加权 + 成功轨迹进蒸馏 buffer。

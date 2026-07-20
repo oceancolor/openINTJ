@@ -4,8 +4,8 @@
 |------|-----|
 | 状态 | **Accepted** |
 | 作者 | OpenINTJ |
-| 关联 | RFC-003、RFC-006 实施于 `@openintj/shared` |
-| 依赖 | RFC-007（T1 战略分解执行面，首期仅契约引用） |
+| 关联 | RFC-003、RFC-006 实施于 `@openintj/shared`、[RFC-008](./RFC-008-structured-input-and-disambiguation.md) |
+| 依赖 | RFC-007（T1 战略分解执行面）、RFC-008（输入侧结构化与消歧） |
 
 ## 摘要
 
@@ -24,14 +24,15 @@
 2. **T2 结构化推理**：对比/规划/分析用编号或小标题。
 3. **T3 证据优先**：时效/事实类先 `search` 再结论。
 4. **T4 直言简洁**：去寒暄与重复。
-5. **T5 必要澄清**：仅缺关键约束时追问。
+5. **T5 必要澄清**：仅缺关键约束时追问；明确短任务不过度澄清。
 6. **T6 独立执行**：权限内自主推进。
 7. **T7 质量门禁**：交付前自检约束与核心问题。
 8. **T8 工具治理尊重**：不覆盖安全策略与用户明确要求。
 
-每项 trait 在 `trait-scenarios.ts` 含正例与 `judge` 条件。
+每项 trait 在 `trait-scenarios.ts` 含正例与 `judge` 条件。T5 现拆为
+`T5-no-over-clarify` 与 `T5-material-clarify` 两类场景。
 
-## 实现（v1.1.0）
+## 实现（v1.2.0）
 
 - `product-behavior.ts`：`buildProductBehaviorPrompt` / `assembleSystemPromptPrefix`
 - v1.1 将契约从 prompt-only 提升为可执行边界：
@@ -41,12 +42,17 @@
     无空格中文由轻量二元组 tokenizer 支撑关键词与 hybrid BM25 检索；
   - 对分阶段计划、结构化对比做一次有界 final-answer revision；
   - “一句话”要求做确定性单句收口。
+- v1.2 接入 [RFC-008](./RFC-008-structured-input-and-disambiguation.md) 输入侧结构化：
+  - deterministic preflight 之后、classifier 之前运行自适应 `structureUserInput`；
+  - `originalInput` 用于记忆/审计/质量门禁，`executionInput` 用于执行路由；
+  - control 组强制关闭输入结构化，避免污染 A/B 基线；
+  - T5 同时覆盖「不过度澄清」与「关键歧义必须澄清」。
 - 三端拼装顺序：**Product Behavior → User Persona → Skills → Memory**
 - `OPENINTJ_PRODUCT_BEHAVIOR=0` 关闭（A/B 基线组）
 - CLI `chat` / `status` 可用 `--product-behavior treatment|control` 显式覆盖；未传时仍读取 env。
 - server `/api/status`、desktop status 与 CLI status 暴露 `version/enabled/cohort`；server 启动日志打印 cohort。
 - `classifier/routing.ts`：`planning` / `analysis` 永不 `single` 路由
-- Skills：`planning`、`clarification` 能力包（按需命中）
+- Skills：`planning`、`clarification` 能力包（按需命中；执行期兜底，不替代输入结构化）
 - OTel：`event.PRODUCT_BEHAVIOR` → `openintj.product.behavior.injected`
 - trait 可观测：`event.PRODUCT_TRAIT_SIGNAL` → `openintj.product.trait.signal`。只记录确定性事实：
   - T1 `plan_decomposed`：`tao.afterThink.plan.totalSteps > 1`，值为步骤数；

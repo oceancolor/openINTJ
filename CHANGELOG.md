@@ -10,6 +10,11 @@
 
 ### Added
 
+- **RFC-008 输入结构化与消歧**：deterministic preflight 后、classifier 前增加自适应
+  `structureUserInput`；保留 `originalInput`/`executionInput` 双语义；复杂或高歧义输入
+  至多一次有界优化，关键缺失约束暂停并追问 1–3 问；Desktop 持久化并渲染「任务理解卡」。
+  配置 `OPENINTJ_INPUT_STRUCTURING=off|adaptive|always`；OTel
+  `openintj.input.structure`；Product Behavior control 组强制关闭以保证 A/B 可比。
 - **Desktop 多模型任务工作台**：新增 Kimi K3、MiniMax M3、GLM 5.2
   OpenAI-compatible provider；模型 Profile/连接测试、`safeStorage` 加密凭据、对话级即时
   切换与有界历史；新增工作区 → 任务 → 对话 → 消息 SQLite 持久化、Inbox 首启迁移、
@@ -51,6 +56,8 @@
 
 - Hunyuan 默认模型从已退役的 `hy3-preview` / `hunyuan-turbos-latest` 迁移到正式
   `hy3`，默认端点改为 TokenHub；只映射已知旧默认值，自定义端点和模型保持不变。
+- **Product Behavior v1.2**：版本号升至 `1.2.0`；T5 拆为不过度澄清与关键歧义必须澄清；
+  与 RFC-008 输入结构化对齐，control 组关闭结构化。
 
 - **Product Behavior v1.1 可执行契约**：确定性排序/转换/算术约束/关键澄清/越权破坏请求
   在 LLM 与工具前本地处理；结构化对比和分阶段计划支持一次有界答案修订；单句要求确定性收口。

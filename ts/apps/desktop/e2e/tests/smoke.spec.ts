@@ -59,6 +59,18 @@ test.describe("desktop smoke (mock provider, no persist)", () => {
     });
   });
 
+  test("shows understanding card and waits for material clarification", async ({ page }) => {
+    await page.getByLabel("对话模型").selectOption("mock");
+    const input = page.locator('textarea[placeholder*="说点什么"]');
+    await input.fill("部署到生产。");
+    await page.getByRole("button", { name: "发送" }).click();
+
+    const card = page.getByTestId("understanding-card");
+    await expect(card).toBeVisible({ timeout: 15_000 });
+    await expect(card).toContainText("等待补充");
+    await expect(card).toContainText(/环境|集群|域名/);
+  });
+
   test("task tree creates a conversation and switches its model", async ({ page }) => {
     await expect(page.getByText("Inbox", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "+ 任务" }).click();

@@ -11,19 +11,25 @@ import { forkJoin } from "@openintj/concurrency";
  * 这是 CLI / Server / Desktop 共用的核心装配逻辑。
  */
 import {
+  type ChatMessage,
   DEFAULT_REACT_CONFIG,
   DEFAULT_TAO_CONFIG,
   type EmbeddingProvider,
   HookBus,
+  type InputStructuredTaoResult,
+  type InputStructuringPolicy,
   type LlmClient,
   ReactStateMachine,
   TaoLoop,
-  type TaoResult,
   TaskType,
   type TaskTypeType,
   attachProductTraitSignals,
   detectTaskType,
   getShaderForTask,
+  inputClarificationFromPreflight,
+  inputClarificationResult,
+  resolveInputStructuringConfig,
+  structureUserInput,
 } from "@openintj/core";
 import { DormantRuntime, type DormantRuntimeOpts } from "@openintj/dormant";
 import { HunyuanClient, createHunyuanSearchTool } from "@openintj/llm-hunyuan";
@@ -115,6 +121,7 @@ export interface AgentOptions {
   enablePersona?: boolean;
   /** RFC-006 Product Behavior A/B；默认开，env OPENINTJ_PRODUCT_BEHAVIOR=0 可关。 */
   enableProductBehavior?: boolean;
+  inputStructuring?: InputStructuringPolicy;
   /** RFC-007：opt-in TaskPool。 */
   enableTaskPool?: boolean;
   /** 跳过启动期 Ollama 健康探测（单测用）。 */
@@ -137,10 +144,17 @@ export interface AssembledAgent {
   modelRuntime?: ModelRuntimeStatus;
   refreshModelRuntime?: () => Promise<ModelRuntimeStatus>;
   productBehavior: { version: string; enabled: boolean; cohort: "treatment" | "control" };
+  inputStructuringConfig: ReturnType<typeof resolveInputStructuringConfig>;
   taskPoolEnabled: boolean;
   taskPoolActivation: TaskPoolActivationStatus;
   classifierStatus: { enabled: boolean; impliedByTaskPool: boolean };
-  run(query: string): Promise<TaoResult>;
+  run(query: string, opts?: AgentRunOptions): Promise<InputStructuredTaoResult>;
+}
+
+export interface AgentRunOptions {
+  signal?: AbortSignal;
+  history?: readonly ChatMessage[];
+  llm?: LlmClient;
 }
 
 const buildAgentCore = (
@@ -162,6 +176,7 @@ const buildAgentCore = (
   taskPoolActivation: TaskPoolActivationStatus;
   classifierStatus: { enabled: boolean; impliedByTaskPool: boolean };
   productBehaviorEnabled: boolean;
+  inputStructuringConfig: ReturnType<typeof resolveInputStructuringConfig>;
 } => {
   const hooks = hooksInput ?? new HookBus();
   attachProductTraitSignals(hooks);
@@ -231,6 +246,9 @@ const buildAgentCore = (
     : undefined;
   const personaEnabled = resolvePersonaInjection(opts);
   const productBehaviorEnabled = resolveProductBehaviorEnabled(opts.enableProductBehavior);
+  const inputStructuringConfig = resolveInputStructuringConfig(
+    productBehaviorEnabled ? opts.inputStructuring : "off",
+  );
   const taskPoolEnabled = resolveTaskPoolEnabled(opts.enableTaskPool);
   const classifierConfigured = opts.enableClassifier ?? process.env["OPENINTJ_CLASSIFIER"] === "1";
   const enableClassifier = taskPoolEnabled || classifierConfigured;
@@ -342,6 +360,7 @@ const buildAgentCore = (
       impliedByTaskPool: taskPoolEnabled && !classifierConfigured,
     },
     productBehaviorEnabled,
+    inputStructuringConfig,
     ...(modelRuntime
       ? {
           modelRuntime: modelRuntime.status,
@@ -372,10 +391,11 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
     enabled: core.productBehaviorEnabled,
     cohort: core.productBehaviorEnabled ? "treatment" : "control",
   },
+  inputStructuringConfig: core.inputStructuringConfig,
   taskPoolEnabled: core.taskPoolEnabled,
   taskPoolActivation: core.taskPoolActivation,
   classifierStatus: core.classifierStatus,
-  async run(query: string) {
+  async run(query: string, runOpts: AgentRunOptions = {}) {
     await core.hooks.emit("event.PRODUCT_BEHAVIOR", {
       version: PRODUCT_BEHAVIOR_VERSION,
       enabled: core.productBehaviorEnabled,
@@ -384,15 +404,30 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
     const preflight = core.productBehaviorEnabled
       ? resolveDeterministicProductBehaviorAnswer(query, { memories: core.memory.store.all })
       : undefined;
+    const inputStructure =
+      preflight?.guard === "material-clarification"
+        ? inputClarificationFromPreflight(query, preflight.answer)
+        : !preflight
+          ? await structureUserInput({
+              input: query,
+              llm: runOpts.llm ?? core.llm,
+              ...core.inputStructuringConfig,
+              hooks: core.hooks,
+              ...(runOpts.history ? { history: runOpts.history } : {}),
+              ...(runOpts.signal ? { signal: runOpts.signal } : {}),
+            })
+          : undefined;
+    const executionQuery =
+      inputStructure?.action === "proceed" ? inputStructure.executionInput : query;
     let cls: Awaited<ReturnType<ReinforcingClassifier["classify"]>> | undefined;
     let route: ReturnType<typeof decideRoute> | undefined;
-    if (!preflight && core.classifier) {
+    if (!preflight && inputStructure?.action !== "clarify" && core.classifier) {
       await core.ensureClassifier();
-      cls = await core.classifier.classify(query);
+      cls = await core.classifier.classify(executionQuery);
       route = decideRoute(cls);
     }
-    const routedTaskType = cls?.label ?? detectTaskType(query);
-    const taoOpts = (traceId?: string, signal?: AbortSignal) => ({
+    const routedTaskType = cls?.label ?? detectTaskType(executionQuery);
+    const taoOpts = (traceId?: string, signal: AbortSignal | undefined = runOpts.signal) => ({
       taskType: routedTaskType,
       ...(route?.single || (!cls && routedTaskType === TaskType.QUICK_RESPONSE)
         ? { enableReact: false }
@@ -400,9 +435,13 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
       ...(route ? { topK: route.topK } : {}),
       ...(traceId ? { traceId } : {}),
       ...(signal ? { signal } : {}),
+      ...(runOpts.history ? { history: runOpts.history } : {}),
+      ...(runOpts.llm ? { llm: runOpts.llm } : {}),
     });
-    let result: TaoResult;
-    if (preflight) {
+    let result: InputStructuredTaoResult;
+    if (inputStructure?.action === "clarify") {
+      result = inputClarificationResult(inputStructure);
+    } else if (preflight) {
       const taskType = detectTaskType(query);
       result = {
         traceId: randomUUID(),
@@ -431,17 +470,17 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
       // Explicit TaskPool wins for eligible complex tasks; self-consistency remains
       // the fallback for all other tasks.
       if (orchestrationMode === "taskpool" && core.taskPool && cls) {
-        const { plan } = core.control.processInput(query, cls.label);
+        const { plan } = core.control.processInput(executionQuery, cls.label);
         const graph = planGraphToTaskGraph(plan);
         const poolResult = await core.taskPool.submitRun(graph, async (node, ctx) => {
           const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
           return core.tao.run(stepQuery, taoOpts(ctx.traceId, ctx.signal));
         });
-        result = synthesizeTaskPoolAnswer(poolResult, query);
+        result = synthesizeTaskPoolAnswer(poolResult, executionQuery);
       } else if (orchestrationMode === "self-consistency" && core.selfConsistency) {
         const { fulfilled } = await forkJoin(
           Array.from({ length: core.selfConsistency.samples }, (_, i) => i),
-          (i) => core.tao.run(query, taoOpts(`${randomUUID()}-sc${i}`)),
+          (i) => core.tao.run(executionQuery, taoOpts(`${randomUUID()}-sc${i}`)),
           {
             hooks: core.hooks,
             group: "self-consistency",
@@ -453,16 +492,24 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
         );
         result = selectConsistentAnswer(fulfilled, core.selfConsistency.strategy) ?? fulfilled[0]!;
       } else {
-        result = await core.tao.run(query, taoOpts());
+        result = await core.tao.run(executionQuery, taoOpts());
       }
     }
-    if (core.productBehaviorEnabled) {
+    if (inputStructure?.action === "proceed") {
+      result.inputStructure = inputStructure;
+      result.totalTokensSpent += inputStructure.tokensSpent;
+      result.durationMs += inputStructure.durationMs;
+      result.metrics.inputStructuringTokens = inputStructure.tokensSpent;
+      if (inputStructure.mode === "structured") result.metrics.inputStructured = 1;
+      if (inputStructure.mode === "fallback") result.metrics.inputStructuringFallback = 1;
+    }
+    if (core.productBehaviorEnabled && inputStructure?.action !== "clarify") {
       const enforced = await enforceProductBehaviorAnswer({
         query,
         draft: result.finalAnswer,
         searchEvidence: resolveSearchEvidenceStatus(result.trajectory),
         revise: async (instruction) =>
-          core.llm.chat(
+          (runOpts.llm ?? core.llm).chat(
             [
               {
                 role: "system",
@@ -470,7 +517,11 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
               },
               { role: "user", content: instruction },
             ],
-            { temperature: 0, maxTokens: 768 },
+            {
+              temperature: 0,
+              maxTokens: 768,
+              ...(runOpts.signal ? { signal: runOpts.signal } : {}),
+            },
           ),
       });
       result.finalAnswer = enforced.answer;
@@ -480,7 +531,9 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
     await core.memory.recordUserInputAsync(query, labelTags);
     await core.memory.recordAssistantOutputAsync(result.finalAnswer, labelTags);
     if (core.classifier && cls) {
-      await core.classifier.reinforce(query, cls.label, { signal: outcomeSignal(result.status) });
+      await core.classifier.reinforce(executionQuery, cls.label, {
+        signal: outcomeSignal(result.status),
+      });
     }
     if (core.skillLearning) {
       const toolsUsed = [

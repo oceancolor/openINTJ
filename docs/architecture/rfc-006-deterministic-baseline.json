@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "label": "deterministic-scripted-baseline",
   "rfc": "RFC-006",
-  "behaviorVersion": "1.1.0",
+  "behaviorVersion": "1.2.0",
   "date": "2026-07-19",
   "realModelScore": false,
   "runner": "scripted/stub",

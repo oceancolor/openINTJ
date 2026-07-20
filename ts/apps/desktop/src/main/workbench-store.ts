@@ -8,7 +8,7 @@ import type {
   WorkbenchTask,
   WorkbenchWorkspace,
 } from "../shared/ipc-protocol.js";
-import { DEFAULT_DESKTOP_MODEL_PROFILE_ID } from "../shared/ipc-protocol.js";
+import { DEFAULT_DESKTOP_MODEL_PROFILE_ID, InputStructureSchema } from "../shared/ipc-protocol.js";
 
 interface Statement {
   run(...params: unknown[]): { changes: number };
@@ -60,6 +60,8 @@ interface MessageRow {
   trace_id: string | null;
   tokens: number | null;
   status: string | null;
+  message_kind: WorkbenchMessage["messageKind"] | null;
+  input_structure_json: string | null;
   created_at: number;
 }
 
@@ -88,16 +90,23 @@ const conversation = (row: ConversationRow): WorkbenchConversation => ({
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
-const message = (row: MessageRow): WorkbenchMessage => ({
-  id: row.id,
-  conversationId: row.conversation_id,
-  role: row.role,
-  content: row.content,
-  ...(row.trace_id ? { traceId: row.trace_id } : {}),
-  ...(row.tokens !== null ? { tokens: row.tokens } : {}),
-  ...(row.status ? { status: row.status } : {}),
-  createdAt: row.created_at,
-});
+const message = (row: MessageRow): WorkbenchMessage => {
+  const parsedStructure = row.input_structure_json
+    ? InputStructureSchema.safeParse(JSON.parse(row.input_structure_json))
+    : undefined;
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    role: row.role,
+    content: row.content,
+    ...(row.trace_id ? { traceId: row.trace_id } : {}),
+    ...(row.tokens !== null ? { tokens: row.tokens } : {}),
+    ...(row.status ? { status: row.status } : {}),
+    messageKind: row.message_kind ?? "message",
+    ...(parsedStructure?.success ? { inputStructure: parsedStructure.data } : {}),
+    createdAt: row.created_at,
+  };
+};
 
 export interface WorkbenchStore {
   bootstrap(): {
@@ -127,7 +136,11 @@ export interface WorkbenchStore {
   };
   listMessages(conversationId: string, limit?: number): WorkbenchMessage[];
   appendMessage(
-    input: Omit<WorkbenchMessage, "id" | "createdAt"> & { id?: string; createdAt?: number },
+    input: Omit<WorkbenchMessage, "id" | "createdAt" | "messageKind"> & {
+      id?: string;
+      createdAt?: number;
+      messageKind?: WorkbenchMessage["messageKind"];
+    },
   ): WorkbenchMessage;
   close(): void;
 }
@@ -166,12 +179,27 @@ export const createWorkbenchStore = (opts: {
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id),
       role TEXT NOT NULL, content TEXT NOT NULL, trace_id TEXT, tokens INTEGER,
-      status TEXT, created_at INTEGER NOT NULL
+      status TEXT, message_kind TEXT NOT NULL DEFAULT 'message',
+      input_structure_json TEXT, created_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_messages_conversation
       ON messages(conversation_id, created_at ASC);
-    PRAGMA user_version = 1;
+    PRAGMA user_version = 2;
   `);
+  const messageColumns = new Set(
+    (
+      db.prepare("PRAGMA table_info(messages)").all() as Array<{
+        name: string;
+      }>
+    ).map((column) => column.name),
+  );
+  if (!messageColumns.has("message_kind")) {
+    db.exec("ALTER TABLE messages ADD COLUMN message_kind TEXT NOT NULL DEFAULT 'message'");
+  }
+  if (!messageColumns.has("input_structure_json")) {
+    db.exec("ALTER TABLE messages ADD COLUMN input_structure_json TEXT");
+  }
+  db.pragma("user_version = 2");
   db.prepare("UPDATE conversations SET model_profile_id=? WHERE model_profile_id='auto'").run(
     DEFAULT_DESKTOP_MODEL_PROFILE_ID,
   );
@@ -312,8 +340,9 @@ export const createWorkbenchStore = (opts: {
       const createdAt = input.createdAt ?? now();
       db.prepare(
         `INSERT INTO messages(
-          id,conversation_id,role,content,trace_id,tokens,status,created_at
-        ) VALUES(?,?,?,?,?,?,?,?)`,
+          id,conversation_id,role,content,trace_id,tokens,status,message_kind,
+          input_structure_json,created_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?)`,
       ).run(
         messageId,
         input.conversationId,
@@ -322,6 +351,8 @@ export const createWorkbenchStore = (opts: {
         input.traceId ?? null,
         input.tokens ?? null,
         input.status ?? null,
+        input.messageKind ?? "message",
+        input.inputStructure ? JSON.stringify(input.inputStructure) : null,
         createdAt,
       );
       db.prepare("UPDATE conversations SET updated_at=? WHERE id=?").run(

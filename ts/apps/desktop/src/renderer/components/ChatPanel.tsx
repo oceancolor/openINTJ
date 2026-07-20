@@ -1,10 +1,62 @@
 import React from "react";
-import type { ModelProfile } from "../../shared/ipc-protocol.js";
+import type { InputStructure, ModelProfile } from "../../shared/ipc-protocol.js";
 
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
+  messageKind?: "message" | "answer" | "clarification";
+  inputStructure?: InputStructure;
 }
+
+const UnderstandingCard: React.FC<{ value: InputStructure }> = ({ value }) => {
+  if (value.mode === "pass-through") return null;
+  const { structure } = value;
+  const rows = [
+    ["目标", structure.goal ? [structure.goal] : []],
+    ["关系", structure.relations],
+    ["约束", structure.constraints],
+    ["交付物", structure.deliverables],
+    ["依赖", structure.dependencies],
+    ["假设", structure.assumptions],
+  ] as const;
+  return (
+    <details
+      open={value.action === "clarify"}
+      className="mb-2 rounded border border-indigo-500/40 bg-indigo-950/30 p-2"
+      data-testid="understanding-card"
+    >
+      <summary className="cursor-pointer text-xs font-medium text-indigo-200">
+        任务理解
+        <span className="ml-2 text-gray-400">
+          {value.action === "clarify" ? "等待补充" : "已自动继续"}
+        </span>
+      </summary>
+      <div className="mt-2 space-y-1 text-xs text-gray-300">
+        {rows.map(([label, items]) =>
+          items.length > 0 ? (
+            <div key={label}>
+              <span className="text-gray-500">{label}：</span>
+              {items.join("；")}
+            </div>
+          ) : null,
+        )}
+        {value.questions.length > 0 && (
+          <div className="mt-2 rounded bg-amber-950/40 p-2 text-amber-100">
+            <div className="font-medium">请补充：</div>
+            <ol className="list-decimal pl-5">
+              {value.questions.map((question) => (
+                <li key={question}>{question}</li>
+              ))}
+            </ol>
+          </div>
+        )}
+        {value.mode === "fallback" && (
+          <div className="text-amber-300">结构化未完成，已按原始输入继续执行。</div>
+        )}
+      </div>
+    </details>
+  );
+};
 
 export const ChatPanel: React.FC<{
   messages: ChatMessage[];
@@ -54,6 +106,7 @@ export const ChatPanel: React.FC<{
           messages.map((m, i) => (
             <div
               key={i}
+              data-message-kind={m.messageKind ?? "message"}
               className={`max-w-[80%] px-3 py-2 rounded-lg whitespace-pre-wrap text-sm ${
                 m.role === "user"
                   ? "ml-auto bg-blue-600 text-white"
@@ -62,7 +115,8 @@ export const ChatPanel: React.FC<{
                     : "mx-auto text-xs text-gray-500"
               }`}
             >
-              {m.content}
+              {m.inputStructure && <UnderstandingCard value={m.inputStructure} />}
+              {m.messageKind !== "clarification" && m.content}
             </div>
           ))
         )}

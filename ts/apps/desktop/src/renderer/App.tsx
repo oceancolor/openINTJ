@@ -72,7 +72,14 @@ export const App = (): JSX.Element => {
       return;
     }
     void window.openintj.workbenchMessages(activeConversationId).then((entries) => {
-      setMessages(entries.map(({ role, content }) => ({ role, content })));
+      setMessages(
+        entries.map(({ role, content, messageKind, inputStructure }) => ({
+          role,
+          content,
+          messageKind,
+          ...(inputStructure ? { inputStructure } : {}),
+        })),
+      );
       setTrajectory([]);
     });
   }, [activeConversationId]);
@@ -148,7 +155,15 @@ export const App = (): JSX.Element => {
         ...(activeConversationId ? { conversationId: activeConversationId } : {}),
         ...(activeConversation ? { modelProfileId: activeConversation.modelProfileId } : {}),
       });
-      setMessages((m) => [...m, { role: "assistant", content: res.finalAnswer }]);
+      setMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          content: res.finalAnswer,
+          messageKind: res.inputStructure?.action === "clarify" ? "clarification" : "answer",
+          ...(res.inputStructure ? { inputStructure: res.inputStructure } : {}),
+        },
+      ]);
     } catch (e) {
       setMessages((m) => [
         ...m,

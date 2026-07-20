@@ -11,7 +11,7 @@ TaskPool run。对话独立保存模型 Profile 与消息历史，切换模型�
 Workspace(rootPath, dataDir?)
   └─ Task(status, taskPoolRunId?)
        └─ Conversation(modelProfileId)
-            └─ Message(role, content, traceId?, tokens?, status)
+            └─ Message(role, content, messageKind?, inputStructure?, traceId?, tokens?, status)
 ```
 
 - `workbench.sqlite` 位于 Electron `userData`；开发用
@@ -20,6 +20,9 @@ Workspace(rootPath, dataDir?)
   与 TaskPool 数据。
 - 消息查询有界；执行时把既有 user/assistant 消息作为 Tao/ReAct history。
 - memory preflight 通过 `workspace:* / task:* / conversation:*` 标签限定上下文。
+- RFC-008：CHAT 在 classifier 前做自适应输入结构化。消息可带
+  `messageKind=clarification|answer` 与 `inputStructure`（任务理解卡）；原始用户文本不改写。
+  schema `user_version=2` 对旧库做 `message_kind` / `input_structure_json` 列迁移。
 
 ## 模型 Profile
 

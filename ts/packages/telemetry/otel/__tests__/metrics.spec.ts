@@ -313,6 +313,40 @@ describe("attachOtelToHooks — metrics", () => {
     otel.dispose();
   });
 
+  it("records input structuring outcomes without raw text attributes", async () => {
+    const bus = new HookBus();
+    const otel = attachOtelToHooks(bus);
+
+    await bus.emit("event.INPUT_STRUCTURE_COMPLETED", {
+      action: "proceed",
+      mode: "structured",
+      ambiguityBand: "low",
+      tokensSpent: 42,
+      durationMs: 12,
+    });
+    await bus.emit("event.INPUT_STRUCTURE_CLARIFICATION", {
+      action: "clarify",
+      mode: "clarification",
+      ambiguityBand: "high",
+      tokensSpent: 18,
+      durationMs: 9,
+      questionCount: 2,
+    });
+    await bus.emit("event.INPUT_STRUCTURE_FALLBACK", {
+      reason: "invalid_json",
+      durationMs: 3,
+    });
+
+    const series = (await flush()).filter((s) => s.name === "openintj.input.structure");
+    expect(series.reduce((sum, item) => sum + item.sum, 0)).toBe(3);
+    expect(series.some((s) => s.attrs["outcome"] === "completed")).toBe(true);
+    expect(series.some((s) => s.attrs["outcome"] === "clarification")).toBe(true);
+    expect(series.some((s) => s.attrs["outcome"] === "fallback")).toBe(true);
+    expect(JSON.stringify(series)).not.toContain("invalid_json");
+
+    otel.dispose();
+  });
+
   it("records deterministic trait signals with explicit semantics", async () => {
     const bus = new HookBus();
     const otel = attachOtelToHooks(bus);
