@@ -100,6 +100,19 @@ importers:
       '@lancedb/lancedb':
         specifier: ^0.13.0
         version: 0.13.0(apache-arrow@17.0.0)
+      apache-arrow:
+        specifier: ^17.0.0
+        version: 17.0.0
+      better-sqlite3:
+        specifier: ^11.0.0
+        version: 11.10.0
+      electron-updater:
+        specifier: ^6.3.9
+        version: 6.8.3
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
       '@openintj/classifier':
         specifier: workspace:*
         version: link:../../packages/classifier
@@ -151,19 +164,6 @@ importers:
       '@openintj/telemetry-otel':
         specifier: workspace:*
         version: link:../../packages/telemetry/otel
-      apache-arrow:
-        specifier: ^17.0.0
-        version: 17.0.0
-      better-sqlite3:
-        specifier: ^11.0.0
-        version: 11.10.0
-      electron-updater:
-        specifier: ^6.3.9
-        version: 6.8.3
-      zod:
-        specifier: ^3.23.8
-        version: 3.25.76
-    devDependencies:
       '@playwright/test':
         specifier: ^1.60.0
         version: 1.60.0
@@ -504,6 +504,9 @@ importers:
       '@openintj/llm-ollama':
         specifier: workspace:*
         version: link:../ollama
+      '@openintj/llm-openai-compat':
+        specifier: workspace:*
+        version: link:../openai-compat
     devDependencies:
       rimraf:
         specifier: ^6.0.1
@@ -1318,7 +1321,6 @@ packages:
   '@lancedb/lancedb@0.13.0':
     resolution: {integrity: sha512-QSzYvswjroH3aREKaqV6eXENo4zUAHLEPBrb2YCWNWZi/QhA8mbjJcB4hEnqQh55q4qgoqG6tuMsx4dd//mTiQ==}
     engines: {node: '>= 18'}
-    cpu: [x64, arm64]
     os: [darwin, linux, win32]
     peerDependencies:
       apache-arrow: '>=13.0.0 <=17.0.0'
