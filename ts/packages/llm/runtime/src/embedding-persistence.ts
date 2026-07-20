@@ -1,11 +1,13 @@
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
-import type { EmbeddingProvider } from "@openintj/core";
+import type { EmbeddingProvider, HookBus } from "@openintj/core";
 import {
   assertEmbeddingFingerprint,
+  canonicalEmbeddingFingerprint,
   readEmbeddingFingerprint,
   writeEmbeddingFingerprint,
 } from "./embedding-fingerprint.js";
+import { ModelRuntimeError } from "./errors.js";
 import { resolveEmbedder } from "./resolve-embedder.js";
 import type { EmbeddingFingerprint, ResolveEmbedOpts } from "./types.js";
 
@@ -41,10 +43,54 @@ export const validateEmbeddingFingerprintForDataDir = async (
   dataDir: string,
   expected: EmbeddingFingerprint,
   fragmentCount?: number,
+  opts: { hooks?: HookBus } = {},
 ): Promise<void> => {
-  const stored = await readEmbeddingFingerprint(dataDir);
+  const expectedValue = canonicalEmbeddingFingerprint(expected);
+  let stored: EmbeddingFingerprint | undefined;
+  try {
+    stored = await readEmbeddingFingerprint(dataDir);
+  } catch (error) {
+    const structured =
+      error instanceof ModelRuntimeError
+        ? error
+        : new ModelRuntimeError({
+            code: "EMBEDDING_FINGERPRINT_MISSING",
+            message: error instanceof Error ? error.message : String(error),
+            retriable: false,
+            cause: error,
+          });
+    await opts.hooks?.emit("model.embedding.fingerprint.rejected", {
+      expected: expectedValue,
+      code: "EMBEDDING_FINGERPRINT_MISSING",
+    });
+    throw structured;
+  }
   if (stored) {
-    assertEmbeddingFingerprint(expected, stored);
+    const storedValue = canonicalEmbeddingFingerprint(stored);
+    try {
+      assertEmbeddingFingerprint(expected, stored);
+    } catch (error) {
+      const structured =
+        error instanceof ModelRuntimeError
+          ? error
+          : new ModelRuntimeError({
+              code: "EMBEDDING_FINGERPRINT_MISMATCH",
+              message: error instanceof Error ? error.message : String(error),
+              retriable: false,
+              cause: error,
+            });
+      await opts.hooks?.emit("model.embedding.fingerprint.rejected", {
+        expected: expectedValue,
+        stored: storedValue,
+        code: structured.code as "EMBEDDING_FINGERPRINT_MISMATCH",
+      });
+      throw structured;
+    }
+    await opts.hooks?.emit("model.embedding.fingerprint.checked", {
+      expected: expectedValue,
+      stored: storedValue,
+      result: "matched",
+    });
     return;
   }
   let hasExistingData = (fragmentCount ?? 0) > 0;
@@ -63,9 +109,21 @@ export const validateEmbeddingFingerprintForDataDir = async (
     }
   }
   if (hasExistingData) {
-    throw new Error(
-      "EMBEDDING_FINGERPRINT_MISSING: 持久化目录已有数据但缺少 embedding 指纹。请恢复原配置、使用新 OPENINTJ_DATA_DIR 或显式清空后重建。",
-    );
+    const error = new ModelRuntimeError({
+      code: "EMBEDDING_FINGERPRINT_MISSING",
+      message:
+        "EMBEDDING_FINGERPRINT_MISSING: 持久化目录已有数据但缺少 embedding 指纹。请恢复原配置、使用新 OPENINTJ_DATA_DIR 或显式清空后重建。",
+      retriable: false,
+    });
+    await opts.hooks?.emit("model.embedding.fingerprint.rejected", {
+      expected: expectedValue,
+      code: "EMBEDDING_FINGERPRINT_MISSING",
+    });
+    throw error;
   }
   await writeEmbeddingFingerprint(dataDir, expected);
+  await opts.hooks?.emit("model.embedding.fingerprint.checked", {
+    expected: expectedValue,
+    result: "created",
+  });
 };

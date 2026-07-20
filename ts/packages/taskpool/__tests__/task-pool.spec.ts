@@ -5,7 +5,11 @@ import { z } from "zod";
 import { AgentInstancePool } from "../src/agent-instance-pool.js";
 import { Channel } from "../src/channel.js";
 import { planGraphToTaskGraph } from "../src/plan-graph-adapter.js";
-import { resolveOrchestrationMode, resolveTaskPoolRecoveryPolicy } from "../src/synthesizer.js";
+import {
+  resolveOrchestrationMode,
+  resolveTaskPoolActivation,
+  resolveTaskPoolRecoveryPolicy,
+} from "../src/synthesizer.js";
 import { TaskGraphValidationError, TaskPool, topologicalTaskOrder } from "../src/task-pool.js";
 import { MemoryTaskStore, type StoredTaskRun, type TaskStore } from "../src/task-store.js";
 
@@ -438,6 +442,43 @@ describe("TaskPool MVD", () => {
         OPENINTJ_TASK_POOL_RECOVERY: "resume",
       }),
     ).toBe("cancel");
+  });
+
+  it("makes the classifier prerequisite explicit in activation status", () => {
+    expect(resolveTaskPoolActivation(false, false)).toMatchObject({
+      requested: false,
+      active: false,
+      reason: "disabled",
+    });
+    expect(resolveTaskPoolActivation(true, false)).toMatchObject({
+      requested: true,
+      active: false,
+      classifierRequired: true,
+      reason: "classifier_required",
+    });
+    expect(resolveTaskPoolActivation(true, true)).toMatchObject({
+      active: true,
+      classifierEnabled: true,
+      reason: "ready",
+    });
+    expect(
+      resolveTaskPoolActivation(true, true, {
+        persistence: "sqlite",
+        recovery: "resume",
+        recoverySummary: {
+          policy: "resume",
+          found: 1,
+          resumed: 1,
+          completed: 1,
+          cancelled: 0,
+          failed: 0,
+        },
+      }),
+    ).toMatchObject({
+      persistence: "sqlite",
+      recovery: "resume",
+      recoverySummary: { found: 1, resumed: 1 },
+    });
   });
 });
 

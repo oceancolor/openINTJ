@@ -2,7 +2,8 @@
   "schemaVersion": 1,
   "label": "deterministic-scripted-baseline",
   "rfc": "RFC-006",
-  "date": "2026-07-14",
+  "behaviorVersion": "1.1.0",
+  "date": "2026-07-19",
   "realModelScore": false,
   "runner": "scripted/stub",
   "scenarioCount": 9,
@@ -16,5 +17,5 @@
     "T3 uses structured toolsUsed evidence containing search; finalAnswer-only runners retain a conservative compatibility fallback."
   ],
   "liveModelCommand": "RUN_TRAIT_EVAL=1 OPENINTJ_LLM_PROVIDER=ollama pnpm --filter @openintj/cli test -- trait.harness",
-  "liveModelBlocker": "Requires a reachable configured live model runtime (for example a running Ollama service/model or valid provider credentials)."
+  "liveModelStatus": "qwen2.5:0.5b treatment passed 9/9 twice; control passed 5/9 and 4/9. T3 used mock search fallback and is not factual-quality evidence."
 }

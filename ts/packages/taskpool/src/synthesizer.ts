@@ -1,6 +1,6 @@
 import type { TaoResult } from "@openintj/core";
 import { TaskType, type TaskTypeType } from "@openintj/core";
-import type { TaskRunResult } from "./task-pool.js";
+import type { TaskPoolRecoverySummary, TaskRunResult } from "./task-pool.js";
 
 /** 把 TaskPool 各步 TaoResult 合成单次 run 输出（MVD reducer）。 */
 export const synthesizeTaskPoolAnswer = (
@@ -43,6 +43,41 @@ export const resolveTaskPoolEnabled = (
   if (explicit !== undefined) return explicit;
   return env["OPENINTJ_TASK_POOL"] === "1";
 };
+
+export interface TaskPoolActivationStatus {
+  requested: boolean;
+  active: boolean;
+  classifierRequired: true;
+  classifierEnabled: boolean;
+  reason: "disabled" | "classifier_required" | "ready";
+  eligibleTaskTypes: readonly ["planning", "analysis"];
+  precedence: "taskpool-before-self-consistency";
+  persistence: "none" | "sqlite";
+  recovery: "unsupported" | TaskPoolRecoveryPolicy;
+  recoverySummary?: TaskPoolRecoverySummary;
+}
+
+/** Public activation contract: routing requires the classifier even when the pool is constructed. */
+export const resolveTaskPoolActivation = (
+  requested: boolean,
+  classifierEnabled: boolean,
+  capabilities: {
+    persistence?: TaskPoolActivationStatus["persistence"];
+    recovery?: TaskPoolActivationStatus["recovery"];
+    recoverySummary?: TaskPoolRecoverySummary;
+  } = {},
+): TaskPoolActivationStatus => ({
+  requested,
+  active: requested && classifierEnabled,
+  classifierRequired: true,
+  classifierEnabled,
+  reason: !requested ? "disabled" : classifierEnabled ? "ready" : "classifier_required",
+  eligibleTaskTypes: ["planning", "analysis"],
+  precedence: "taskpool-before-self-consistency",
+  persistence: capabilities.persistence ?? "none",
+  recovery: capabilities.recovery ?? "unsupported",
+  ...(capabilities.recoverySummary ? { recoverySummary: capabilities.recoverySummary } : {}),
+});
 
 export type TaskPoolRecoveryPolicy = "cancel" | "resume";
 

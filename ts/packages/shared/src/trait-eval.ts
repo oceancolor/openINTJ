@@ -72,10 +72,10 @@ export const evaluateTraitAb = async (
   controlRun: (query: string) => Promise<RunnerOutput> | RunnerOutput,
   scenarios: readonly TraitScenario[] = TRAIT_SCENARIOS,
 ): Promise<TraitAbReport> => {
-  const [treatment, control] = await Promise.all([
-    evaluateTraits(treatmentRun, scenarios),
-    evaluateTraits(controlRun, scenarios),
-  ]);
+  // Provider-backed evaluations run sequentially so the two cohorts do not
+  // contend for the same local model/GPU and turn timeouts into false quality failures.
+  const treatment = await evaluateTraits(treatmentRun, scenarios);
+  const control = await evaluateTraits(controlRun, scenarios);
   return {
     treatment,
     control,

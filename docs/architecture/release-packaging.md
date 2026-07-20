@@ -1,7 +1,8 @@
 # 打包发布 & 自动更新（#6）
 
-> 状态：**实现已就绪**（electron-builder 配置 + electron-updater + CI 发布工作流 + renderer 更新条，全部有测试/接线）。
-> 剩余为**运维手动项**（品牌图标、代码签名、首个正式 release），见文末「已知手动缺口」。
+> 状态：**未签名 Windows NSIS 已于 2026-07-19 本机产出**（electron-builder 配置 +
+> electron-updater + CI 发布工作流 + renderer 更新条均已接线）。
+> 签名正式发布仍有运维阻塞（品牌图标、证书 secrets、合入 main、正式 tag）。
 
 桌面端（`ts/apps/desktop`）用 **electron-builder** 出安装包、**electron-updater** 从 GitHub Release 拉更新。
 
@@ -31,6 +32,12 @@ pnpm exec electron-builder --config electron-builder.yml --win   # 或 --mac / -
 ```
 
 不发布（只出本地安装包）时**不要**带 `--publish always`，也无需 `GH_TOKEN`。
+Windows 若未开启开发者模式 / 创建符号链接权限，electron-builder 解压 winCodeSign 会失败；仅验证
+未签名包时可临时追加 `--config.win.signAndEditExecutable=false`，正式签名构建不可使用该开关。
+
+pnpm workspace 包由 electron-vite 打进主进程 bundle，并在 desktop 中列为 devDependencies；
+不要把 `@openintj/*` 改回 production dependencies，否则 electron-builder 会沿 workspace symlink
+走出 `apps/desktop`，在 asar 阶段报 `must be under ... apps/desktop`。
 
 ## 三、切一个正式 release（CI）
 
@@ -42,7 +49,11 @@ pnpm exec electron-builder --config electron-builder.yml --win   # 或 --mac / -
    git push origin v3.0.0
    ```
 4. `release.yml` 触发：windows-latest + macos-latest 各自 `electron-builder --publish always`，用内置 `GITHUB_TOKEN`
-   上传安装包 + `latest.yml` / `latest-mac.yml` 到对应 GitHub Release。
+   上传安装包 + `latest.yml` / `latest-mac.yml` 到对应 GitHub Release；签名环境由下列 repository
+   secrets 显式映射：
+   - Windows：`WIN_CSC_LINK`、`WIN_CSC_KEY_PASSWORD`
+   - macOS：`MAC_CSC_LINK`、`MAC_CSC_KEY_PASSWORD`、`APPLE_ID`、
+     `APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID`
 5. 已安装的客户端下次启动（延迟 4s）自动检查该 Release 并后台下载；用户可在更新条点「重启安装」。
 
 `workflow_dispatch` 也能手动触发（用于验证，不打 tag 时 version 取 package.json）。
@@ -56,8 +67,11 @@ pnpm exec electron-builder --config electron-builder.yml --win   # 或 --mac / -
 
 - **品牌图标**：`ts/apps/desktop/resources/` 目前只有 `.gitkeep`。放 `icon.png`（≥512²，建议 1024²）后 electron-builder
   会自动派生 Win `.ico` / mac `.icns`；不放则用 Electron 默认图标（能出包，仅不带品牌）。
-- **代码签名**：当前未签名 → Windows SmartScreen / macOS Gatekeeper 会告警。
-  - Win：配 `CSC_LINK` / `CSC_KEY_PASSWORD`（或 Azure Trusted Signing）。
-  - mac：`hardenedRuntime: true` 已开，但仍需 Apple 证书 + `notarize`（配 `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID`）。
+- **代码签名**：2026-07-19 `gh secret list` 为空；当前未签名 → Windows SmartScreen /
+  macOS Gatekeeper 会告警。
+  - Win：配置 `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD`（或另行接入 Azure Trusted Signing）。
+  - mac：`hardenedRuntime` 与 `notarize` 已开，仍需上节列出的 Apple 证书及 notarization secrets。
 - **Linux CI**：`electron-builder.yml` 声明了 Linux AppImage，但 `release.yml` 矩阵只跑 win/mac；Linux 目前只支持本地 `--linux` 打包。
-- **首个正式 release 尚未切**：以上流程已就绪但未在真实 tag 上跑通端到端（原生模块跨平台打包可能需按 §一「ABI 对齐」微调）。
+- **首个正式 release 尚未切**：GitHub 当前无 Release；当前实现分支仍需提交、合入 `main`，
+  将 desktop `version` 与 tag 对齐后才能进行签名端到端验证。Windows 未签名安装包
+  `OpenINTJ-3.0.0-alpha.0-x64.exe` 已本机产出，macOS 跨平台打包仍需由 CI 验证。

@@ -22,7 +22,7 @@ export interface ModelRuntimeErrorInit {
 const SECRET_PATTERNS = [
   /\bBearer\s+[^\s,;]+/gi,
   /\b(?:api[_-]?key|authorization|token)\s*[:=]\s*[^\s,;]+/gi,
-  /\b(?:ghp|github_pat|sk)-[A-Za-z0-9_-]+\b/g,
+  /\b(?:ghp_|github_pat_|sk-)[A-Za-z0-9_-]+\b/g,
 ];
 
 /** Error text safe for status, hooks, logs, and telemetry attributes. */

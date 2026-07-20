@@ -129,9 +129,12 @@ describe("@openintj/shared env loader", () => {
     const s = summarizeLlmEnv({
       LLM_PROVIDER: "ollama",
       OLLAMA_MODEL: "qwen2:14b",
+      OLLAMA_EMBED_MODEL: "nomic-custom",
     } as NodeJS.ProcessEnv);
     expect(s.provider).toBe("ollama");
     expect(s.summary).toContain("qwen2:14b");
+    expect(s.ollama.embedModel).toBe("nomic-custom");
+    expect(s.summary).toContain("embedModel=nomic-custom");
   });
 
   it("summarizeLlmEnv mock 分支不暴露任何 url", () => {

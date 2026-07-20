@@ -145,6 +145,18 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
   const cTaskPoolRetries = c("openintj.taskpool.retries", "TaskPool task 重试次数");
   const cTaskPoolTimeouts = c("openintj.taskpool.timeouts", "TaskPool task 超时次数");
   const cTaskPoolCancellations = c("openintj.taskpool.cancellations", "TaskPool task 取消次数");
+  const cModelProviderProbes = c("openintj.model.provider.probes", "Model provider 健康探测次数");
+  const cModelProviderSelected = c("openintj.model.provider.selected", "Model provider 选择次数");
+  const cModelProviderFallbacks = c("openintj.model.provider.fallbacks", "Model provider 回退次数");
+  const cModelProviderErrors = c("openintj.model.provider.errors", "Model provider 错误次数");
+  const cEmbeddingFingerprintChecked = c(
+    "openintj.model.embedding.fingerprint.checked",
+    "Embedding 指纹通过或创建次数",
+  );
+  const cEmbeddingFingerprintRejected = c(
+    "openintj.model.embedding.fingerprint.rejected",
+    "Embedding 指纹拒绝次数",
+  );
 
   const getTrace = (traceId: string): TraceState => {
     let st = traces.get(traceId);
@@ -559,6 +571,77 @@ export const attachOtelToHooks = (bus: HookBus, opts: AttachOtelOpts = {}): Atta
       "event.SKILL_PROPOSED",
       safe<HookEventMap["event.SKILL_PROPOSED"]>((payload) => {
         cSkillProposed?.add(1, { skill: payload.skillId });
+      }),
+    ),
+  );
+
+  offs.push(
+    bus.on(
+      "model.provider.probe",
+      safe<HookEventMap["model.provider.probe"]>((payload) => {
+        cModelProviderProbes?.add(1, {
+          channel: payload.channel,
+          provider: payload.provider,
+          outcome: payload.ok ? "ok" : "error",
+          ...(payload.errorCode ? { error_code: payload.errorCode } : {}),
+        });
+        if (enableTraces) {
+          const { span } = startSpan("openintj.model.provider.probe");
+          span.setAttribute("model.channel", payload.channel);
+          span.setAttribute("model.provider", payload.provider);
+          span.setAttribute("model.name", payload.model);
+          span.setAttribute("model.probe.ok", payload.ok);
+          span.setAttribute("model.probe.duration_ms", payload.durationMs);
+          if (payload.errorCode) span.setAttribute("error.type", payload.errorCode);
+          if (!payload.ok) span.setStatus({ code: SpanStatusCode.ERROR });
+          span.end();
+          endedCount++;
+        }
+      }),
+    ),
+    bus.on(
+      "model.provider.selected",
+      safe<HookEventMap["model.provider.selected"]>((payload) => {
+        cModelProviderSelected?.add(1, {
+          channel: payload.channel,
+          requested_provider: payload.requestedProvider,
+          provider: payload.provider,
+          mode: payload.mode,
+        });
+      }),
+    ),
+    bus.on(
+      "model.provider.fallback",
+      safe<HookEventMap["model.provider.fallback"]>((payload) => {
+        cModelProviderFallbacks?.add(1, {
+          channel: payload.channel,
+          from: payload.from,
+          to: payload.to,
+          error_code: payload.errorCode,
+        });
+      }),
+    ),
+    bus.on(
+      "model.provider.error",
+      safe<HookEventMap["model.provider.error"]>((payload) => {
+        cModelProviderErrors?.add(1, {
+          channel: payload.channel,
+          provider: payload.provider,
+          error_code: payload.code,
+          retriable: String(payload.retriable),
+        });
+      }),
+    ),
+    bus.on(
+      "model.embedding.fingerprint.checked",
+      safe<HookEventMap["model.embedding.fingerprint.checked"]>((payload) => {
+        cEmbeddingFingerprintChecked?.add(1, { result: payload.result });
+      }),
+    ),
+    bus.on(
+      "model.embedding.fingerprint.rejected",
+      safe<HookEventMap["model.embedding.fingerprint.rejected"]>((payload) => {
+        cEmbeddingFingerprintRejected?.add(1, { error_code: payload.code });
       }),
     ),
   );

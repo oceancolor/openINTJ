@@ -45,6 +45,7 @@ export interface EmbedRuntimeStatus {
   model: string;
   dimension: number;
   mode: ProviderMode;
+  status: "connected" | "degraded";
   fallbackFrom?: string;
   lastError?: RuntimeErrorInfo;
   attempts: ProviderAttempt[];

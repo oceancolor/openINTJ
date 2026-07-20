@@ -1,5 +1,6 @@
 import { SimpleEmbedder } from "@openintj/core";
 import { OllamaEmbedder, loadOllamaEmbedderConfigFromEnv } from "@openintj/embed-ollama";
+import { ModelRuntimeError, runtimeErrorInfo, sanitizeModelRuntimeErrorMessage } from "./errors.js";
 import { probeOllama } from "./health.js";
 import type {
   EmbedProviderId,
@@ -42,6 +43,7 @@ const simpleDim = (env: NodeJS.ProcessEnv): number => {
  */
 export const resolveEmbedder = async (opts: ResolveEmbedOpts = {}): Promise<ResolvedEmbed> => {
   const env = opts.env ?? process.env;
+  const now = opts.now ?? Date.now;
   const requested = parseEmbedProvider(env, opts);
   const attempts: ProviderAttempt[] = [];
 
@@ -56,16 +58,18 @@ export const resolveEmbedder = async (opts: ResolveEmbedOpts = {}): Promise<Reso
 
   if (requested === "simple" || requested === "mock") {
     const dim = simpleDim(env);
-    attempts.push({ provider: "simple", ok: true });
+    attempts.push({ provider: "simple", outcome: "selected", durationMs: 0, ok: true });
     return finish(new SimpleEmbedder(dim), {
       provider: "simple-sha256",
       model: `dim${dim}`,
       dimension: dim,
       mode: requested === "mock" ? "mock" : "live",
+      status: "connected",
     });
   }
 
   if (requested === "xenova") {
+    const startedAt = now();
     try {
       const { XenovaEmbedder } = (await import("@openintj/embed-xenova")) as {
         XenovaEmbedder: new () => import("@openintj/core").EmbeddingProvider;
@@ -73,52 +77,105 @@ export const resolveEmbedder = async (opts: ResolveEmbedOpts = {}): Promise<Reso
       const embedder = new XenovaEmbedder();
       await embedder.embed("warmup");
       const dim = embedder.dimension;
-      attempts.push({ provider: "xenova", ok: true });
+      attempts.push({
+        provider: "xenova",
+        outcome: "selected",
+        durationMs: Math.max(0, now() - startedAt),
+        ok: true,
+      });
       return finish(embedder, {
         provider: embedder.name,
         model: "xenova",
         dimension: dim,
         mode: "live",
+        status: "connected",
       });
     } catch (e) {
+      const message = sanitizeModelRuntimeErrorMessage(e);
       attempts.push({
         provider: "xenova",
+        outcome: "failed",
+        durationMs: Math.max(0, now() - startedAt),
+        errorCode: "MODEL_PROVIDER_UNAVAILABLE",
+        errorMessage: message,
         ok: false,
-        reason: e instanceof Error ? e.message : String(e),
+        reason: message,
       });
-      throw new Error(`EMBED_PROVIDER=xenova 失败: ${e instanceof Error ? e.message : String(e)}`);
+      throw new ModelRuntimeError({
+        code: "MODEL_PROVIDER_UNAVAILABLE",
+        message: `EMBED_PROVIDER=xenova 失败: ${message}`,
+        retriable: true,
+        provider: "xenova",
+        cause: e,
+      });
     }
   }
 
   if (requested === "ollama") {
     const cfg = loadOllamaEmbedderConfigFromEnv(env);
+    const startedAt = now();
     const probe = await probeOllama(cfg.endpoint, 3000, cfg.model, opts.fetch);
+    const code = probe.reason?.startsWith("model_not_installed:")
+      ? "MODEL_NOT_INSTALLED"
+      : "MODEL_PROVIDER_UNAVAILABLE";
     attempts.push({
       provider: "ollama",
+      outcome: probe.ok
+        ? "selected"
+        : probe.reason?.startsWith("model_not_installed:")
+          ? "model_missing"
+          : "unhealthy",
+      durationMs: Math.max(0, now() - startedAt),
+      ...(!probe.ok ? { errorCode: code } : {}),
+      ...(probe.reason ? { errorMessage: sanitizeModelRuntimeErrorMessage(probe.reason) } : {}),
       ok: probe.ok,
       ...(probe.reason ? { reason: probe.reason } : {}),
     });
     if (!probe.ok) {
-      throw new Error(`Embed provider 'ollama' 不可达: ${probe.reason ?? "unknown"}`);
+      throw new ModelRuntimeError({
+        code,
+        message: `Embed provider 'ollama' 不可用: ${probe.reason ?? "unknown"}`,
+        retriable: true,
+        provider: "ollama",
+      });
     }
     const embedder = new OllamaEmbedder(cfg);
     await embedder.embed("warmup");
     const dim = embedder.dimension;
-    if (dim <= 0) throw new Error("OllamaEmbedder: could not infer dimension");
-    attempts.push({ provider: "ollama-embed", ok: true });
+    if (dim <= 0) {
+      throw new ModelRuntimeError({
+        code: "EMBEDDING_DIMENSION_UNKNOWN",
+        message: "OllamaEmbedder: could not infer dimension",
+        retriable: false,
+        provider: "ollama",
+      });
+    }
     return finish(embedder, {
       provider: "ollama",
       model: cfg.model,
       dimension: dim,
       mode: "live",
+      status: "connected",
     });
   }
 
   // auto
   const cfg = loadOllamaEmbedderConfigFromEnv(env);
+  const startedAt = now();
   const probe = await probeOllama(cfg.endpoint, 3000, cfg.model, opts.fetch);
+  const probeCode = probe.reason?.startsWith("model_not_installed:")
+    ? "MODEL_NOT_INSTALLED"
+    : "MODEL_PROVIDER_UNAVAILABLE";
   attempts.push({
     provider: "ollama",
+    outcome: probe.ok
+      ? "selected"
+      : probe.reason?.startsWith("model_not_installed:")
+        ? "model_missing"
+        : "unhealthy",
+    durationMs: Math.max(0, now() - startedAt),
+    ...(!probe.ok ? { errorCode: probeCode } : {}),
+    ...(probe.reason ? { errorMessage: sanitizeModelRuntimeErrorMessage(probe.reason) } : {}),
     ok: probe.ok,
     ...(probe.reason ? { reason: probe.reason } : {}),
   });
@@ -132,25 +189,44 @@ export const resolveEmbedder = async (opts: ResolveEmbedOpts = {}): Promise<Reso
         model: cfg.model,
         dimension: dim,
         mode: "live",
+        status: "connected",
       });
     } catch (e) {
+      const message = sanitizeModelRuntimeErrorMessage(e);
       attempts.push({
         provider: "ollama-embed",
+        outcome: "failed",
+        durationMs: 0,
+        errorCode: "MODEL_REQUEST_FAILED",
+        errorMessage: message,
         ok: false,
-        reason: e instanceof Error ? e.message : String(e),
+        reason: message,
       });
     }
   }
 
   const dim = simpleDim(env);
-  attempts.push({ provider: "simple", ok: true, reason: "ollama_unavailable" });
+  attempts.push({
+    provider: "simple",
+    outcome: "selected",
+    durationMs: 0,
+    ok: true,
+    reason: "ollama_unavailable",
+  });
+  const fallbackError = new ModelRuntimeError({
+    code: probeCode,
+    message: probe.reason ?? "ollama embedding unavailable",
+    retriable: true,
+    provider: "ollama",
+  });
   return finish(new SimpleEmbedder(dim), {
     provider: "simple-sha256",
     model: `dim${dim}`,
     dimension: dim,
     mode: "mock",
+    status: "degraded",
     fallbackFrom: "ollama",
-    ...(probe.reason ? { lastError: probe.reason } : {}),
+    lastError: runtimeErrorInfo(fallbackError, now()),
   });
 };
 

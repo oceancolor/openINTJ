@@ -56,14 +56,20 @@
   query 全部命中满分（语料小，真实大语料不会恒为 1.0，但方向明确：语义项把关键词兜底不到的近义/改写补齐）。
 - 首跑下载 `~80MB` 权重到 HF 缓存（`~/.cache/huggingface` 或 `XENOVA_CACHE_DIR`）；本次 3 个用例合计 ~14s（含冷加载）。
 
-### `ollama`（待补）
+### `ollama`（`nomic-embed-text`，768 维，本机实跑 2026-07-19）
 
-- 现状：本机 **未运行** ollama 服务（本次 `RUN_EMBED_COMPARE=1` 实跑时 ollama 分支 `fetch failed` 被 try/catch 跳过）。
-- 预期：`nomic-embed-text`（768 维）同为真神经句向量，纯 cosine 应与 xenova 同一量级（显著高于 simple 的 0.396）。
-- 待补：本机 `ollama serve` + `ollama pull nomic-embed-text` 后按下节命令实跑，把数字回填本表。
+| 路径 | nDCG@4 | recall@4 | precision@4 | MRR |
+| --- | --- | --- | --- | --- |
+| MemoryRetriever（产品路径） | **1.000** | 1.000 | 1.000 | 1.000 |
+| 纯 cosine（隔离语义） | **1.000** | 1.000 | 1.000 | 1.000 |
+
+- 同一套 12 篇语料、6 条 query 下，`nomic-embed-text` 两条路径均满分，纯 cosine 从 simple 的
+  0.396 提升到 1.000，并略高于 xenova 的 0.944。
+- 该语料规模较小，满分不能外推为生产质量上限；它证明 Ollama 路径、维度探测和语义召回链路均有效。
 
 > **默认选型结论**：CI/无依赖环境保持 `simple`（零依赖、维度无关、可回归守护）；对检索质量敏感且可接受本地模型的部署，
-> 默认切 `xenova`（纯语义 0.944，无需外部服务，首跑下载后离线可用）。ollama 作为「已有本地 ollama 栈」用户的等价替代项。
+> 默认切 `xenova`（纯语义 0.944，无需外部服务，首跑下载后离线可用）。已有 Ollama 栈的部署可用
+> `nomic-embed-text`，本基准纯语义 1.000，但需要常驻本地服务。
 
 ---
 

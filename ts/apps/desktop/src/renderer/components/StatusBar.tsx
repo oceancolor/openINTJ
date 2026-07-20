@@ -47,6 +47,22 @@ export const StatusBar: React.FC<{ status: StatusSnapshot | undefined }> = ({ st
           盘: <span className="text-gray-300">{status.persistence.mode}</span>
         </span>
       ) : null}
+      <span className="text-gray-500">
+        分类器:{" "}
+        <span className={status.classifier.enabled ? "text-gray-300" : "text-gray-600"}>
+          {status.classifier.enabled
+            ? status.classifier.impliedByTaskPool
+              ? "on (TaskPool)"
+              : "on"
+            : "off"}
+        </span>
+      </span>
+      {status.taskPool ? (
+        <span className={status.taskPool.active ? "text-green-300" : "text-gray-500"}>
+          TaskPool: {status.taskPool.active ? "active" : status.taskPool.reason}
+          {status.taskPool.persistence === "sqlite" ? ` · ${status.taskPool.recovery}` : ""}
+        </span>
+      ) : null}
       {status.dormant ? (
         <span className="text-gray-500">
           Dormant:{" "}

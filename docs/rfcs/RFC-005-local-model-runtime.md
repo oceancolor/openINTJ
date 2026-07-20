@@ -307,6 +307,11 @@ export async function createModelRuntime(
 
 工厂必须是异步的，因为 Ollama health/model/dimension resolution 都涉及 I/O。
 
+> 实现状态（2026-07-19）：`resolveModelRuntime()` 返回兼容现有 `llm/embed/status`
+> 投影的 lifecycle object，并实现 `getStatus()`、限频 single-flight `refreshHealth()` 与
+> `close()`。server status、Desktop STATUS IPC、CLI status 都通过该刷新入口读取状态；
+> 刷新只更新当前已选 provider 的健康状态，不在运行中静默切换模型。
+
 ### 8.2 状态类型
 
 ```typescript
@@ -374,6 +379,10 @@ export class ModelRuntimeError extends Error {
 ```
 
 三端可以把该错误翻译到现有 CLI stderr、HTTP 错误和 IPC 错误，但不得改变“显式 Ollama 失败就是失败”的语义。
+
+实现已统一使用 `ModelRuntimeError`；status 的 `lastError` 与 provider `attempts` 为结构化
+对象，message 在进入状态、hook、日志和 telemetry 前脱敏并限长。embedding fingerprint
+missing/mismatch 同样使用稳定 error code，且拒绝时不会自动覆盖 metadata 或清库。
 
 ### 8.4 与 core 接口的关系
 
@@ -535,6 +544,10 @@ model.runtime.resolved channel=embedding requested=auto provider=mock model=simp
 - `model.provider.error`
 - `model.embedding.fingerprint.checked`
 - `model.embedding.fingerprint.rejected`
+
+> 实现状态（2026-07-19）：上述事件均已加入 typed `HookEventMap`。OTel 适配器输出
+> `openintj.model.provider.*`、`openintj.model.embedding.fingerprint.*` counters，并为
+> provider probe 创建带 channel/provider/model/outcome/duration/error.type 属性的短 span。
 
 推荐 span attributes：
 

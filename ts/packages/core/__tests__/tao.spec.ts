@@ -67,6 +67,8 @@ describe("__taoTest__.detectTaskType", () => {
   });
   it("classifies analysis", () => {
     expect(detectTaskType("分析以下数据集")).toBe(TaskType.ANALYSIS);
+    expect(detectTaskType("比较 REST 和 GraphQL 的优缺点")).toBe(TaskType.ANALYSIS);
+    expect(detectTaskType("Redis vs Memcached")).toBe(TaskType.ANALYSIS);
   });
   it("falls back to quick_response for short queries", () => {
     expect(detectTaskType("你好")).toBe(TaskType.QUICK_RESPONSE);

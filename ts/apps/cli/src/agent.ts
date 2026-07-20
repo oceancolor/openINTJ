@@ -21,12 +21,15 @@ import {
   type TaoResult,
   type TaskTypeType,
   attachProductTraitSignals,
+  detectTaskType,
+  getShaderForTask,
 } from "@openintj/core";
 import { DormantRuntime, type DormantRuntimeOpts } from "@openintj/dormant";
 import { HunyuanClient, createHunyuanSearchTool } from "@openintj/llm-hunyuan";
 import {
   type EmbedProviderId,
   type LlmProviderId,
+  type ModelRuntime,
   type ModelRuntimeStatus,
   resolveLlmClientSync,
   resolveModelRuntime,
@@ -47,6 +50,8 @@ import {
   type SelfConsistencyStrategy,
   appendSourcesFooter,
   assembleSystemPromptPrefix,
+  enforceProductBehaviorAnswer,
+  resolveDeterministicProductBehaviorAnswer,
   resolvePersonaInjection,
   resolveProductBehaviorEnabled,
   resolveSelfConsistency,
@@ -65,8 +70,10 @@ import {
 import {
   MemoryHybridIndex,
   TaskPool,
+  type TaskPoolActivationStatus,
   planGraphToTaskGraph,
   resolveOrchestrationMode,
+  resolveTaskPoolActivation,
   resolveTaskPoolEnabled,
   shouldUseTaskPool,
   synthesizeTaskPoolAnswer,
@@ -126,8 +133,11 @@ export interface AssembledAgent {
   dormant?: DormantRuntime;
   tao: TaoLoop;
   modelRuntime?: ModelRuntimeStatus;
+  refreshModelRuntime?: () => Promise<ModelRuntimeStatus>;
   productBehavior: { version: string; enabled: boolean; cohort: "treatment" | "control" };
   taskPoolEnabled: boolean;
+  taskPoolActivation: TaskPoolActivationStatus;
+  classifierStatus: { enabled: boolean; impliedByTaskPool: boolean };
   run(query: string): Promise<TaoResult>;
 }
 
@@ -136,7 +146,8 @@ const buildAgentCore = (
   llm: LlmClient,
   llmProviderId: string,
   embedder?: EmbeddingProvider,
-  modelRuntime?: ModelRuntimeStatus,
+  modelRuntime?: ModelRuntime,
+  hooksInput?: HookBus,
 ): Omit<AssembledAgent, "run" | "productBehavior"> & {
   tao: TaoLoop;
   selfConsistency: ReturnType<typeof resolveSelfConsistency>;
@@ -146,9 +157,11 @@ const buildAgentCore = (
   ensureClassifier: () => Promise<void>;
   taskPool?: TaskPool;
   taskPoolEnabled: boolean;
+  taskPoolActivation: TaskPoolActivationStatus;
+  classifierStatus: { enabled: boolean; impliedByTaskPool: boolean };
   productBehaviorEnabled: boolean;
 } => {
-  const hooks = new HookBus();
+  const hooks = hooksInput ?? new HookBus();
   attachProductTraitSignals(hooks);
   const governance = new GovernancePlane({ hooks });
   const memory = new MemoryPlane({ hooks, ...(embedder ? { embedder } : {}) });
@@ -217,6 +230,8 @@ const buildAgentCore = (
   const personaEnabled = resolvePersonaInjection(opts);
   const productBehaviorEnabled = resolveProductBehaviorEnabled(opts.enableProductBehavior);
   const taskPoolEnabled = resolveTaskPoolEnabled(opts.enableTaskPool);
+  const classifierConfigured = opts.enableClassifier ?? process.env["OPENINTJ_CLASSIFIER"] === "1";
+  const enableClassifier = taskPoolEnabled || classifierConfigured;
   const taskPool = taskPoolEnabled ? new TaskPool({ hooks }) : undefined;
 
   const enableSkillLearning =
@@ -292,7 +307,6 @@ const buildAgentCore = (
   });
 
   const selfConsistency = resolveSelfConsistency(opts.selfConsistency);
-  const enableClassifier = opts.enableClassifier ?? process.env["OPENINTJ_CLASSIFIER"] === "1";
   const classifier = enableClassifier
     ? new ReinforcingClassifier({ embedder: memory.store.embedder })
     : undefined;
@@ -320,8 +334,18 @@ const buildAgentCore = (
     selfConsistency,
     ensureClassifier,
     taskPoolEnabled,
+    taskPoolActivation: resolveTaskPoolActivation(taskPoolEnabled, Boolean(classifier)),
+    classifierStatus: {
+      enabled: Boolean(classifier),
+      impliedByTaskPool: taskPoolEnabled && !classifierConfigured,
+    },
     productBehaviorEnabled,
-    ...(modelRuntime ? { modelRuntime } : {}),
+    ...(modelRuntime
+      ? {
+          modelRuntime: modelRuntime.status,
+          refreshModelRuntime: () => modelRuntime.refreshHealth(),
+        }
+      : {}),
     ...(taskPool ? { taskPool } : {}),
   };
 };
@@ -340,21 +364,27 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
   ...(core.dormant ? { dormant: core.dormant } : {}),
   tao: core.tao,
   ...(core.modelRuntime ? { modelRuntime: core.modelRuntime } : {}),
+  ...(core.refreshModelRuntime ? { refreshModelRuntime: core.refreshModelRuntime } : {}),
   productBehavior: {
     version: PRODUCT_BEHAVIOR_VERSION,
     enabled: core.productBehaviorEnabled,
     cohort: core.productBehaviorEnabled ? "treatment" : "control",
   },
   taskPoolEnabled: core.taskPoolEnabled,
+  taskPoolActivation: core.taskPoolActivation,
+  classifierStatus: core.classifierStatus,
   async run(query: string) {
     await core.hooks.emit("event.PRODUCT_BEHAVIOR", {
       version: PRODUCT_BEHAVIOR_VERSION,
       enabled: core.productBehaviorEnabled,
     });
     if (core.dormant) core.dormant.record(query, "user", { stage: "run.input" });
+    const preflight = core.productBehaviorEnabled
+      ? resolveDeterministicProductBehaviorAnswer(query)
+      : undefined;
     let cls: Awaited<ReturnType<ReinforcingClassifier["classify"]>> | undefined;
     let route: ReturnType<typeof decideRoute> | undefined;
-    if (core.classifier) {
+    if (!preflight && core.classifier) {
       await core.ensureClassifier();
       cls = await core.classifier.classify(query);
       route = decideRoute(cls);
@@ -367,36 +397,77 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
       ...(signal ? { signal } : {}),
     });
     let result: TaoResult;
-    const orchestrationMode = resolveOrchestrationMode(
-      Boolean(core.taskPool && cls && shouldUseTaskPool(core.taskPoolEnabled, cls.label)),
-      Boolean(core.selfConsistency),
-    );
-    // Explicit TaskPool wins for eligible complex tasks; self-consistency remains
-    // the fallback for all other tasks.
-    if (orchestrationMode === "taskpool" && core.taskPool && cls) {
-      const { plan } = core.control.processInput(query, cls.label);
-      const graph = planGraphToTaskGraph(plan);
-      const poolResult = await core.taskPool.submitRun(graph, async (node, ctx) => {
-        const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
-        return core.tao.run(stepQuery, taoOpts(ctx.traceId, ctx.signal));
-      });
-      result = synthesizeTaskPoolAnswer(poolResult, query);
-    } else if (orchestrationMode === "self-consistency" && core.selfConsistency) {
-      const { fulfilled } = await forkJoin(
-        Array.from({ length: core.selfConsistency.samples }, (_, i) => i),
-        (i) => core.tao.run(query, taoOpts(`${randomUUID()}-sc${i}`)),
-        {
-          hooks: core.hooks,
-          group: "self-consistency",
-          minSuccess: 1,
-          ...(core.selfConsistency.maxConcurrency
-            ? { concurrency: core.selfConsistency.maxConcurrency }
-            : {}),
-        },
-      );
-      result = selectConsistentAnswer(fulfilled, core.selfConsistency.strategy) ?? fulfilled[0]!;
+    if (preflight) {
+      const taskType = detectTaskType(query);
+      result = {
+        traceId: randomUUID(),
+        status: "completed",
+        finalAnswer: preflight.answer,
+        iterations: 0,
+        reactTotalSteps: 0,
+        totalTokensSpent: 0,
+        durationMs: 0,
+        trajectory: [
+          {
+            timestamp: Date.now() / 1000,
+            state: { type: "final", answer: preflight.answer },
+            durationMs: 0,
+          },
+        ],
+        taskType,
+        shaderMode: getShaderForTask(taskType),
+        metrics: { productBehaviorPreflight: 1 },
+      };
     } else {
-      result = await core.tao.run(query, taoOpts());
+      const orchestrationMode = resolveOrchestrationMode(
+        Boolean(core.taskPool && cls && shouldUseTaskPool(core.taskPoolEnabled, cls.label)),
+        Boolean(core.selfConsistency),
+      );
+      // Explicit TaskPool wins for eligible complex tasks; self-consistency remains
+      // the fallback for all other tasks.
+      if (orchestrationMode === "taskpool" && core.taskPool && cls) {
+        const { plan } = core.control.processInput(query, cls.label);
+        const graph = planGraphToTaskGraph(plan);
+        const poolResult = await core.taskPool.submitRun(graph, async (node, ctx) => {
+          const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
+          return core.tao.run(stepQuery, taoOpts(ctx.traceId, ctx.signal));
+        });
+        result = synthesizeTaskPoolAnswer(poolResult, query);
+      } else if (orchestrationMode === "self-consistency" && core.selfConsistency) {
+        const { fulfilled } = await forkJoin(
+          Array.from({ length: core.selfConsistency.samples }, (_, i) => i),
+          (i) => core.tao.run(query, taoOpts(`${randomUUID()}-sc${i}`)),
+          {
+            hooks: core.hooks,
+            group: "self-consistency",
+            minSuccess: 1,
+            ...(core.selfConsistency.maxConcurrency
+              ? { concurrency: core.selfConsistency.maxConcurrency }
+              : {}),
+          },
+        );
+        result = selectConsistentAnswer(fulfilled, core.selfConsistency.strategy) ?? fulfilled[0]!;
+      } else {
+        result = await core.tao.run(query, taoOpts());
+      }
+    }
+    if (core.productBehaviorEnabled) {
+      const enforced = await enforceProductBehaviorAnswer({
+        query,
+        draft: result.finalAnswer,
+        revise: async (instruction) =>
+          core.llm.chat(
+            [
+              {
+                role: "system",
+                content: "你是最终答案编辑器。严格完成用户要求，只输出修订后的答案。",
+              },
+              { role: "user", content: instruction },
+            ],
+            { temperature: 0, maxTokens: 768 },
+          ),
+      });
+      result.finalAnswer = enforced.answer;
     }
     result.finalAnswer = appendSourcesFooter(result.finalAnswer, result.trajectory);
     const labelTags = cls ? [cls.label] : [];
@@ -433,16 +504,19 @@ export const assembleAgentAsync = async (opts: AgentOptions = {}): Promise<Assem
     const resolved = resolveLlmClientSync({ provider });
     return attachRun(buildAgentCore(opts, resolved.client, resolved.status.provider));
   }
+  const hooks = new HookBus();
   const runtime = await resolveModelRuntime({
     provider,
     ...(opts.embedProvider ? { embedProvider: opts.embedProvider } : {}),
+    hooks,
   });
   const core = buildAgentCore(
     opts,
     runtime.llm.client,
     runtime.status.llm.provider,
     runtime.embed.embedder,
-    runtime.status,
+    runtime,
+    hooks,
   );
   return attachRun(core);
 };

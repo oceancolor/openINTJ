@@ -38,11 +38,15 @@ const TOGGLES: ToggleRow[] = [
   { key: "enablePersona", label: "注入 persona", hint: "已批准人格注入 system prompt（A/B）" },
   { key: "enableSkills", label: "技能系统", hint: "命中的能力包全文注入" },
   { key: "enableSkillLearning", label: "技能自学习", hint: "轨迹蒸馏 → 审批（隐含开技能系统）" },
-  { key: "enableClassifier", label: "前端分类器", hint: "预分类降 token + 强化" },
+  {
+    key: "enableClassifier",
+    label: "前端分类器",
+    hint: "预分类降 token + 强化；TaskPool 开启时为必需项",
+  },
   {
     key: "enableTaskPool",
     label: "任务池编排",
-    hint: "RFC-007 planning/analysis 有界 DAG（优先于自一致性）",
+    hint: "RFC-007 planning/analysis 有界 DAG；会自动启用必需的前端分类器",
   },
   { key: "enableCommands", label: "允许执行命令", hint: "execute_command 沙箱（高危）" },
   { key: "autoUpdate", label: "自动更新", hint: "打包后检查并下载新版本" },
@@ -246,10 +250,18 @@ export const SettingsPanel: React.FC = () => {
               checked={
                 t.key === "enableProductBehavior"
                   ? cfg.enableProductBehavior !== false
-                  : cfg[t.key] === true
+                  : t.key === "enableClassifier" && cfg.enableTaskPool === true
+                    ? true
+                    : cfg[t.key] === true
               }
-              disabled={busy}
-              onChange={(e) => void patch({ [t.key]: e.target.checked } as AppConfigPatch)}
+              disabled={busy || (t.key === "enableClassifier" && cfg.enableTaskPool === true)}
+              onChange={(e) =>
+                void patch(
+                  t.key === "enableTaskPool" && e.target.checked
+                    ? { enableTaskPool: true, enableClassifier: true }
+                    : ({ [t.key]: e.target.checked } as AppConfigPatch),
+                )
+              }
               className="mt-0.5"
             />
             <span>

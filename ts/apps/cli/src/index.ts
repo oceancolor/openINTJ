@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import type { EmbedProviderId } from "@openintj/model-runtime";
 import { loadOpenintjEnv } from "@openintj/shared";
 import { Command } from "commander";
 import kleur from "kleur";
@@ -21,10 +22,18 @@ program
   .description("发起一次 Agent 对话")
   .argument("<query...>", "用户查询（可空格分隔）")
   .option("-p, --provider <provider>", "LLM 提供方: auto | hunyuan | ollama | mock", "auto")
-  .option("--embedding-provider <provider>", "Embedding 提供方: auto | ollama | mock", "auto")
+  .option(
+    "--embedding-provider <provider>",
+    "Embedding 提供方: auto | simple | ollama | xenova | mock",
+    "auto",
+  )
   .option("-i, --max-iter <n>", "TAO 宏循环最大轮数", (v: string) => Number.parseInt(v, 10), 1)
   .option("--show-trajectory", "打印完整 trajectory（用于调试）", false)
-  .option("--task-pool", "为 planning/analysis 启用 RFC-007 TaskPool", false)
+  .option(
+    "--task-pool",
+    "为 planning/analysis 启用 RFC-007 TaskPool（自动启用必需的 classifier）",
+    false,
+  )
   .option("--system <prompt>", "自定义系统提示", "")
   .option(
     "--product-behavior <cohort>",
@@ -34,7 +43,7 @@ program
   .action(async (queryParts: string[], rawOpts: unknown) => {
     const opts = rawOpts as {
       provider: LlmProvider;
-      embeddingProvider: "auto" | "ollama" | "mock";
+      embeddingProvider: EmbedProviderId;
       maxIter: number;
       showTrajectory: boolean;
       system: string;
@@ -54,8 +63,11 @@ program
     }
     const agent = await assembleAgentAsync(agentOpts);
 
-    const status = agent.modelRuntime?.llm ?? agent.llm.getStatus();
-    const embedStatus = agent.modelRuntime?.embed;
+    const modelRuntime = agent.refreshModelRuntime
+      ? await agent.refreshModelRuntime()
+      : agent.modelRuntime;
+    const status = modelRuntime?.llm ?? agent.llm.getStatus();
+    const embedStatus = modelRuntime?.embed;
     process.stderr.write(
       kleur.gray(
         `[llm] provider=${status.provider} mode=${status.mode} status=${status.status}${status.mode === "mock" ? " (visible mock)" : ""}\n`,
@@ -71,6 +83,11 @@ program
     process.stderr.write(
       kleur.gray(
         `[product-behavior] version=${agent.productBehavior.version} cohort=${agent.productBehavior.cohort}\n`,
+      ),
+    );
+    process.stderr.write(
+      kleur.gray(
+        `[taskpool] requested=${agent.taskPoolActivation.requested} active=${agent.taskPoolActivation.active} classifier=${agent.taskPoolActivation.classifierEnabled} reason=${agent.taskPoolActivation.reason}\n`,
       ),
     );
 
@@ -118,7 +135,12 @@ program
   .command("status")
   .description("查看 LLM/Plane 状态")
   .option("-p, --provider <provider>", "LLM 提供方", "auto")
-  .option("--embedding-provider <provider>", "Embedding 提供方", "auto")
+  .option(
+    "--embedding-provider <provider>",
+    "Embedding 提供方: auto | simple | ollama | xenova | mock",
+    "auto",
+  )
+  .option("--task-pool", "显示 TaskPool 激活状态（自动启用 classifier）", false)
   .option(
     "--product-behavior <cohort>",
     "Product Behavior A/B: treatment | control（未指定则沿用 env/default）",
@@ -127,8 +149,9 @@ program
   .action(async (rawOpts: unknown) => {
     const opts = rawOpts as {
       provider: LlmProvider;
-      embeddingProvider: "auto" | "ollama" | "mock";
+      embeddingProvider: EmbedProviderId;
       productBehavior?: boolean;
+      taskPool: boolean;
     };
     const agentOpts: Parameters<typeof assembleAgentAsync>[0] = {
       llmProvider: opts.provider,
@@ -137,20 +160,23 @@ program
     if (opts.productBehavior !== undefined) {
       agentOpts.enableProductBehavior = opts.productBehavior;
     }
+    if (opts.taskPool) agentOpts.enableTaskPool = true;
     const agent = await assembleAgentAsync(agentOpts);
+    const modelRuntime = agent.refreshModelRuntime
+      ? await agent.refreshModelRuntime()
+      : agent.modelRuntime;
     const llm = agent.llm.getStatus();
     const gov = agent.governance.getStats();
     const mem = agent.memory.getStats();
     const out = {
       llm,
-      modelRuntime: agent.modelRuntime,
+      embed: modelRuntime?.embed,
+      modelRuntime,
       governance: gov,
       memory: mem,
       productBehavior: agent.productBehavior,
-      taskPool: {
-        enabled: agent.taskPoolEnabled,
-        precedence: "taskpool-before-self-consistency",
-      },
+      classifier: agent.classifierStatus,
+      taskPool: agent.taskPoolActivation,
       tools: agent.execution.toolHub.list().map((t) => t.name),
     };
     process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);

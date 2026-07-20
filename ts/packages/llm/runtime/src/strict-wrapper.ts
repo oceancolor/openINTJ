@@ -30,6 +30,10 @@ export class StrictLlmWrapper implements LlmClient {
       }
       return out;
     } catch (e) {
+      if (opts?.signal?.aborted) {
+        const reason = opts.signal.reason;
+        if (reason instanceof Error) throw reason;
+      }
       if (e instanceof AgentError) throw e;
       throw new AgentError({
         code: ErrorCode.INTERNAL_ERROR,
@@ -57,6 +61,10 @@ export class StrictLlmWrapper implements LlmClient {
       }
       return out;
     } catch (e) {
+      if (opts?.signal?.aborted) {
+        const reason = opts.signal.reason;
+        if (reason instanceof Error) throw reason;
+      }
       if (e instanceof AgentError) throw e;
       throw new AgentError({
         code: ErrorCode.INTERNAL_ERROR,

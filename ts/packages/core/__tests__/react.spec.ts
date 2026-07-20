@@ -107,15 +107,37 @@ describe("__test__.parseLlmThought", () => {
     expect(r.action?.params).toEqual({ query: "cat" });
   });
 
+  it("parses case-insensitive ReAct markers from small models", () => {
+    const r = parseLlmThought(
+      'Thought: 查证\nACTION: search\nAction-Input: {"query":"Node.js LTS"}',
+    );
+    expect(r.isFinal).toBe(false);
+    expect(r.action).toEqual({ tool: "search", params: { query: "Node.js LTS" } });
+  });
+
   it("parses FINAL marker", () => {
     const r = parseLlmThought(`Thought: 我已知道答案\nFINAL: 42`);
     expect(r.isFinal).toBe(true);
     expect(r.finalAnswer).toBe("42");
   });
 
+  it("rejects internal protocol markers leaked into FINAL", () => {
+    const r = parseLlmThought(
+      "Thought: done\nFINAL: 4\n\nThought: verify\nAction: search\nAction-Input: {}",
+    );
+    expect(r.isFinal).toBe(false);
+    expect(r.parseError).toContain("混入");
+  });
+
   it("treats free text without markers as implicit final", () => {
     const r = parseLlmThought("just a thought without structure");
     expect(r.isFinal).toBe(true);
+  });
+
+  it("removes a lone Thought marker from implicit final output", () => {
+    const r = parseLlmThought("Thought: 面向用户的答案");
+    expect(r.isFinal).toBe(true);
+    expect(r.finalAnswer).toBe("面向用户的答案");
   });
 
   it("reports parse error on malformed JSON", () => {
@@ -275,6 +297,7 @@ describe("ReactStateMachine.run", () => {
     });
     expect(out.status).toBe("max_iter");
     expect(out.iterations).toBe(2);
+    expect(out.finalAnswer).toContain("try");
   });
 
   it("recovers from parse error by re-prompting", async () => {
@@ -296,6 +319,27 @@ describe("ReactStateMachine.run", () => {
     });
     expect(out.status).toBe("ok");
     expect(out.finalAnswer).toBe("答案");
+  });
+
+  it("recovers when FINAL leaks internal protocol markers", async () => {
+    const sm = new ReactStateMachine({
+      config: baseConfig,
+      hooks: new HookBus({ logger: silentLogger }),
+      llm: makeLlm([
+        "Thought: done\nFINAL: 4\nThought: verify\nAction: search",
+        "Thought: corrected\nFINAL: 2+2=4，且 4>3，所以满足要求。",
+      ]),
+      toolRunner: makeToolRunner({}),
+    });
+    const out = await sm.run({
+      messages: [{ role: "user", content: "列出 2+2 的结果并确认是否大于 3" }],
+      availableTools: tools,
+      taoIteration: 1,
+      systemPrompt: "",
+    });
+    expect(out.status).toBe("ok");
+    expect(out.finalAnswer).toBe("2+2=4，且 4>3，所以满足要求。");
+    expect(out.iterations).toBe(2);
   });
 
   it("hook can mutate action params via beforeAction.replace", async () => {
@@ -337,6 +381,22 @@ describe("ReactStateMachine.run", () => {
       systemPrompt: "",
     });
     expect(captured["modified"]).toBe(true);
+  });
+
+  it("runSingle removes leaked ReAct scaffolding", async () => {
+    const sm = new ReactStateMachine({
+      config: baseConfig,
+      hooks: new HookBus({ logger: silentLogger }),
+      llm: makeLlm(["Thought: 直接答案"]),
+      toolRunner: makeToolRunner({}),
+    });
+    const out = await sm.runSingle({
+      messages: [{ role: "user", content: "answer" }],
+      availableTools: [],
+      taoIteration: 1,
+      systemPrompt: "",
+    });
+    expect(out.finalAnswer).toBe("直接答案");
   });
 
   it.each(["run", "runSingle"] as const)(

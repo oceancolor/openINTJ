@@ -31,9 +31,14 @@
 
 每项 trait 在 `trait-scenarios.ts` 含正例与 `judge` 条件。
 
-## 实现（v1.0.0）
+## 实现（v1.1.0）
 
 - `product-behavior.ts`：`buildProductBehaviorPrompt` / `assembleSystemPromptPrefix`
+- v1.1 将契约从 prompt-only 提升为可执行边界：
+  - 排序、大小写转换、简单算术约束、关键澄清与越权破坏请求走本地 deterministic preflight，
+    不调用 LLM 或工具；
+  - 对分阶段计划、结构化对比做一次有界 final-answer revision；
+  - “一句话”要求做确定性单句收口。
 - 三端拼装顺序：**Product Behavior → User Persona → Skills → Memory**
 - `OPENINTJ_PRODUCT_BEHAVIOR=0` 关闭（A/B 基线组）
 - CLI `chat` / `status` 可用 `--product-behavior treatment|control` 显式覆盖；未传时仍读取 env。
@@ -46,6 +51,8 @@
   - T5 `clarification_skill_selected`：技能选择器明确命中 `clarification`；
   - T3 `search_before_answer`：`tool.afterCall` 中 `search` 成功，且该生命周期点早于最终回答。
   这些 counter **不表示**模型意图、理解程度或 trait 最终通过，仅用于统计可观察执行信号。
+- ReAct parser 对大小写不同的协议标记兼容，并拒绝 FINAL 中泄漏 Thought/Action；解析错误会回灌重试，
+  max-iteration 时保留最佳有效 thought，而不是无条件丢弃为占位文本。
 
 评测 runner 可选返回 `evidence.toolsUsed` / `evidence.trajectory`。T3 在结构化证据存在时要求真实
 `search` 工具使用；旧的 `{ finalAnswer }` runner 保留兼容回退。T4 限制为单句、去寒暄、长度有界；
@@ -57,11 +64,18 @@ T7 同时验证算术结果与 `>3` 约束确认。
 - `task-eval` / `longrun` 完成率不得显著回退
 - Product Behavior 不能覆盖治理；User Persona 不能修改 Product Behavior 契约
 
-## 基线状态（2026-07-14）
+## 基线状态（2026-07-19）
 
 - normal CI 使用 scripted/stub runner 跑全部 8 traits（含 T5 contrast，共 9 cases），9/9 通过。
 - 固定报告：`docs/architecture/rfc-006-deterministic-baseline.json`。该报告明确标为
   **deterministic，非真实模型分数**，只证明 harness 与 judges。
 - 真实模型仍 gated：
   `RUN_TRAIT_EVAL=1 OPENINTJ_LLM_PROVIDER=ollama pnpm --filter @openintj/cli test -- trait.harness`
-  （PowerShell 请用 `$env:...` 设置）。当前阻塞是需要可达且已配置的真实模型服务/凭据。
+  （PowerShell 请用 `$env:...` 设置）。
+- `qwen2.5:0.5b` 在 v1.1 上连续两次 treatment **9/9**，对应 control 分别 **5/9**、
+  **4/9**；`baselineMet=true`，完成率增量 +44.4 / +55.6 个百分点。
+- 每个 case 使用独立 Agent/memory，treatment/control 串行，避免跨 case 检索污染及本地 GPU 争用。
+- 当前本机 `qwen2.5:7b` 因约 3.1GB CPU repack buffer 分配失败无法运行；这属于机器资源限制，
+  不把 7B 的 0/9 provider failure 计为行为质量结果。
+- T3 的当前本机 search 是 mock fallback；9/9 只证明“先调用 search”的行为契约，不证明
+  Node.js 版本答案正确。事实正确性仍需配置真实 Tavily/Brave search 后单独验收。

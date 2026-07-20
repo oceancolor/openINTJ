@@ -24,7 +24,7 @@ const main = async (): Promise<void> => {
     `[OpenINTJ server] product-behavior: version=${status.productBehavior.version} cohort=${status.productBehavior.cohort}`,
   );
   console.log(
-    `[OpenINTJ server] taskpool: enabled=${status.taskPool.enabled} precedence=${status.taskPool.precedence}`,
+    `[OpenINTJ server] taskpool: requested=${status.taskPool.requested} active=${status.taskPool.active} classifier=${status.taskPool.classifierEnabled} reason=${status.taskPool.reason} precedence=${status.taskPool.precedence}`,
   );
   const app = buildApp(agent);
 

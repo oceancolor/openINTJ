@@ -7,13 +7,13 @@ asarUnpack:
   - "**/node_modules/better-sqlite3/**"
   - "**/node_modules/@lancedb/**"
   - "**/node_modules/apache-arrow/**"
-  - "**/*.node"
 directories:
   buildResources: resources
   output: release
 files:
   - "out/**/*"
   - "package.json"
+  - "!node_modules/@openintj/**"
   - "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md,readme}"
 extraMetadata:
   main: out/main/index.js
@@ -40,6 +40,7 @@ mac:
   category: public.app-category.developer-tools
   hardenedRuntime: true
   gatekeeperAssess: false
+  notarize: true
 dmg:
   contents:
     - x: 130

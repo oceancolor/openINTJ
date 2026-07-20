@@ -16,6 +16,8 @@ import {
   type TaoResult,
   type TaskTypeType,
   attachProductTraitSignals,
+  detectTaskType,
+  getShaderForTask,
 } from "@openintj/core";
 import {
   type DormantPersistenceAdapter,
@@ -53,6 +55,8 @@ import {
   type SelfConsistencyStrategy,
   appendSourcesFooter,
   assembleSystemPromptPrefix,
+  enforceProductBehaviorAnswer,
+  resolveDeterministicProductBehaviorAnswer,
   resolvePersonaInjection,
   resolveProductBehaviorEnabled,
   resolveSelfConsistency,
@@ -78,10 +82,12 @@ import {
 import {
   MemoryHybridIndex,
   TaskPool,
+  type TaskPoolActivationStatus,
   type TaskPoolRecoveryPolicy,
   type TaskPoolRecoverySummary,
   planGraphToTaskGraph,
   resolveOrchestrationMode,
+  resolveTaskPoolActivation,
   resolveTaskPoolEnabled,
   resolveTaskPoolRecoveryPolicy,
   shouldUseTaskPool,
@@ -236,6 +242,7 @@ export interface ServerAgent {
   otel?: AttachedOtel;
   /** ModelRuntime 解析状态（LLM + embed）。 */
   modelRuntime: ModelRuntimeStatus;
+  refreshModelRuntime(): Promise<ModelRuntimeStatus>;
   /** real data dir + TaskPool 开启时的启动恢复结果。 */
   taskPoolRecovery?: TaskPoolRecoverySummary;
   run(query: string): Promise<TaoResult>;
@@ -248,7 +255,8 @@ export interface ServerAgent {
     tools: string[];
     persistence: { mode: PersistenceMode; dataDir?: string };
     retrievalMode: "vector" | "hybrid";
-    taskPool: { enabled: boolean; precedence: "taskpool-before-self-consistency" };
+    classifier: { enabled: boolean; impliedByTaskPool: boolean };
+    taskPool: TaskPoolActivationStatus;
     productBehavior: {
       version: string;
       enabled: boolean;
@@ -370,6 +378,7 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
   const runtime = await resolveModelRuntime({
     provider: llmProvider,
     ...(embedProvider ? { embedProvider } : {}),
+    hooks,
   });
   const rawLlm = runtime.llm.client;
   const rateLimit = resolveRateLimit(opts);
@@ -408,7 +417,12 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
 
   const governance = new GovernancePlane({ hooks });
   if (persistence.mode === "real" && persistence.dataDir) {
-    await validateEmbeddingFingerprintForDataDir(persistence.dataDir, runtime.embeddingFingerprint);
+    await validateEmbeddingFingerprintForDataDir(
+      persistence.dataDir,
+      runtime.embeddingFingerprint,
+      undefined,
+      { hooks },
+    );
   }
   const persistentStore = await createPersistentMemoryStore({
     ...(persistence.dataDir ? { dataDir: persistence.dataDir } : {}),
@@ -490,6 +504,8 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
   const personaEnabled = resolvePersonaInjection(opts);
   const productBehaviorEnabled = resolveProductBehaviorEnabled(opts.enableProductBehavior);
   const taskPoolEnabled = resolveTaskPoolEnabled(opts.enableTaskPool);
+  const classifierConfigured = opts.enableClassifier ?? process.env["OPENINTJ_CLASSIFIER"] === "1";
+  const enableClassifier = taskPoolEnabled || classifierConfigured;
   const taskStore =
     taskPoolEnabled && persistence.mode === "real" && persistence.dataDir
       ? new SqliteTaskStore(`${persistence.dataDir}/taskpool.sqlite`)
@@ -498,6 +514,7 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
   const taskPool = taskPoolEnabled
     ? new TaskPool({ hooks, ...(taskStore ? { store: taskStore } : {}) })
     : undefined;
+  const taskPoolRecoveryPolicy = resolveTaskPoolRecoveryPolicy(opts.taskPoolRecoveryPolicy);
 
   // 技能系统（opt-in）：OPENINTJ_SKILLS=1 时装配，复用 store embedder，命中才注入能力包全文。
   // 自学习（Phase 2）：OPENINTJ_SKILLS_LEARN=1 隐含开启注入 + outcome 加权 + 蒸馏/审批闭环。
@@ -587,7 +604,6 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
   const selfConsistency = resolveSelfConsistency(opts.selfConsistency);
 
   // 前端可强化分类器（opt-in）。real 模式挂 SqliteClassifierStore 让强化跨重启。
-  const enableClassifier = opts.enableClassifier ?? process.env["OPENINTJ_CLASSIFIER"] === "1";
   let classifier: ReinforcingClassifier | undefined;
   let classifierStore: Awaited<ReturnType<typeof createSqliteClassifierStore>> | undefined;
   if (enableClassifier) {
@@ -613,7 +629,7 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
             traceId: ctx.traceId,
             signal: ctx.signal,
           });
-        }, resolveTaskPoolRecoveryPolicy(opts.taskPoolRecoveryPolicy))
+        }, taskPoolRecoveryPolicy)
       : undefined;
 
   return {
@@ -634,6 +650,7 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
     ...(dormantPersistenceInfo ? { dormantPersistenceInfo } : {}),
     retrievalMode,
     modelRuntime: runtime.status,
+    refreshModelRuntime: () => runtime.refreshHealth(),
     ...(taskPoolRecovery ? { taskPoolRecovery } : {}),
     ...(otel ? { otel } : {}),
     async run(query: string) {
@@ -642,8 +659,11 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
         enabled: productBehaviorEnabled,
       });
       if (dormant) dormant.record(query, "user", { stage: "run.input" });
+      const preflight = productBehaviorEnabled
+        ? resolveDeterministicProductBehaviorAnswer(query)
+        : undefined;
       // 前端分类器：预分类 → taskType + 降 token 路由（高置信简单类走单次 LLM）。
-      const cls = classifier ? await classifier.classify(query) : undefined;
+      const cls = !preflight && classifier ? await classifier.classify(query) : undefined;
       const route = cls ? decideRoute(cls) : undefined;
       const taoOpts = (traceId?: string, signal?: AbortSignal) => ({
         ...(cls ? { taskType: cls.label } : {}),
@@ -654,35 +674,76 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
       });
       // 先跑（contextProvider 会检索此前已落盘的记忆），再记录本轮 → 避免检索命中当前输入本身。
       let result: TaoResult;
-      const orchestrationMode = resolveOrchestrationMode(
-        Boolean(taskPool && cls && shouldUseTaskPool(taskPoolEnabled, cls.label)),
-        Boolean(selfConsistency),
-      );
-      if (orchestrationMode === "taskpool" && taskPool && cls) {
-        const { plan } = control.processInput(query, cls.label);
-        const graph = planGraphToTaskGraph(plan);
-        const poolResult = await taskPool.submitRun(graph, async (node, ctx) => {
-          const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
-          return tao.run(stepQuery, taoOpts(ctx.traceId, ctx.signal));
-        });
-        result = synthesizeTaskPoolAnswer(poolResult, query);
-      } else if (orchestrationMode === "self-consistency" && selfConsistency) {
-        // 方向一/二：并行多采样 + 投票。forkJoin 会发 forkjoin.* 事件 → OTel span/metric。
-        const { fulfilled } = await forkJoin(
-          Array.from({ length: selfConsistency.samples }, (_, i) => i),
-          (i) => tao.run(query, taoOpts(`${randomUUID()}-sc${i}`)),
-          {
-            hooks,
-            group: "self-consistency",
-            minSuccess: 1,
-            ...(selfConsistency.maxConcurrency
-              ? { concurrency: selfConsistency.maxConcurrency }
-              : {}),
-          },
-        );
-        result = selectConsistentAnswer(fulfilled, selfConsistency.strategy) ?? fulfilled[0]!;
+      if (preflight) {
+        const taskType = detectTaskType(query);
+        result = {
+          traceId: randomUUID(),
+          status: "completed",
+          finalAnswer: preflight.answer,
+          iterations: 0,
+          reactTotalSteps: 0,
+          totalTokensSpent: 0,
+          durationMs: 0,
+          trajectory: [
+            {
+              timestamp: Date.now() / 1000,
+              state: { type: "final", answer: preflight.answer },
+              durationMs: 0,
+            },
+          ],
+          taskType,
+          shaderMode: getShaderForTask(taskType),
+          metrics: { productBehaviorPreflight: 1 },
+        };
       } else {
-        result = await tao.run(query, taoOpts());
+        const orchestrationMode = resolveOrchestrationMode(
+          Boolean(taskPool && cls && shouldUseTaskPool(taskPoolEnabled, cls.label)),
+          Boolean(selfConsistency),
+        );
+        if (orchestrationMode === "taskpool" && taskPool && cls) {
+          const { plan } = control.processInput(query, cls.label);
+          const graph = planGraphToTaskGraph(plan);
+          const poolResult = await taskPool.submitRun(graph, async (node, ctx) => {
+            const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
+            return tao.run(stepQuery, taoOpts(ctx.traceId, ctx.signal));
+          });
+          result = synthesizeTaskPoolAnswer(poolResult, query);
+        } else if (orchestrationMode === "self-consistency" && selfConsistency) {
+          // 方向一/二：并行多采样 + 投票。forkJoin 会发 forkjoin.* 事件 → OTel span/metric。
+          const { fulfilled } = await forkJoin(
+            Array.from({ length: selfConsistency.samples }, (_, i) => i),
+            (i) => tao.run(query, taoOpts(`${randomUUID()}-sc${i}`)),
+            {
+              hooks,
+              group: "self-consistency",
+              minSuccess: 1,
+              ...(selfConsistency.maxConcurrency
+                ? { concurrency: selfConsistency.maxConcurrency }
+                : {}),
+            },
+          );
+          result = selectConsistentAnswer(fulfilled, selfConsistency.strategy) ?? fulfilled[0]!;
+        } else {
+          result = await tao.run(query, taoOpts());
+        }
+      }
+      if (productBehaviorEnabled) {
+        const enforced = await enforceProductBehaviorAnswer({
+          query,
+          draft: result.finalAnswer,
+          revise: async (instruction) =>
+            llm.chat(
+              [
+                {
+                  role: "system",
+                  content: "你是最终答案编辑器。严格完成用户要求，只输出修订后的答案。",
+                },
+                { role: "user", content: instruction },
+              ],
+              { temperature: 0, maxTokens: 768 },
+            ),
+        });
+        result.finalAnswer = enforced.answer;
       }
       // 把 search 工具命中的联网来源追加到答案末尾 → 随记忆/dormant 一起入库。
       result.finalAnswer = appendSourcesFooter(result.finalAnswer, result.trajectory);
@@ -719,20 +780,26 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
       return result;
     },
     async status() {
+      const runtimeStatus = await runtime.refreshHealth();
       const llmSt = llm.getStatus();
       return {
-        llm: { ...llmSt, runtime: runtime.status.llm },
-        embed: runtime.status.embed,
-        modelRuntime: runtime.status,
+        llm: { ...llmSt, runtime: runtimeStatus.llm },
+        embed: runtimeStatus.embed,
+        modelRuntime: runtimeStatus,
         memory: memory.getStats(),
         governance: governance.getStats(),
         tools: toolHub.list().map((t) => t.name),
         persistence,
         retrievalMode,
-        taskPool: {
-          enabled: taskPoolEnabled,
-          precedence: "taskpool-before-self-consistency" as const,
+        classifier: {
+          enabled: Boolean(classifier),
+          impliedByTaskPool: taskPoolEnabled && !classifierConfigured,
         },
+        taskPool: resolveTaskPoolActivation(taskPoolEnabled, Boolean(classifier), {
+          persistence: taskStore ? "sqlite" : "none",
+          recovery: taskStore ? taskPoolRecoveryPolicy : "unsupported",
+          ...(taskPoolRecovery ? { recoverySummary: taskPoolRecovery } : {}),
+        }),
         productBehavior: {
           version: PRODUCT_BEHAVIOR_VERSION,
           enabled: productBehaviorEnabled,

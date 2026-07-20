@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { HookBus } from "@openintj/core";
 import { describe, expect, it } from "vitest";
 import {
   assertEmbeddingFingerprint,
@@ -8,10 +9,12 @@ import {
   writeEmbeddingFingerprint,
 } from "../src/embedding-fingerprint.js";
 import { validateEmbeddingFingerprintForDataDir } from "../src/embedding-persistence.js";
+import { ModelRuntimeError, sanitizeModelRuntimeErrorMessage } from "../src/errors.js";
 import { probeOllama } from "../src/health.js";
+import { resolveModelRuntime } from "../src/index.js";
 import { MockLlmClient } from "../src/mock-llm.js";
 import { parseEmbedProvider, resolveEmbedder } from "../src/resolve-embedder.js";
-import { parseLlmProvider, resolveLlmClientSync } from "../src/resolve-llm.js";
+import { parseLlmProvider, resolveLlmClient, resolveLlmClientSync } from "../src/resolve-llm.js";
 
 const simpleFingerprint = {
   schemaVersion: 1 as const,
@@ -37,6 +40,68 @@ describe("resolveLlmClientSync mock", () => {
     expect(status.mode).toBe("mock");
     const out = await client.chat([{ role: "user", content: "hi" }]);
     expect(out).toContain("[mock]");
+  });
+});
+
+describe("ModelRuntime lifecycle and structured errors", () => {
+  it("throws a structured error for an ineligible explicit provider", async () => {
+    await expect(resolveLlmClient({ provider: "hunyuan", env: {} })).rejects.toMatchObject({
+      name: "ModelRuntimeError",
+      code: "MODEL_CREDENTIAL_MISSING",
+      retriable: false,
+      provider: "hunyuan",
+    });
+  });
+
+  it("redacts and bounds error text exposed to status and telemetry", () => {
+    const secret = `api_key=secret-value ${"x".repeat(400)}`;
+    const message = sanitizeModelRuntimeErrorMessage(secret);
+    expect(message).not.toContain("secret-value");
+    expect(message.length).toBeLessThanOrEqual(256);
+  });
+
+  it("refreshes selected provider health with throttling and emits hooks", async () => {
+    const hooks = new HookBus();
+    const probes: Array<{ ok: boolean; errorCode?: string }> = [];
+    const errors: string[] = [];
+    hooks.on("model.provider.probe", (ctx) => void probes.push(ctx.payload));
+    hooks.on("model.provider.error", (ctx) => void errors.push(ctx.payload.code));
+    let now = 0;
+    let fetchCalls = 0;
+    const fetchMock: typeof fetch = async () => {
+      fetchCalls++;
+      if (fetchCalls === 1) {
+        return new Response(JSON.stringify({ models: [{ name: "qwen2.5:7b" }] }), {
+          status: 200,
+        });
+      }
+      throw new Error("offline");
+    };
+    const runtime = await resolveModelRuntime({
+      provider: "ollama",
+      embedProvider: "simple",
+      env: { OLLAMA_MODEL: "qwen2.5:7b" },
+      fetch: fetchMock,
+      hooks,
+      now: () => now,
+      healthRefreshIntervalMs: 10,
+    });
+
+    await runtime.refreshHealth();
+    expect(fetchCalls).toBe(1);
+    now = 11;
+    const refreshed = await runtime.refreshHealth();
+
+    expect(fetchCalls).toBe(2);
+    expect(refreshed.llm.status).toBe("degraded");
+    expect(refreshed.llm.lastError).toMatchObject({
+      code: "MODEL_PROVIDER_UNAVAILABLE",
+      retriable: true,
+      at: 11,
+    });
+    expect(probes.map((probe) => probe.ok)).toEqual([true, false]);
+    expect(errors).toContain("MODEL_PROVIDER_UNAVAILABLE");
+    await runtime.close();
   });
 });
 
@@ -133,6 +198,28 @@ describe("embedding persistence ordering", () => {
       ).rejects.toThrow(/EMBEDDING_FINGERPRINT_MISMATCH/);
     } finally {
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("emits checked and rejected fingerprint lifecycle events", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openintj-fp-hooks-"));
+    const hooks = new HookBus();
+    const events: string[] = [];
+    hooks.on("model.embedding.fingerprint.checked", () => void events.push("checked"));
+    hooks.on("model.embedding.fingerprint.rejected", () => void events.push("rejected"));
+    try {
+      await validateEmbeddingFingerprintForDataDir(root, simpleFingerprint, undefined, { hooks });
+      await expect(
+        validateEmbeddingFingerprintForDataDir(
+          root,
+          { ...simpleFingerprint, model: "other" },
+          undefined,
+          { hooks },
+        ),
+      ).rejects.toBeInstanceOf(ModelRuntimeError);
+      expect(events).toEqual(["checked", "rejected"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 

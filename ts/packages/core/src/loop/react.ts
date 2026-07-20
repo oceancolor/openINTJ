@@ -59,21 +59,29 @@ interface ParsedThought {
 const parseLlmThought = (text: string): ParsedThought => {
   const trimmed = text.trim();
   // 1) 先看是否有 FINAL
-  const finalMatch = trimmed.match(/FINAL\s*:\s*([\s\S]+)$/m);
-  const thoughtMatch = trimmed.match(/Thought\s*:\s*([\s\S]+?)(?=\n\s*(?:Action|FINAL)\s*:|$)/);
+  const finalMatch = trimmed.match(/FINAL\s*:\s*([\s\S]+)$/im);
+  const thoughtMatch = trimmed.match(/Thought\s*:\s*([\s\S]+?)(?=\n\s*(?:Action|FINAL)\s*:|$)/i);
   const thought = thoughtMatch?.[1]?.trim() ?? trimmed;
 
   if (finalMatch) {
+    const finalAnswer = finalMatch[1]!.trim();
+    if (/(?:^|\n)\s*(?:Thought|Action|Action-Input|FINAL)\s*:/i.test(finalAnswer)) {
+      return {
+        thought,
+        isFinal: false,
+        parseError: "FINAL 内容混入了内部 ReAct 协议标记",
+      };
+    }
     return {
       thought,
       isFinal: true,
-      finalAnswer: finalMatch[1]!.trim(),
+      finalAnswer,
     };
   }
 
-  const actionMatch = trimmed.match(/Action\s*:\s*([^\n]+)/);
+  const actionMatch = trimmed.match(/Action\s*:\s*([^\n]+)/i);
   const inputMatch = trimmed.match(
-    /Action-Input\s*:\s*([\s\S]+?)(?=\n\s*(?:Thought|Action|FINAL)\s*:|$)/,
+    /Action-Input\s*:\s*([\s\S]+?)(?=\n\s*(?:Thought|Action|FINAL)\s*:|$)/i,
   );
 
   if (actionMatch) {
@@ -107,7 +115,7 @@ const parseLlmThought = (text: string): ParsedThought => {
   return {
     thought,
     isFinal: true,
-    finalAnswer: trimmed,
+    finalAnswer: thoughtMatch ? thought : trimmed,
   };
 };
 
@@ -261,7 +269,7 @@ export class ReactStateMachine {
         conversation.push({
           role: "tool",
           name: "parse_error",
-          content: `[ParseError] ${parsed.parseError}\n请严格按 ReAct 格式输出 Action-Input 为合法 JSON。`,
+          content: `[ParseError] ${parsed.parseError}\n请重新输出：需要工具时使用合法 Action-Input JSON；已能回答时仅输出一次 FINAL，且 FINAL 后只放面向用户的答案。`,
         });
         continue;
       }
@@ -396,7 +404,15 @@ export class ReactStateMachine {
 
     if (iter >= this._config.maxIterations && !finalAnswer) {
       status = "max_iter";
-      finalAnswer = "[达到最大 ReAct 迭代次数，未能收敛]";
+      const bestThought = trajectory
+        .filter(
+          (entry): entry is TrajectoryEntry & { state: Extract<ReactState, { type: "thought" }> } =>
+            entry.state.type === "thought",
+        )
+        .map((entry) => entry.state.content.trim())
+        .filter(Boolean)
+        .sort((a, b) => b.length - a.length)[0];
+      finalAnswer = bestThought ?? "[达到最大 ReAct 迭代次数，未能收敛]";
     }
 
     const output: ReactOutput = {
@@ -439,7 +455,8 @@ export class ReactStateMachine {
       ...(opts.signal ? { signal: opts.signal } : {}),
     });
     opts.signal?.throwIfAborted();
-    const answer = llmText.trim();
+    const parsed = parseLlmThought(llmText);
+    const answer = (parsed.finalAnswer ?? parsed.thought).trim();
 
     await this._hooks.emit(
       "react.afterThought",

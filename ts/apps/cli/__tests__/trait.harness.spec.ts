@@ -6,7 +6,7 @@
  */
 import { TRAIT_SCENARIOS, evaluateTraitAb, evaluateTraits } from "@openintj/shared";
 import { describe, expect, it } from "vitest";
-import { type LlmProvider, assembleAgentAsync } from "../src/agent.js";
+import { type AssembledAgent, type LlmProvider, assembleAgentAsync } from "../src/agent.js";
 
 const RUN = process.env["RUN_TRAIT_EVAL"] === "1";
 
@@ -15,19 +15,7 @@ describe("RFC-006 trait baseline (gated)", () => {
     "records treatment baseline and control delta",
     async () => {
       const provider = (process.env["OPENINTJ_LLM_PROVIDER"] as LlmProvider) ?? "ollama";
-      const treatment = await assembleAgentAsync({
-        llmProvider: provider,
-        maxTaoIterations: 2,
-        enableProductBehavior: true,
-        enableSkills: true,
-      });
-      const control = await assembleAgentAsync({
-        llmProvider: provider,
-        maxTaoIterations: 2,
-        enableProductBehavior: false,
-        enableSkills: true,
-      });
-      const asEvalOutput = (result: Awaited<ReturnType<typeof treatment.run>>) => ({
+      const asEvalOutput = (result: Awaited<ReturnType<AssembledAgent["run"]>>) => ({
         finalAnswer: result.finalAnswer,
         evidence: {
           trajectory: result.trajectory,
@@ -44,10 +32,24 @@ describe("RFC-006 trait baseline (gated)", () => {
         },
       });
       const runTreatment = async (query: string) => {
+        // Each trait case gets a fresh memory/context. Cross-case retrieval would
+        // measure benchmark ordering contamination instead of product behavior.
+        const treatment = await assembleAgentAsync({
+          llmProvider: provider,
+          maxTaoIterations: 2,
+          enableProductBehavior: true,
+          enableSkills: true,
+        });
         const result = await treatment.run(query);
         return asEvalOutput(result);
       };
       const runControl = async (query: string) => {
+        const control = await assembleAgentAsync({
+          llmProvider: provider,
+          maxTaoIterations: 2,
+          enableProductBehavior: false,
+          enableSkills: true,
+        });
         const result = await control.run(query);
         return asEvalOutput(result);
       };
@@ -59,7 +61,7 @@ describe("RFC-006 trait baseline (gated)", () => {
         report.control.completionRate - 0.1,
       );
     },
-    600_000,
+    1_200_000,
   );
 
   it("passes every judge with a deterministic scripted runner in normal CI", async () => {

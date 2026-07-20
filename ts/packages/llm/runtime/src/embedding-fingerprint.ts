@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { ModelRuntimeError } from "./errors.js";
 import type { EmbeddingFingerprint } from "./types.js";
 import { EMBEDDING_FINGERPRINT_FILENAME } from "./types.js";
 
@@ -24,7 +25,11 @@ export const readEmbeddingFingerprint = async (
     ) {
       return parsed;
     }
-    throw new Error("EMBEDDING_FINGERPRINT_MISSING: embedding fingerprint is invalid");
+    throw new ModelRuntimeError({
+      code: "EMBEDDING_FINGERPRINT_MISSING",
+      message: "EMBEDDING_FINGERPRINT_MISSING: embedding fingerprint is invalid",
+      retriable: false,
+    });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
@@ -47,9 +52,12 @@ export const assertEmbeddingFingerprint = (
 ): void => {
   if (!stored) {
     if (opts.hasExistingVectors) {
-      throw new Error(
-        `持久化目录缺少 embedding 指纹，但检测到已有向量数据。请使用新 OPENINTJ_DATA_DIR 或恢复创建该库时的 embed 配置后重试。`,
-      );
+      throw new ModelRuntimeError({
+        code: "EMBEDDING_FINGERPRINT_MISSING",
+        message:
+          "EMBEDDING_FINGERPRINT_MISSING: 持久化目录缺少 embedding 指纹，但检测到已有向量数据。请使用新 OPENINTJ_DATA_DIR 或恢复创建该库时的 embed 配置后重试。",
+        retriable: false,
+      });
     }
     return;
   }
@@ -59,9 +67,12 @@ export const assertEmbeddingFingerprint = (
     stored.model !== expected.model ||
     stored.dimension !== expected.dimension
   ) {
-    throw new Error(
-      `EMBEDDING_FINGERPRINT_MISMATCH: 磁盘=${canonicalEmbeddingFingerprint(stored)}，` +
+    throw new ModelRuntimeError({
+      code: "EMBEDDING_FINGERPRINT_MISMATCH",
+      message:
+        `EMBEDDING_FINGERPRINT_MISMATCH: 磁盘=${canonicalEmbeddingFingerprint(stored)}，` +
         `当前=${canonicalEmbeddingFingerprint(expected)}。请换新 dataDir 或清空后重建。`,
-    );
+      retriable: false,
+    });
   }
 };

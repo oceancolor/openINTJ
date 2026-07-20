@@ -10,6 +10,9 @@
 
 ### Added
 
+- **ModelRuntime lifecycle / observability**：新增限频 single-flight `refreshHealth()`、
+  `ModelRuntimeError`、structured provider attempts/lastError；typed
+  `model.provider.*` / `model.embedding.fingerprint.*` hooks 对应 OTel spans/counters。
 - **RFC-007 应用级重启恢复**：TaskGraph 快照新增原始 `goalInput`；server/desktop 在
   TaskPool + real data dir 下启动扫描 incomplete runs。默认把遗留运行安全标记 cancelled，
   只有 `OPENINTJ_TASK_POOL_RECOVERY=resume` / `taskPoolRecoveryPolicy: "resume"` 才续跑，
@@ -30,6 +33,8 @@
   per-task watchdog、有界指数 backoff retry。
 - **RFC-007 persistence / multi-agent**：`TaskStore` + `SqliteTaskStore` restart recovery；
   role-based `AgentInstancePool` 与 Zod `Channel` reducer（opt-in，不进入默认路径）。
+- **TaskPool 验收 soak**：新增 gated `taskpool-soak.harness.spec.ts`；真 Ollama 在途 HTTP
+  取消连续 3 轮、restart-shaped recovery 连续 25 轮通过。
 - **RFC-007 三端与观测 parity**：CLI `--task-pool`、server status、desktop Settings toggle；
   TaskPool 对符合条件的复杂任务优先于 self-consistency；完整 lifecycle hooks 与 OTel
   run/task spans/counters/runId correlation。
@@ -38,6 +43,14 @@
 
 ### Changed
 
+- **Product Behavior v1.1 可执行契约**：确定性排序/转换/算术约束/关键澄清/越权破坏请求
+  在 LLM 与工具前本地处理；结构化对比和分阶段计划支持一次有界答案修订；单句要求确定性收口。
+  ReAct parser 兼容大小写协议标记、拒绝 FINAL 内部标记泄漏，并在 max-iteration 保留最佳 thought。
+  三端行为一致。
+- **TaskPool 激活与三端 parity**：TaskPool opt-in 自动启用必需的 classifier；CLI/server/
+  desktop 状态统一返回 activation reason、prerequisite、persistence/recovery capability。
+  server/desktop 另返回 recovery summary，Desktop StatusBar 展示激活原因。CLI embedding
+  provider 参数补齐 `simple`/`xenova`，三端顶层 embed/classifier 投影一致。
 - **LLM 在途取消传播**：`ChatOptions` 新增 `AbortSignal`，TaskPool worker cancellation 经
   Tao/ReAct（含 `runSingle`）传入 Ollama/Hunyuan fetch。调用方取消立即终止 HTTP 请求并
   保留原始 reason，不再等待 provider timeout；provider 自身超时仍报告 `TIMEOUT`。
@@ -45,10 +58,22 @@
   `isMockMode` 旁路。Ollama 网络/HTTP/非法响应、Hunyuan 缺 key/鉴权/HTTP/非法响应
   现在统一显式失败并更新 degraded/unauthorized 状态；显式 mock 仅由 ModelRuntime
   `MockLlmClient` 提供。真实 Ollama runtime E2E 4/4 与 Desktop mock smoke 5/5 通过。
+- **Desktop workspace 打包边界**：electron-vite 将 `@openintj/*` 工作区包打进主进程 bundle，
+  desktop 将这些包归为构建期依赖，避免 electron-builder 沿 pnpm symlink 走出 appDir；
+  Windows 未签名 NSIS 已本机成功产出。release workflow 显式接入 Win/macOS 签名 secrets，
+  macOS 开启 notarization。
 - 三端 agent 改用 `@openintj/model-runtime`（移除重复 `pickLlm`/`buildLlm` 与 Ollama→Hunyuan mock 耦合）。
 - 默认 `LLM_PROVIDER=auto`（server/desktop/cli）；`.env.example` 补充 `EMBED_PROVIDER` 与 Ollama 变量。
 - trait evaluation runner 可选返回 `toolsUsed`/`trajectory` 结构化证据；T3 优先验证真实 search 工具，
   并强化 T4 单句简洁与 T7 约束确认 judge，同时兼容 finalAnswer-only runner。
+
+### Benchmarks
+
+- **Ollama embedding**：`nomic-embed-text` 在固定语料的产品路径与纯 cosine 路径均为
+  **1.000 nDCG@4**（simple：0.773 / 0.396；xenova：1.000 / 0.944）。
+- **RFC-006 live-model**：隔离 case memory、串行 cohort 后，`qwen2.5:0.5b` treatment
+  连续两次 **9/9**，control **5/9** / **4/9**，baseline 关闭；longrun recall 仍为
+  33.3%–50%。T3 当前使用 mock search，仅证明工具顺序，不代表事实答案正确。
 
 ## [Unreleased] —— #3 嵌入基准 xenova 真实数字回填 (2026-07-08)
 

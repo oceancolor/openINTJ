@@ -61,6 +61,12 @@ jobs:
         env:
           # electron-builder 用 GH_TOKEN 上传安装包到 GitHub Release。
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 平台证书使用不同 secret；未配置时 electron-builder 仍可产出未签名包。
+          CSC_LINK: ${{ matrix.os == 'windows-latest' && secrets.WIN_CSC_LINK || secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ matrix.os == 'windows-latest' && secrets.WIN_CSC_KEY_PASSWORD || secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: pnpm exec electron-builder --config electron-builder.yml ${{ matrix.flag }} --publish always
 
       - name: Upload installers as workflow artifacts

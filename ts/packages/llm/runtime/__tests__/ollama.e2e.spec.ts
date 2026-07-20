@@ -35,7 +35,12 @@ describeOllama("Ollama runtime e2e", () => {
           OLLAMA_MODEL: chatModel,
         },
       }),
-    ).rejects.toThrow(/不可达/);
+    ).rejects.toMatchObject({
+      name: "ModelRuntimeError",
+      code: "MODEL_PROVIDER_UNAVAILABLE",
+      provider: "ollama",
+      retriable: true,
+    });
   });
 
   it("auto visibly falls back when Ollama is unavailable", async () => {

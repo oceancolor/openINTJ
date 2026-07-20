@@ -24,6 +24,23 @@ export const ChatResponseSchema = z.object({
 });
 export type ChatResponse = z.infer<typeof ChatResponseSchema>;
 
+const RuntimeErrorSchema = z.object({
+  code: z.string(),
+  message: z.string(),
+  retriable: z.boolean(),
+  at: z.number(),
+});
+
+const ProviderAttemptSchema = z.object({
+  provider: z.string(),
+  outcome: z.string(),
+  durationMs: z.number(),
+  errorCode: z.string().optional(),
+  errorMessage: z.string().optional(),
+  ok: z.boolean(),
+  reason: z.string().optional(),
+});
+
 export const StatusResponseSchema = z.object({
   llm: z.object({
     provider: z.string(),
@@ -38,7 +55,7 @@ export const StatusResponseSchema = z.object({
         mode: z.string(),
         status: z.string(),
         fallbackFrom: z.string().optional(),
-        lastError: z.string().optional(),
+        lastError: RuntimeErrorSchema.optional(),
       })
       .optional(),
   }),
@@ -49,11 +66,10 @@ export const StatusResponseSchema = z.object({
       model: z.string(),
       dimension: z.number(),
       mode: z.string(),
+      status: z.string(),
       fallbackFrom: z.string().optional(),
-      lastError: z.string().optional(),
-      attempts: z
-        .array(z.object({ provider: z.string(), ok: z.boolean(), reason: z.string().optional() }))
-        .optional(),
+      lastError: RuntimeErrorSchema.optional(),
+      attempts: z.array(ProviderAttemptSchema).optional(),
     })
     .optional(),
   modelRuntime: z.object({
@@ -64,10 +80,8 @@ export const StatusResponseSchema = z.object({
       mode: z.string(),
       status: z.string(),
       fallbackFrom: z.string().optional(),
-      lastError: z.string().optional(),
-      attempts: z.array(
-        z.object({ provider: z.string(), ok: z.boolean(), reason: z.string().optional() }),
-      ),
+      lastError: RuntimeErrorSchema.optional(),
+      attempts: z.array(ProviderAttemptSchema),
     }),
     embed: z.object({
       requestedProvider: z.string(),
@@ -75,11 +89,10 @@ export const StatusResponseSchema = z.object({
       model: z.string(),
       dimension: z.number(),
       mode: z.string(),
+      status: z.string(),
       fallbackFrom: z.string().optional(),
-      lastError: z.string().optional(),
-      attempts: z.array(
-        z.object({ provider: z.string(), ok: z.boolean(), reason: z.string().optional() }),
-      ),
+      lastError: RuntimeErrorSchema.optional(),
+      attempts: z.array(ProviderAttemptSchema),
     }),
   }),
   memory: z.object({
@@ -104,10 +117,31 @@ export const StatusResponseSchema = z.object({
     .optional(),
   /** Phase 3.3 ?????????vector / hybrid???*/
   retrievalMode: z.enum(["vector", "hybrid"]).optional(),
+  classifier: z.object({
+    enabled: z.boolean(),
+    impliedByTaskPool: z.boolean(),
+  }),
   taskPool: z
     .object({
-      enabled: z.boolean(),
+      requested: z.boolean(),
+      active: z.boolean(),
+      classifierRequired: z.literal(true),
+      classifierEnabled: z.boolean(),
+      reason: z.enum(["disabled", "classifier_required", "ready"]),
+      eligibleTaskTypes: z.tuple([z.literal("planning"), z.literal("analysis")]),
       precedence: z.literal("taskpool-before-self-consistency"),
+      persistence: z.enum(["none", "sqlite"]),
+      recovery: z.enum(["unsupported", "cancel", "resume"]),
+      recoverySummary: z
+        .object({
+          policy: z.enum(["cancel", "resume"]),
+          found: z.number(),
+          resumed: z.number(),
+          completed: z.number(),
+          cancelled: z.number(),
+          failed: z.number(),
+        })
+        .optional(),
     })
     .optional(),
   /** RFC-006 当前行为契约版本与 A/B cohort。 */

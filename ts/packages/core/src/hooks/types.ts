@@ -288,6 +288,50 @@ export interface HookEventMap {
     attempt: number;
     error?: string;
   };
+  /** RFC-005：provider 健康探测完成（不包含 endpoint、凭据或响应体）。 */
+  "model.provider.probe": {
+    channel: "llm" | "embedding";
+    provider: string;
+    model: string;
+    ok: boolean;
+    durationMs: number;
+    errorCode?: string;
+  };
+  /** RFC-005：resolution 选定实际 provider。 */
+  "model.provider.selected": {
+    channel: "llm" | "embedding";
+    requestedProvider: string;
+    provider: string;
+    model: string;
+    mode: string;
+  };
+  /** RFC-005：auto resolution 发生显式可见 fallback。 */
+  "model.provider.fallback": {
+    channel: "llm" | "embedding";
+    from: string;
+    to: string;
+    errorCode: string;
+  };
+  /** RFC-005：provider resolution/refresh 失败；message 必须已脱敏。 */
+  "model.provider.error": {
+    channel: "llm" | "embedding";
+    provider: string;
+    code: string;
+    message: string;
+    retriable: boolean;
+  };
+  /** RFC-005：持久化 embedding 指纹通过校验或首次创建。 */
+  "model.embedding.fingerprint.checked": {
+    expected: string;
+    stored?: string;
+    result: "matched" | "created";
+  };
+  /** RFC-005：持久化 embedding 指纹拒绝；不执行自动清库。 */
+  "model.embedding.fingerprint.rejected": {
+    expected: string;
+    stored?: string;
+    code: "EMBEDDING_FINGERPRINT_MISSING" | "EMBEDDING_FINGERPRINT_MISMATCH";
+  };
   /** Product Behavior（RFC-006）：本轮 run 注入的行为版本。 */
   "event.PRODUCT_BEHAVIOR": {
     version: string;

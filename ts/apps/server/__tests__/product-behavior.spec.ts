@@ -28,7 +28,7 @@ describe("server RFC-006 Product Behavior regression", () => {
 
     expect(cohorts).toEqual([true]);
     expect((await agent.status()).productBehavior).toEqual({
-      version: "1.0.0",
+      version: "1.1.0",
       enabled: true,
       cohort: "treatment",
     });
@@ -72,5 +72,23 @@ describe("server RFC-006 Product Behavior regression", () => {
       if (previous === undefined) delete process.env["OPENINTJ_PRODUCT_BEHAVIOR"];
       else process.env["OPENINTJ_PRODUCT_BEHAVIOR"] = previous;
     }
+  });
+
+  it("TaskPool opt-in implies its classifier prerequisite and reports activation", async () => {
+    agent = await assembleServerAgent({
+      llmProvider: "mock",
+      embedProvider: "simple",
+      enableTaskPool: true,
+      enableClassifier: false,
+    });
+
+    expect(agent.classifier).toBeDefined();
+    expect((await agent.status()).taskPool).toMatchObject({
+      requested: true,
+      active: true,
+      classifierRequired: true,
+      classifierEnabled: true,
+      reason: "ready",
+    });
   });
 });

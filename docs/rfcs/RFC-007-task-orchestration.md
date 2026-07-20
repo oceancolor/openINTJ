@@ -55,7 +55,9 @@ Hook 事件：
    Ollama/Hunyuan 会中止在途 provider fetch；调用方取消与 provider timeout 分离；
    per-task timeout、watchdog、有界指数 backoff 重试。
 3. **三端 parity**：CLI `--task-pool`、server env/config/status、desktop AppConfig/Settings；
-   符合条件时 TaskPool 明确优先于 self-consistency，默认简单路径不变。
+   TaskPool opt-in 自动启用其必需的 classifier，符合条件时明确优先于 self-consistency，
+   默认简单路径不变。状态统一暴露 requested/active/reason、classifier prerequisite 以及
+   persistence/recovery capability；CLI 明确不提供 SQLite restart recovery。
 4. **生产持久化**：`TaskStore` 抽象与 `@openintj/storage-sqlite` 的 `SqliteTaskStore`；
    server/desktop 在 opt-in + real data dir 下启动扫描 incomplete runs。快照持久化原始
    `goalInput`，completed partial results 可跨重启复用。默认安全取消遗留 run；

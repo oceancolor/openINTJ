@@ -118,7 +118,14 @@ export const detectTaskType = (query: string): TaskTypeType => {
   ) {
     return TaskType.TECHNICAL_WRITING;
   }
-  if (t.includes("分析") || t.includes("评估") || t.includes("对比")) {
+  if (
+    t.includes("分析") ||
+    t.includes("评估") ||
+    t.includes("对比") ||
+    t.includes("比较") ||
+    t.includes("优缺点") ||
+    /\bvs\.?\b/i.test(t)
+  ) {
     return TaskType.ANALYSIS;
   }
   if (t.includes("规划") || t.includes("方案") || t.includes("计划")) {

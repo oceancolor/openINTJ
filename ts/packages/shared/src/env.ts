@@ -136,7 +136,7 @@ export const summarizeLlmEnv = (
 ): {
   provider: string;
   hunyuan: { hasKey: boolean; baseUrl: string; model: string; search: boolean };
-  ollama: { baseUrl: string; model: string };
+  ollama: { baseUrl: string; model: string; embedModel: string };
   embedProvider: string;
   summary: string;
 } => {
@@ -156,6 +156,7 @@ export const summarizeLlmEnv = (
   const ollama = {
     baseUrl: env["OLLAMA_BASE_URL"] ?? "http://127.0.0.1:11434",
     model: env["OLLAMA_MODEL"] ?? "qwen2.5:7b",
+    embedModel: env["OLLAMA_EMBED_MODEL"] ?? "nomic-embed-text",
   };
   const tail =
     provider === "hunyuan"
@@ -170,6 +171,6 @@ export const summarizeLlmEnv = (
     hunyuan,
     ollama,
     embedProvider,
-    summary: `provider=${provider} embed=${embedProvider} ${tail}`,
+    summary: `provider=${provider} embed=${embedProvider} embedModel=${ollama.embedModel} ${tail}`,
   };
 };

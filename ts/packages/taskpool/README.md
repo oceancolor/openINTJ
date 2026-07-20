@@ -18,8 +18,13 @@ RFC-003 检索原语与 RFC-007 有界任务编排库。TaskPool 已作为三端
 ## TaskPool
 
 启用方式：CLI `chat --task-pool`、`OPENINTJ_TASK_POOL=1`、server/desktop
-`enableTaskPool: true`。仅分类为 `planning` / `analysis` 时生效。若同时启用
-self-consistency，符合条件的 TaskPool 明确优先；其他任务仍走 self-consistency。
+`enableTaskPool: true`。TaskPool 依赖 classifier 识别 `planning` / `analysis`；
+三端在请求 TaskPool 时会自动启用 classifier，Desktop 设置页也将该依赖显示为必需项。
+若同时启用 self-consistency，符合条件的 TaskPool 明确优先；其他任务仍走 self-consistency。
+
+三端状态统一返回 `requested/active/classifierRequired/classifierEnabled/reason` 及
+`persistence/recovery`。CLI 明确报告 `persistence=none,recovery=unsupported`；
+server/desktop 只有 real data dir 才报告 `persistence=sqlite` 和实际恢复策略。
 
 `TaskPool.submit()` 返回可取消的 `TaskRun` handle，`submitRun()` 是等待结果的兼容
 便捷方法。节点状态为
@@ -39,8 +44,8 @@ memory 模式不会创建数据库。启动时会读取 `listIncompleteRuns()`�
   保留 completed partial results，只重跑未完成节点。
 - 旧快照若缺少 `goalInput`，即使配置 resume 也会安全取消，不会用有损的 intent 标签伪造原始输入。
 
-server/desktop 装配完成后可从 `agent.taskPoolRecovery` 读取本次 found/resumed/completed/
-cancelled/failed 汇总。
+server/desktop 装配完成后可从 `agent.taskPoolRecovery` 或 status 的
+`taskPool.recoverySummary` 读取本次 found/resumed/completed/cancelled/failed 汇总。
 
 ## 可观测性
 

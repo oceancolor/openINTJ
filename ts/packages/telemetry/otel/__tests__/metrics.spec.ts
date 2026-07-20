@@ -400,6 +400,59 @@ describe("attachOtelToHooks — metrics", () => {
     otel.dispose();
   });
 
+  it("records ModelRuntime provider and fingerprint lifecycle metrics", async () => {
+    const bus = new HookBus();
+    const otel = attachOtelToHooks(bus);
+    await bus.emit("model.provider.probe", {
+      channel: "llm",
+      provider: "ollama",
+      model: "qwen",
+      ok: false,
+      durationMs: 12,
+      errorCode: "MODEL_PROVIDER_UNAVAILABLE",
+    });
+    await bus.emit("model.provider.selected", {
+      channel: "llm",
+      requestedProvider: "auto",
+      provider: "mock",
+      model: "mock-template",
+      mode: "mock",
+    });
+    await bus.emit("model.provider.fallback", {
+      channel: "llm",
+      from: "ollama",
+      to: "mock",
+      errorCode: "MODEL_PROVIDER_UNAVAILABLE",
+    });
+    await bus.emit("model.provider.error", {
+      channel: "llm",
+      provider: "ollama",
+      code: "MODEL_PROVIDER_UNAVAILABLE",
+      message: "offline",
+      retriable: true,
+    });
+    await bus.emit("model.embedding.fingerprint.checked", {
+      expected: "v1:simple:dim64:64",
+      result: "created",
+    });
+    await bus.emit("model.embedding.fingerprint.rejected", {
+      expected: "v1:simple:dim64:64",
+      stored: "v1:ollama:nomic:768",
+      code: "EMBEDDING_FINGERPRINT_MISMATCH",
+    });
+
+    const series = await flush();
+    const total = (name: string): number =>
+      series.filter((s) => s.name === name).reduce((sum, item) => sum + item.sum, 0);
+    expect(total("openintj.model.provider.probes")).toBe(1);
+    expect(total("openintj.model.provider.selected")).toBe(1);
+    expect(total("openintj.model.provider.fallbacks")).toBe(1);
+    expect(total("openintj.model.provider.errors")).toBe(1);
+    expect(total("openintj.model.embedding.fingerprint.checked")).toBe(1);
+    expect(total("openintj.model.embedding.fingerprint.rejected")).toBe(1);
+    otel.dispose();
+  });
+
   it("respects disableMetrics flag", async () => {
     const bus = new HookBus();
     const otel = attachOtelToHooks(bus, { disableMetrics: true });

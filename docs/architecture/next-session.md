@@ -21,13 +21,31 @@ RFC-005/006/007 的核心库、三端 opt-in 接线与确定性测试已经落�
    TaskPool → Tao → ReAct（含 micro-loop / `runSingle`）进入 Ollama/Hunyuan provider fetch；
    外部取消保留原始 reason，provider timeout 仍独立报告。core、TaskPool 与两 adapter
    在途请求取消回归测试通过。
-4. **ModelRuntime 生命周期与可观测性**：补健康刷新、结构化错误、`model.provider.*` /
-   `model.embedding.fingerprint.*` hooks 与 OTel。
-5. **TaskPool 激活契约**：显式处理 classifier 依赖、CLI 持久化边界，并修正配置提示，避免“开关已开但不执行”。
-6. **三端配置 / 状态一致性**：对齐 CLI/server/desktop provider 选项和状态字段；明确热重载与重启边界。
+4. ~~**ModelRuntime 生命周期与可观测性**~~：✅ 2026-07-19 完成。runtime 提供限频且
+   single-flight 的 `refreshHealth()`、脱敏限长的 `ModelRuntimeError` / structured
+   `lastError` / attempts；补齐 `model.provider.*` 与 fingerprint hooks、OTel spans/counters，
+   server status、Desktop STATUS IPC、CLI status 均接入刷新。
+5. ~~**TaskPool 激活契约**~~：✅ 2026-07-19 完成。三端 TaskPool opt-in 自动启用必需的
+   classifier；状态明确返回 requested/active/reason/prerequisites 及 persistence/recovery。
+   CLI 明示无 SQLite/restart recovery；server/desktop 返回启动 recovery summary；
+   Desktop 设置页和 StatusBar 均显示依赖及激活原因。
+6. ~~**三端配置 / 状态一致性**~~：✅ 2026-07-19 完成。CLI embedding provider 选项补齐
+   simple/xenova，与 server/desktop 共用完整 provider 集；三端统一输出 ModelRuntime structured
+   status、顶层 embed/classifier、健康刷新和 TaskPool activation capability。Desktop 配置仍明确为保存后重启生效，
+   CLI flags 仅作用于当前进程，server env/opts 在启动装配时生效。
 
-随后执行尚未关闭的真实环境验收：Ollama runtime E2E、live-model trait A/B、Ollama embedding
-基准、flywheel longrun、TaskPool provider cancel/recovery soak，以及首个签名桌面 release。
+2026-07-19 真实环境验收已执行：
+
+- Ollama runtime E2E 4/4；RFC-006 Product Behavior v1.1 后，`qwen2.5:0.5b`
+  live trait A/B 连续两次 treatment **9/9**，control **5/9** / **4/9**，
+  baseline 已关闭。T3 当前只验证 mock search 调用顺序，不代表事实答案正确。
+- `nomic-embed-text` embedding 基准两条路径均 nDCG@4 **1.000**；live longrun 的
+  user-preferences recall **50%**，tech-decisions recall **33.3%** / pass **83.3%**，
+  表明链路可用但“越用越好”的质量证据仍不足。
+- TaskPool 真 Ollama provider 取消 3 轮 + recovery 25 轮 soak 通过；新增 gated harness。
+- Windows 未签名 NSIS 安装包已成功产出，并修复 electron-builder 跟随 pnpm workspace
+  symlink 越出 appDir 的打包错误。签名 release 仍被品牌图标、证书 secrets、合入 main 与正式 tag 阻塞。
+
 动态 LLM 拆图、默认多 Agent、streaming/OpenAI-compatible provider、embedding migration
 属于后续独立 RFC，不混入本轮收口。
 
@@ -106,7 +124,8 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 ```
 
 > Windows 下 turbo `--concurrency=1` 是统一策略：避免并行 tsc / esbuild 抢内存导致的 V8 OOM 和 esbuild "service was stopped"。
-> RFC-006 当前 live-model 基线阻塞：需要可达、已配置的真实模型 runtime（Ollama 服务/模型或有效 provider 凭据）。
+> RFC-006 live-model 基线已通过：`qwen2.5:0.5b` treatment 连续两次 9/9；
+> `qwen2.5:7b` 在本机因 3.1GB CPU repack buffer 分配失败，待更大内存机器复测。
 > normal CI 的 scripted 9/9 只证明评测机械与 judges，严禁记作真实模型质量分。
 > e2e 测试需要 30s 超时（`describe(..., { timeout: 30_000 }, ...)`），LanceDB 首次建表 + 重新打开比较慢。
 > 远端 CI：见 `.github/workflows/ci.yml`；触发分支与 `paths` 过滤以 workflow 当前内容为准。
@@ -120,7 +139,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 |---|---|---|---|:-:|:-:|
 | 1 | ~~Python v2 ↔ TS 行为对齐测试~~ | ~~中~~ | ~~高~~ | ⭐⭐⭐ | ✅ 2026-05-20 完成（Phase 3.6） |
 | 2 | ~~真实持久化 e2e~~ | ~~中~~ | ~~高~~ | ⭐⭐⭐ | ✅ 2026-05-09 完成 |
-| 3 | **嵌入基准**：simple vs xenova vs ollama 在固定语料上的 nDCG | 低 | 中 | ⭐⭐ | 🟢 harness + 双路径基准落地；simple 基线 + **xenova 实测归档**（纯 cosine 0.396→**0.944**，产品路径 0.773→**1.000**，2026-07-08）→ 默认选型结论：CI 用 simple、质量敏感部署切 xenova。ollama 需本地 `ollama serve` 后 `RUN_EMBED_COMPARE=1` 回填。见 `retrieval-benchmark.md` |
+| 3 | ~~**嵌入基准**：simple vs xenova vs ollama 在固定语料上的 nDCG~~ | ~~低~~ | ~~中~~ | ⭐⭐ | ✅ 三方实测归档：simple 纯 cosine 0.396、xenova 0.944、Ollama `nomic-embed-text` 1.000；产品路径分别 0.773 / 1.000 / 1.000。见 `retrieval-benchmark.md` |
 | 4 | ~~Desktop E2E（Playwright + Electron）~~ | ~~中~~ | ~~中~~ | ⭐⭐ | ✅ 2026-05-20 完成（Phase 3.7） |
 | 5 | ~~RFC-003 装配进主 Agent~~ | ~~中~~ | ~~中~~ | ⭐⭐ | ✅ 2026-05-11 完成 |
 | 6 | **打包发布**：electron-builder Win/macOS + electron-updater | 高 | 中 | ⭐ | 🟢 实现就绪：`electron-builder.yml`（Win nsis/mac dmg/linux AppImage，publish=github oceancolor/openINTJ）+ `updater.ts`（防御式、有测试）+ 主进程接线 + `UpdateBanner` UI + CI `release.yml`（tag v* → 构建 → `--publish always`）。剩运维手动项（图标/签名/首个真 release），见 `release-packaging.md` |
@@ -134,7 +153,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 
 **阶段收尾记录**：
 
-- ~~#3 嵌入基准~~（✅ xenova 真实数字已回填，纯 cosine 0.944；仅 ollama 待本地起服务后回填）
+- ~~#3 嵌入基准~~（✅ 2026-07-19 三方真实数字已回填；Ollama 纯 cosine / 产品路径均 1.000）
 - ~~#11 dormant 事件清理~~（✅ 2026-06-30 完成，见 §10.7）
 - ~~#12 parity 扩展~~（✅ 2026-07-08 governance+context+taxonomy，见 §12.8）
 - ~~#6 打包发布~~（✅ 2026-07-08 实现就绪，剩运维手动项，见 `release-packaging.md`）
@@ -398,11 +417,11 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 | RFC-001 TAO/ReAct | 双层循环 + 4 早停 + 多轮 | 🟢 主路径完成 | `enableReact:false` 与 ADR-001 已闭合；`tao-step-bench` 已守护框架开销。RFC-001 §11 Q2 的产品级“续轮”判据仍需单独决策 |
 | RFC-002 Hooks | 强类型/优先级/短路/改写 | 🟢 完成 | `hook-bus-bench` 已守护 no-handler / 10-handler / register 的灾难性性能回退 |
 | RFC-003 方向一 多线程 | Mutex/Channel/CV/Pool/ForkJoin 装配进 Agent | 🟢 有界接入 | `forkJoin` + `Semaphore`（经 `forkJoin.concurrency`）已进三端自一致性主路径（§9.3 并行 + §12.6 并发上限）；Mutex/Channel/CV/Pool/Backpressure 仍实验性 |
-| RFC-003 / RFC-007 任务池 | 模板 DAG、有界并发、可靠状态机、持久化 | 🟡 生产收口中 | TaskPool 已三端 opt-in，SQLite store/recover 有包级测试；应用启动恢复、真实 provider cancel/recovery soak 仍待完成 |
+| RFC-003 / RFC-007 任务池 | 模板 DAG、有界并发、可靠状态机、持久化 | 🟢 主路径收口 | TaskPool 已三端 opt-in；SQLite 启动恢复、LLM HTTP 取消传播及真 Ollama cancel/recovery soak 均通过。默认 resume 仍保持显式 opt-in |
 | RFC-003 方向三 钝化记忆 | 存→学→审批→**注入 systemPrompt** | 🟢 回路已闭合 | 2026-07-08 收官：`getPersona()` 出口 + 三端注入（含 CLI）+ A/B 杠杆（`OPENINTJ_PERSONA`）+ 脱敏（默认开）+ revoke（runtime/IPC/HTTP/UI 全通）。见 §12.4 |
 | RFC-004 桌面 IPC | 安全模型 + 流式 + 系统能力 | 🟢 基本完成 | 流式✅ 自动更新✅ 工作区读写(治理门禁)✅ config 服务✅ fs.watch✅；2026-07-08 补齐**设置面板 UI**（消费 workspace/config IPC + 实时变更）+ config 字段/启动接线 + **utility 挖掘 worker**（opt-in）。见 §12.5 |
 | 跨 RFC 执行工具 | 治理边界下真实 fs/命令 | 🟢 完成 | fs/命令工具早已是真实沙箱实现（`createWorkspaceTools`）；2026-07-08 又把治理接进 `ToolHub.call`（gate → `checkToolCall`）+ 桌面 IPC，`[mock]` 仅剩 search 兜底。见 §12.3 |
-| #3 嵌入基准 | simple/xenova/ollama nDCG | 🟡 剩 Ollama | harness + 双路径基准已落地，simple/xenova 实测归档；Ollama 待回填。见 `retrieval-benchmark.md` |
+| #3 嵌入基准 | simple/xenova/ollama nDCG | 🟢 完成 | 三方双路径实测已归档；Ollama `nomic-embed-text` 两条路径 nDCG@4 均 1.000。见 `retrieval-benchmark.md` |
 
 ### 8.2 重点缺口（按严重度）
 
@@ -418,10 +437,11 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 
 仍弱 / 待补：
 - 性能基准已经存在，但只守灾难性回退，不等于生产负载容量测试。
-- 记忆召回已有 simple/xenova 固定语料指标；Ollama 数字和真实业务语料仍缺。
-- 钝化记忆 / classifier / Product Behavior 的长跑与 live-model A/B harness 已就绪，真实批量结果尚未归档。
+- 记忆召回已有 simple/xenova/Ollama 固定小语料指标；真实业务语料与大规模容量结果仍缺。
+- live-model trait A/B 已连续两次 9/9；longrun recall 仍仅 33.3%–50%，且 T3 使用 mock
+  search，仍需真实搜索 provider、更强模型和多次运行建立事实质量与长期质量置信区间。
 - fs/命令工具已是真实沙箱；联网 search 未配置 provider 时仍会走 mock 兜底，不能把该路径当真实任务完成证据。
-- OTel hooks/span/metric 已落地但默认 opt-in，尚无现成 dashboard/SLO；ModelRuntime provider 事件仍缺。
+- OTel hooks/span/metric 与 ModelRuntime provider/fingerprint 事件已落地但默认 opt-in，尚无现成 dashboard/SLO。
 
 ### 8.4 五项推进计划（2026-05-30 全部落地）
 

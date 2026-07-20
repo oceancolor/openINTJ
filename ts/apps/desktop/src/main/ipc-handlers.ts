@@ -58,7 +58,10 @@ export const registerIpcHandlers = (
 
   api.handle(IPC.PING, async () => ({ ok: true, ts: Date.now() }));
 
-  api.handle(IPC.STATUS, async () => agent.status());
+  api.handle(IPC.STATUS, async () => {
+    await agent.refreshModelRuntime();
+    return agent.status();
+  });
 
   api.handle(IPC.CHAT, async (_evt, raw: unknown) => {
     const parsed = ChatRequestSchema.safeParse(raw);
