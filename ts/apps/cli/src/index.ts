@@ -21,7 +21,11 @@ program
   .alias("c")
   .description("发起一次 Agent 对话")
   .argument("<query...>", "用户查询（可空格分隔）")
-  .option("-p, --provider <provider>", "LLM 提供方: auto | hunyuan | ollama | mock", "auto")
+  .option(
+    "-p, --provider <provider>",
+    "LLM 提供方: auto | ollama | hunyuan | kimi | minimax | glm | mock",
+    "auto",
+  )
   .option(
     "--embedding-provider <provider>",
     "Embedding 提供方: auto | simple | ollama | xenova | mock",
@@ -134,7 +138,11 @@ program
 program
   .command("status")
   .description("查看 LLM/Plane 状态")
-  .option("-p, --provider <provider>", "LLM 提供方", "auto")
+  .option(
+    "-p, --provider <provider>",
+    "LLM 提供方: auto | ollama | hunyuan | kimi | minimax | glm | mock",
+    "auto",
+  )
   .option(
     "--embedding-provider <provider>",
     "Embedding 提供方: auto | simple | ollama | xenova | mock",

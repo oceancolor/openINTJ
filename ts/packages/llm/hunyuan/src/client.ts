@@ -7,7 +7,12 @@ import {
   type LlmStatus,
   type ToolHandler,
 } from "@openintj/core";
-import { type HunyuanConfig, HunyuanConfigSchema, loadHunyuanConfigFromEnv } from "./types.js";
+import {
+  type HunyuanConfig,
+  HunyuanConfigSchema,
+  loadHunyuanConfigFromEnv,
+  migrateHunyuanConfig,
+} from "./types.js";
 
 interface OpenAIChatRequestMessage {
   role: ChatMessage["role"];
@@ -64,7 +69,10 @@ export class HunyuanClient implements LlmClient {
   lastSearchSources: HunyuanSearchSource[] = [];
 
   constructor(cfg: Partial<HunyuanConfig> | undefined = undefined) {
-    this.config = cfg !== undefined ? HunyuanConfigSchema.parse(cfg) : loadHunyuanConfigFromEnv();
+    this.config =
+      cfg !== undefined
+        ? migrateHunyuanConfig(HunyuanConfigSchema.parse(cfg))
+        : loadHunyuanConfigFromEnv();
     this.authFailed = false;
   }
 

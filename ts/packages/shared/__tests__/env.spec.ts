@@ -137,6 +137,20 @@ describe("@openintj/shared env loader", () => {
     expect(s.summary).toContain("embedModel=nomic-custom");
   });
 
+  it.each([
+    ["kimi", "KIMI_API_KEY", "kimi-k2.5"],
+    ["minimax", "MINIMAX_API_KEY", "MiniMax-M2.1"],
+    ["glm", "GLM_API_KEY", "glm-4.7"],
+  ] as const)("summarizeLlmEnv supports %s without leaking its key", (provider, key, model) => {
+    const s = summarizeLlmEnv({
+      LLM_PROVIDER: provider,
+      [key]: "provider-secret",
+    } as NodeJS.ProcessEnv);
+    expect(s.summary).toContain(`${provider}ApiKey=set`);
+    expect(s.summary).toContain(`model=${model}`);
+    expect(s.summary).not.toContain("provider-secret");
+  });
+
   it("summarizeLlmEnv mock 分支不暴露任何 url", () => {
     const s = summarizeLlmEnv({ LLM_PROVIDER: "mock" } as NodeJS.ProcessEnv);
     expect(s.summary).toContain("mock");

@@ -7,6 +7,7 @@ export * from "./resolve-embedder.js";
 export * from "./embedding-fingerprint.js";
 export * from "./embedding-persistence.js";
 export * from "./errors.js";
+export * from "./openai-providers.js";
 
 import { loadOllamaEmbedderConfigFromEnv } from "@openintj/embed-ollama";
 import { ModelRuntimeError, runtimeErrorInfo } from "./errors.js";
@@ -221,16 +222,25 @@ export const resolveModelRuntime = async (
             env["OLLAMA_BASE_URL"]?.trim() || "http://127.0.0.1:11434",
             status.llm.model,
           );
-        } else if (status.llm.provider === "hunyuan") {
+        } else if (
+          status.llm.provider === "hunyuan" ||
+          status.llm.provider === "kimi" ||
+          status.llm.provider === "minimax" ||
+          status.llm.provider === "glm"
+        ) {
           const providerStatus = llm.client.getStatus();
-          if (!hasHunyuanCredentials(env) || !providerStatus.available) {
+          const hasCredentials =
+            status.llm.provider === "hunyuan" ? hasHunyuanCredentials(env) : true;
+          if (!hasCredentials || !providerStatus.available) {
             const error = new ModelRuntimeError({
-              code: hasHunyuanCredentials(env)
-                ? "MODEL_PROVIDER_UNAVAILABLE"
-                : "MODEL_CREDENTIAL_MISSING",
-              message: providerStatus.lastError ?? "Hunyuan provider unavailable",
-              retriable: hasHunyuanCredentials(env),
-              provider: "hunyuan",
+              code: !hasCredentials
+                ? "MODEL_CREDENTIAL_MISSING"
+                : providerStatus.status === "unauthorized"
+                  ? "MODEL_AUTH_FAILED"
+                  : "MODEL_PROVIDER_UNAVAILABLE",
+              message: providerStatus.lastError ?? `${status.llm.provider} provider unavailable`,
+              retriable: hasCredentials && providerStatus.status !== "unauthorized",
+              provider: status.llm.provider,
             });
             status.llm.status = providerStatus.status;
             status.llm.lastError = runtimeErrorInfo(error, now());

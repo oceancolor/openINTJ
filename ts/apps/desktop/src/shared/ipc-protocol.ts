@@ -434,11 +434,56 @@ export type WorkspaceError = z.infer<typeof WorkspaceErrorSchema>;
 
 // ---------- ??????getConfig / updateConfig??----------
 
+export const ModelProviderSchema = z.enum([
+  "auto",
+  "ollama",
+  "hunyuan",
+  "kimi",
+  "minimax",
+  "glm",
+  "mock",
+]);
+export type ModelProvider = z.infer<typeof ModelProviderSchema>;
+
+export const ModelProfileSchema = z.object({
+  id: z.string().min(1).max(128),
+  name: z.string().min(1).max(80),
+  provider: ModelProviderSchema,
+  model: z.string().min(1).max(200),
+  baseUrl: z.string().url().optional(),
+  hasCredential: z.boolean().optional(),
+});
+export type ModelProfile = z.infer<typeof ModelProfileSchema>;
+
+export const DEFAULT_MODEL_PROFILES: readonly ModelProfile[] = [
+  { id: "auto", name: "自动选择", provider: "auto", model: "auto", hasCredential: true },
+  {
+    id: "ollama",
+    name: "Ollama 本地",
+    provider: "ollama",
+    model: "qwen2.5:7b",
+    hasCredential: true,
+  },
+  { id: "hunyuan-hy3", name: "腾讯混元 Hy3", provider: "hunyuan", model: "hy3" },
+  { id: "kimi-k3", name: "Kimi K3", provider: "kimi", model: "kimi-k3" },
+  { id: "minimax-m3", name: "MiniMax M3", provider: "minimax", model: "MiniMax-M3" },
+  { id: "glm-5.2", name: "GLM 5.2", provider: "glm", model: "glm-5.2" },
+  { id: "mock", name: "Mock（开发）", provider: "mock", model: "mock", hasCredential: true },
+];
+
+export const ModelCredentialSetSchema = z.object({
+  profileId: z.string().min(1).max(128),
+  apiKey: z.string().min(1).max(4096),
+});
+export type ModelCredentialSet = z.infer<typeof ModelCredentialSetSchema>;
+
 /**
  * ?????????????????updateConfig ?????? * ??????**????**??????????workspaceDir ????????fs.watch ?????? */
 export const AppConfigSchema = z.object({
   workspaceDir: z.string().optional(),
-  llmProvider: z.enum(["auto", "ollama", "hunyuan", "mock"]).optional(),
+  llmProvider: ModelProviderSchema.optional(),
+  modelProfiles: z.array(ModelProfileSchema.omit({ hasCredential: true })).optional(),
+  activeModelProfileId: z.string().optional(),
   embedProvider: z.enum(["auto", "simple", "ollama", "xenova", "mock"]).optional(),
   ollamaBaseUrl: z.string().optional(),
   ollamaModel: z.string().optional(),
@@ -513,6 +558,10 @@ export const IPC = {
   // ??????
   CONFIG_GET: "openintj:config.get",
   CONFIG_UPDATE: "openintj:config.update",
+  MODEL_PROFILES: "openintj:model.profiles",
+  MODEL_CREDENTIAL_SET: "openintj:model.credential.set",
+  MODEL_CREDENTIAL_DELETE: "openintj:model.credential.delete",
+  APP_RESTART: "openintj:app.restart",
   // server-push events
   EVT_TAO: "openintj:evt.tao",
   EVT_REACT: "openintj:evt.react",

@@ -13,6 +13,7 @@ import { ModelRuntimeError, sanitizeModelRuntimeErrorMessage } from "../src/erro
 import { probeOllama } from "../src/health.js";
 import { resolveModelRuntime } from "../src/index.js";
 import { MockLlmClient } from "../src/mock-llm.js";
+import { OPENAI_PROVIDER_PROFILES } from "../src/openai-providers.js";
 import { parseEmbedProvider, resolveEmbedder } from "../src/resolve-embedder.js";
 import { parseLlmProvider, resolveLlmClient, resolveLlmClientSync } from "../src/resolve-llm.js";
 
@@ -29,6 +30,103 @@ describe("parseLlmProvider", () => {
   });
   it("读取 LLM_PROVIDER", () => {
     expect(parseLlmProvider({ LLM_PROVIDER: "ollama" })).toBe("ollama");
+  });
+  it.each(["kimi", "minimax", "glm"] as const)("recognizes %s", (provider) => {
+    expect(parseLlmProvider({ LLM_PROVIDER: provider })).toBe(provider);
+  });
+});
+
+describe("explicit OpenAI-compatible providers", () => {
+  const cases = [
+    ["kimi", "KIMI_API_KEY", "kimi-k2.5", "https://api.moonshot.cn/v1"],
+    ["minimax", "MINIMAX_API_KEY", "MiniMax-M2.1", "https://api.minimaxi.com/v1"],
+    ["glm", "GLM_API_KEY", "glm-4.7", "https://open.bigmodel.cn/api/paas/v4"],
+  ] as const;
+
+  it.each(cases)(
+    "%s uses official defaults and calls the compatible endpoint",
+    async (provider, keyName, model, baseUrl) => {
+      const fetchMock: typeof fetch = async (url, init) => {
+        expect(String(url)).toBe(`${baseUrl}/chat/completions`);
+        expect(JSON.parse(String(init?.body))).toMatchObject({ model });
+        return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }));
+      };
+      const resolved = await resolveLlmClient({
+        provider,
+        env: { [keyName]: "key" },
+        fetch: fetchMock,
+      });
+      expect(resolved.status).toMatchObject({
+        requestedProvider: provider,
+        provider,
+        model,
+        mode: "live",
+        status: "connected",
+      });
+      await expect(resolved.client.chat([{ role: "user", content: "hi" }])).resolves.toBe("ok");
+    },
+  );
+
+  it.each(Object.keys(OPENAI_PROVIDER_PROFILES) as Array<keyof typeof OPENAI_PROVIDER_PROFILES>)(
+    "%s fails closed without credentials",
+    async (provider) => {
+      await expect(resolveLlmClient({ provider, env: {} })).rejects.toMatchObject({
+        name: "ModelRuntimeError",
+        code: "MODEL_CREDENTIAL_MISSING",
+        retriable: false,
+        provider,
+      });
+    },
+  );
+
+  it("preserves explicit endpoint and model overrides", async () => {
+    const resolved = await resolveLlmClient({
+      provider: "kimi",
+      env: {
+        KIMI_API_KEY: "key",
+        KIMI_BASE_URL: "https://gateway.example.test/v1",
+        KIMI_MODEL: "custom-kimi",
+      },
+      fetch: async (url, init) => {
+        expect(String(url)).toBe("https://gateway.example.test/v1/chat/completions");
+        expect(JSON.parse(String(init?.body))).toMatchObject({ model: "custom-kimi" });
+        return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }));
+      },
+    });
+    expect(resolved.status.model).toBe("custom-kimi");
+    await resolved.client.chat([{ role: "user", content: "hi" }]);
+  });
+
+  it("keeps auto order limited to Ollama, Hunyuan, then mock", async () => {
+    const resolved = await resolveLlmClient({
+      provider: "auto",
+      env: { KIMI_API_KEY: "key", MINIMAX_API_KEY: "key", GLM_API_KEY: "key" },
+      fetch: async () => {
+        throw new Error("ollama offline");
+      },
+    });
+    expect(resolved.status.provider).toBe("mock");
+    expect(resolved.status.attempts.map((attempt) => attempt.provider)).toEqual(["ollama", "mock"]);
+  });
+
+  it("surfaces authorization failure in runtime health", async () => {
+    const runtime = await resolveModelRuntime({
+      provider: "glm",
+      embedProvider: "simple",
+      env: { GLM_API_KEY: "bad" },
+      fetch: async () =>
+        new Response(JSON.stringify({ error: { message: "bad key" } }), { status: 401 }),
+      healthRefreshIntervalMs: 0,
+    });
+    await expect(runtime.llm.client.chat([{ role: "user", content: "hi" }])).rejects.toMatchObject({
+      code: "CONFIG_MISSING",
+    });
+    const status = await runtime.refreshHealth();
+    expect(status.llm).toMatchObject({
+      provider: "glm",
+      status: "unauthorized",
+      lastError: { code: "MODEL_AUTH_FAILED", retriable: false },
+    });
   });
 });
 

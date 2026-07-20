@@ -76,6 +76,55 @@ describe("__taoTest__.detectTaskType", () => {
 });
 
 describe("TaoLoop.run (single iteration)", () => {
+  it("uses per-run history and LLM without mutating the default client", async () => {
+    const hooks = new HookBus({ logger: silent });
+    const defaultChat = vi.fn(async () => "FINAL: default");
+    const overrideChat = vi.fn(async () => "FINAL: override");
+    const asClient = (chat: LlmClient["chat"]): LlmClient => ({
+      chat,
+      visionChat: async () => "vision",
+      getStatus: () => ({
+        provider: "test",
+        model: "x",
+        available: true,
+        mode: "live",
+        status: "connected",
+        visionSupported: false,
+      }),
+    });
+    const react = new ReactStateMachine({
+      config: DEFAULT_REACT_CONFIG,
+      hooks,
+      llm: asClient(defaultChat),
+      toolRunner: passingRunner,
+    });
+    const tao = new TaoLoop({
+      config: DEFAULT_TAO_CONFIG,
+      hooks,
+      react,
+      availableTools: () => [],
+    });
+
+    const result = await tao.run("继续", {
+      enableReact: false,
+      llm: asClient(overrideChat),
+      history: [
+        { role: "user", content: "之前的问题" },
+        { role: "assistant", content: "之前的回答" },
+      ],
+    });
+
+    expect(result.finalAnswer).toBe("override");
+    expect(defaultChat).not.toHaveBeenCalled();
+    expect(overrideChat).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        { role: "user", content: "之前的问题" },
+        { role: "assistant", content: "之前的回答" },
+      ]),
+      expect.any(Object),
+    );
+  });
+
   it("fails fast when the caller signal is already aborted", async () => {
     const hooks = new HookBus({ logger: silent });
     const llm = makeLlm(["FINAL: unreachable"]);

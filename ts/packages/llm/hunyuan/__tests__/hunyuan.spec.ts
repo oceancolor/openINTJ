@@ -1,7 +1,48 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HunyuanClient, createHunyuanSearchTool } from "../src/index.js";
+import {
+  HUNYUAN_DEFAULT_BASE_URL,
+  HUNYUAN_DEFAULT_MODEL,
+  HunyuanClient,
+  createHunyuanSearchTool,
+  loadHunyuanConfigFromEnv,
+} from "../src/index.js";
 
 describe("HunyuanClient (strict configuration)", () => {
+  it("uses the official Hy3 TokenHub defaults", () => {
+    const c = new HunyuanClient({ apiKey: "key" });
+    expect(c.config.baseUrl).toBe(HUNYUAN_DEFAULT_BASE_URL);
+    expect(c.config.model).toBe(HUNYUAN_DEFAULT_MODEL);
+  });
+
+  it("maps known retired defaults with warnings but preserves custom values", () => {
+    const warnings: string[] = [];
+    const migrated = loadHunyuanConfigFromEnv(
+      {
+        HUNYUAN_BASE_URL: "https://api.hunyuan.cloud.tencent.com/v1",
+        HUNYUAN_MODEL: "hy3-preview",
+      },
+      (message) => warnings.push(message),
+    );
+    expect(migrated).toMatchObject({
+      baseUrl: HUNYUAN_DEFAULT_BASE_URL,
+      model: HUNYUAN_DEFAULT_MODEL,
+    });
+    expect(warnings).toHaveLength(2);
+
+    const custom = loadHunyuanConfigFromEnv(
+      {
+        HUNYUAN_BASE_URL: "https://gateway.example.test/v1",
+        HUNYUAN_MODEL: "private-hy3-deployment",
+      },
+      (message) => warnings.push(message),
+    );
+    expect(custom).toMatchObject({
+      baseUrl: "https://gateway.example.test/v1",
+      model: "private-hy3-deployment",
+    });
+    expect(warnings).toHaveLength(2);
+  });
+
   it("fails closed when no api key is configured", async () => {
     const c = new HunyuanClient({ apiKey: "" });
     expect(c.isAvailable).toBe(false);
@@ -37,7 +78,7 @@ describe("HunyuanClient (live mode with fetch mock)", () => {
       expect(String(url)).toMatch(/chat\/completions$/);
       expect(reqInit.headers["Authorization"]).toBe("Bearer test-key");
       const body = JSON.parse(reqInit.body);
-      expect(body.model).toBe("hunyuan-turbos-latest");
+      expect(body.model).toBe("hy3");
       return new Response(
         JSON.stringify({
           choices: [{ message: { role: "assistant", content: "hi from llm" } }],

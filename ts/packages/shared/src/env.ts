@@ -137,6 +137,9 @@ export const summarizeLlmEnv = (
   provider: string;
   hunyuan: { hasKey: boolean; baseUrl: string; model: string; search: boolean };
   ollama: { baseUrl: string; model: string; embedModel: string };
+  kimi: { hasKey: boolean; baseUrl: string; model: string };
+  minimax: { hasKey: boolean; baseUrl: string; model: string };
+  glm: { hasKey: boolean; baseUrl: string; model: string };
   embedProvider: string;
   summary: string;
 } => {
@@ -149,8 +152,8 @@ export const summarizeLlmEnv = (
   };
   const hunyuan = {
     hasKey: Boolean(env["HUNYUAN_API_KEY"]?.trim()),
-    baseUrl: env["HUNYUAN_BASE_URL"] ?? "https://api.hunyuan.cloud.tencent.com/v1",
-    model: env["HUNYUAN_MODEL"] ?? "hunyuan-turbos-latest",
+    baseUrl: env["HUNYUAN_BASE_URL"] ?? "https://tokenhub.tencentmaas.com/v1",
+    model: env["HUNYUAN_MODEL"] ?? "hy3",
     search: isTruthy(env["HUNYUAN_ENABLE_SEARCH"]) || isTruthy(env["HUNYUAN_FORCE_SEARCH"]),
   };
   const ollama = {
@@ -158,18 +161,39 @@ export const summarizeLlmEnv = (
     model: env["OLLAMA_MODEL"] ?? "qwen2.5:7b",
     embedModel: env["OLLAMA_EMBED_MODEL"] ?? "nomic-embed-text",
   };
+  const kimi = {
+    hasKey: Boolean((env["KIMI_API_KEY"] ?? env["MOONSHOT_API_KEY"])?.trim()),
+    baseUrl: env["KIMI_BASE_URL"] ?? "https://api.moonshot.cn/v1",
+    model: env["KIMI_MODEL"] ?? "kimi-k2.5",
+  };
+  const minimax = {
+    hasKey: Boolean(env["MINIMAX_API_KEY"]?.trim()),
+    baseUrl: env["MINIMAX_BASE_URL"] ?? "https://api.minimaxi.com/v1",
+    model: env["MINIMAX_MODEL"] ?? "MiniMax-M2.1",
+  };
+  const glm = {
+    hasKey: Boolean((env["GLM_API_KEY"] ?? env["ZHIPUAI_API_KEY"])?.trim()),
+    baseUrl: env["GLM_BASE_URL"] ?? "https://open.bigmodel.cn/api/paas/v4",
+    model: env["GLM_MODEL"] ?? "glm-4.7",
+  };
+  const cloud = { kimi, minimax, glm };
   const tail =
     provider === "hunyuan"
       ? `hunyuanApiKey=${hunyuan.hasKey ? "set" : "MISSING"} model=${hunyuan.model} search=${hunyuan.search ? "on" : "off"}`
       : provider === "ollama"
         ? `ollamaModel=${ollama.model} baseUrl=${ollama.baseUrl}`
-        : provider === "auto"
-          ? `auto(local-first) ollama=${ollama.baseUrl} hunyuanKey=${hunyuan.hasKey ? "set" : "MISSING"}`
-          : "(explicit mock)";
+        : provider === "kimi" || provider === "minimax" || provider === "glm"
+          ? `${provider}ApiKey=${cloud[provider].hasKey ? "set" : "MISSING"} model=${cloud[provider].model} baseUrl=${cloud[provider].baseUrl}`
+          : provider === "auto"
+            ? `auto(local-first) ollama=${ollama.baseUrl} hunyuanKey=${hunyuan.hasKey ? "set" : "MISSING"}`
+            : "(explicit mock)";
   return {
     provider,
     hunyuan,
     ollama,
+    kimi,
+    minimax,
+    glm,
     embedProvider,
     summary: `provider=${provider} embed=${embedProvider} embedModel=${ollama.embedModel} ${tail}`,
   };

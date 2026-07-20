@@ -277,7 +277,17 @@ export interface ServerAgent {
 const parseServerLlmProvider = (opts: ServerAgentOpts): LlmProviderId => {
   if (opts.llmProvider) return opts.llmProvider;
   const raw = process.env["LLM_PROVIDER"]?.trim().toLowerCase();
-  if (raw === "auto" || raw === "ollama" || raw === "hunyuan" || raw === "mock") return raw;
+  if (
+    raw === "auto" ||
+    raw === "ollama" ||
+    raw === "hunyuan" ||
+    raw === "kimi" ||
+    raw === "minimax" ||
+    raw === "glm" ||
+    raw === "mock"
+  ) {
+    return raw;
+  }
   return "auto";
 };
 

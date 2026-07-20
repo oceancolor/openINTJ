@@ -5,5 +5,13 @@
     "rootDir": "src",
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../../core" },
+    { "path": "../../embed/ollama" },
+    { "path": "../../embed/xenova" },
+    { "path": "../hunyuan" },
+    { "path": "../ollama" },
+    { "path": "../openai-compat" }
+  ]
 }

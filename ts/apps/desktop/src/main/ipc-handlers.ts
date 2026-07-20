@@ -5,10 +5,12 @@ import { type IpcMain, type WebContents, ipcMain } from "electron";
 import {
   AppConfigPatchSchema,
   ChatRequestSchema,
+  DEFAULT_MODEL_PROFILES,
   DormantListRequestSchema,
   DormantProposalDecisionSchema,
   IPC,
   MemoryQueryRequestSchema,
+  ModelCredentialSetSchema,
   SkillListRequestSchema,
   SkillProposalDecisionSchema,
   WorkspaceReadRequestSchema,
@@ -16,6 +18,7 @@ import {
 } from "../shared/ipc-protocol.js";
 import type { DesktopAgent } from "./agent.js";
 import type { ConfigService } from "./config-store.js";
+import type { CredentialStore } from "./credential-store.js";
 
 const DORMANT_NOT_ENABLED = {
   error: "dormant_not_enabled",
@@ -40,6 +43,12 @@ export interface IpcDeps {
   pickDirectory?: () => Promise<string | null>;
   /** 应用配置服务；不传 → config.* channel 走内存空配置、不持久化。 */
   config?: ConfigService;
+  /** Gracefully close state and relaunch the Electron process. */
+  restart?: () => Promise<void>;
+  /** Encrypted model API keys; never returned to renderer. */
+  credentials?: CredentialStore;
+  /** Environment-provided credentials count as configured but remain outside the store. */
+  credentialEnv?: Partial<Record<"hunyuan" | "kimi" | "minimax" | "glm", boolean>>;
 }
 
 const workspaceError = (e: unknown): { error: "workspace_error"; message: string } => ({
@@ -61,6 +70,43 @@ export const registerIpcHandlers = (
   api.handle(IPC.STATUS, async () => {
     await agent.refreshModelRuntime();
     return agent.status();
+  });
+
+  api.handle(IPC.APP_RESTART, async () => {
+    if (!deps.restart) return { ok: false, reason: "restart_unavailable" };
+    await deps.restart();
+    return { ok: true };
+  });
+
+  api.handle(IPC.MODEL_PROFILES, async () => {
+    const custom = deps.config?.get().modelProfiles ?? [];
+    const merged = new Map(
+      [...DEFAULT_MODEL_PROFILES, ...custom].map((profile) => [profile.id, profile]),
+    );
+    return [...merged.values()].map((profile) => ({
+      ...profile,
+      hasCredential:
+        profile.hasCredential === true ||
+        deps.credentials?.has(profile.id) === true ||
+        (profile.provider !== "auto" &&
+          profile.provider !== "ollama" &&
+          profile.provider !== "mock" &&
+          deps.credentialEnv?.[profile.provider] === true),
+    }));
+  });
+
+  api.handle(IPC.MODEL_CREDENTIAL_SET, async (_evt, raw: unknown) => {
+    const parsed = ModelCredentialSetSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, error: "invalid_request" };
+    if (!deps.credentials) return { ok: false, error: "credential_store_unavailable" };
+    deps.credentials.set(parsed.data.profileId, parsed.data.apiKey);
+    return { ok: true };
+  });
+
+  api.handle(IPC.MODEL_CREDENTIAL_DELETE, async (_evt, profileId: unknown) => {
+    if (typeof profileId !== "string") return { ok: false, error: "invalid_request" };
+    if (!deps.credentials) return { ok: false, error: "credential_store_unavailable" };
+    return { ok: true, deleted: deps.credentials.delete(profileId) };
   });
 
   api.handle(IPC.CHAT, async (_evt, raw: unknown) => {
@@ -400,6 +446,10 @@ export const registerIpcHandlers = (
     unregister(): void {
       api.removeHandler(IPC.PING);
       api.removeHandler(IPC.STATUS);
+      api.removeHandler(IPC.APP_RESTART);
+      api.removeHandler(IPC.MODEL_PROFILES);
+      api.removeHandler(IPC.MODEL_CREDENTIAL_SET);
+      api.removeHandler(IPC.MODEL_CREDENTIAL_DELETE);
       api.removeHandler(IPC.CHAT);
       api.removeHandler(IPC.MEMORY_QUERY);
       api.removeHandler(IPC.AUDIT_RECENT);

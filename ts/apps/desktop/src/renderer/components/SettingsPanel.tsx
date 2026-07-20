@@ -11,14 +11,19 @@
  * 交互留给手动 / Playwright e2e。
  */
 import React from "react";
-import type { AppConfig, AppConfigPatch, WorkspaceInfo } from "../../shared/ipc-protocol.js";
+import type {
+  AppConfig,
+  AppConfigPatch,
+  ModelProfile,
+  WorkspaceInfo,
+} from "../../shared/ipc-protocol.js";
 
 const isError = (r: unknown): r is { error: string } =>
   typeof r === "object" && r !== null && "error" in r;
 
 type ChangeEvent = { event: string; path: string; ts: number };
 
-const PROVIDERS = ["auto", "mock", "ollama", "hunyuan"] as const;
+const PROVIDERS = ["auto", "mock", "ollama", "hunyuan", "kimi", "minimax", "glm"] as const;
 const EMBED_PROVIDERS = ["auto", "simple", "ollama", "xenova", "mock"] as const;
 const RETRIEVAL = ["vector", "hybrid"] as const;
 
@@ -59,14 +64,21 @@ export const SettingsPanel: React.FC = () => {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | undefined>();
   const [saved, setSaved] = React.useState(false);
+  const [profiles, setProfiles] = React.useState<ModelProfile[]>([]);
+  const [credentialDrafts, setCredentialDrafts] = React.useState<Record<string, string>>({});
 
   const refresh = React.useCallback(async (): Promise<void> => {
     const api = window.openintj;
     if (!api) return;
     try {
-      const [c, w] = await Promise.all([api.getConfig(), api.workspaceInfo()]);
+      const [c, w, p] = await Promise.all([
+        api.getConfig(),
+        api.workspaceInfo(),
+        api.modelProfiles(),
+      ]);
       setConfig(c);
       setWsInfo(w);
+      setProfiles(p);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -124,6 +136,38 @@ export const SettingsPanel: React.FC = () => {
     }
   };
 
+  const restart = async (): Promise<void> => {
+    const api = window.openintj;
+    if (!api || !window.confirm("确认重启 OpenINTJ？当前请求会被终止。")) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const result = await api.restartApp();
+      if (!result.ok) setError(result.reason ?? "restart_failed");
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  };
+
+  const saveCredential = async (profileId: string): Promise<void> => {
+    const apiKey = credentialDrafts[profileId]?.trim();
+    if (!apiKey) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const result = await window.openintj.setModelCredential({ profileId, apiKey });
+      if (!result.ok) throw new Error(result.error ?? "credential_save_failed");
+      setCredentialDrafts((current) => ({ ...current, [profileId]: "" }));
+      setProfiles(await window.openintj.modelProfiles());
+      setSaved(true);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const cfg = config ?? {};
 
   return (
@@ -157,9 +201,76 @@ export const SettingsPanel: React.FC = () => {
         </button>
       </section>
 
+      <section className="p-3 space-y-2 border-b border-gray-800">
+        <div className="text-gray-300 font-medium">模型 Profiles</div>
+        <div className="text-gray-500">API Key 使用系统安全存储加密，界面不会读取明文。</div>
+        {profiles.map((profile) => {
+          const needsKey = !["auto", "ollama", "mock"].includes(profile.provider);
+          return (
+            <div key={profile.id} className="rounded border border-gray-800 p-2 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  className={`text-left ${
+                    cfg.activeModelProfileId === profile.id ? "text-cyan-300" : "text-gray-200"
+                  }`}
+                  onClick={() =>
+                    void patch({
+                      activeModelProfileId: profile.id,
+                      llmProvider: profile.provider,
+                    })
+                  }
+                >
+                  {profile.name}
+                </button>
+                <span className={profile.hasCredential ? "text-green-400" : "text-amber-400"}>
+                  {profile.hasCredential ? "可用" : "需密钥"}
+                </span>
+              </div>
+              <div className="text-gray-500">
+                {profile.provider} / {profile.model}
+              </div>
+              {needsKey ? (
+                <div className="flex gap-1">
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    placeholder={profile.hasCredential ? "替换 API Key" : "输入 API Key"}
+                    value={credentialDrafts[profile.id] ?? ""}
+                    onChange={(event) =>
+                      setCredentialDrafts((current) => ({
+                        ...current,
+                        [profile.id]: event.target.value,
+                      }))
+                    }
+                    className="min-w-0 flex-1 bg-gray-800 text-gray-200 rounded px-2 py-1"
+                  />
+                  <button
+                    type="button"
+                    disabled={busy || !credentialDrafts[profile.id]?.trim()}
+                    onClick={() => void saveCredential(profile.id)}
+                    className="px-2 py-1 rounded bg-cyan-800 disabled:bg-gray-700"
+                  >
+                    保存
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </section>
+
       {/* 应用配置 */}
       <section className="p-3 space-y-3 border-b border-gray-800">
         <div className="text-gray-300 font-medium">应用配置</div>
+        <button
+          type="button"
+          onClick={() => void restart()}
+          disabled={busy}
+          className="px-2 py-1 rounded bg-orange-700 hover:bg-orange-600 disabled:bg-gray-700 text-white"
+        >
+          重启 OpenINTJ
+        </button>
 
         <label className="flex items-center gap-2">
           <span className="w-24 text-gray-400">LLM 提供方</span>

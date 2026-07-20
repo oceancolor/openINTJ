@@ -18,6 +18,14 @@ const main = async (): Promise<void> => {
       "[OpenINTJ server] LLM_PROVIDER=hunyuan 但未读到 HUNYUAN_API_KEY —— strict 模式将报错（不再静默 mock）。",
     );
   }
+  if (
+    (provider === "kimi" || provider === "minimax" || provider === "glm") &&
+    !envSummary[provider].hasKey
+  ) {
+    console.warn(
+      `[OpenINTJ server] LLM_PROVIDER=${provider} 但未读到对应 API key —— strict 模式将报错（不再静默 mock）。`,
+    );
+  }
   const agent = await assembleServerAgent({ llmProvider: provider });
   const status = await agent.status();
   console.log(

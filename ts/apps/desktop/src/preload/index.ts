@@ -22,6 +22,8 @@ import {
   IPC,
   type MemoryQueryRequest,
   type MemoryQueryResult,
+  type ModelCredentialSet,
+  type ModelProfile,
   type SkillActiveResponse,
   type SkillDecisionResponse,
   type SkillDistillResponse,
@@ -179,6 +181,21 @@ const api = {
   /** 浅合并更新应用配置并持久化，返回合并后的完整配置。 */
   updateConfig(patch: AppConfigPatch): Promise<AppConfig | { error: string }> {
     return ipcRenderer.invoke(IPC.CONFIG_UPDATE, patch);
+  },
+  /** Gracefully close stores and relaunch the desktop process. */
+  restartApp(): Promise<{ ok: boolean; reason?: string }> {
+    return ipcRenderer.invoke(IPC.APP_RESTART);
+  },
+  modelProfiles(): Promise<ModelProfile[]> {
+    return ipcRenderer.invoke(IPC.MODEL_PROFILES);
+  },
+  setModelCredential(req: ModelCredentialSet): Promise<{ ok: boolean; error?: string }> {
+    return ipcRenderer.invoke(IPC.MODEL_CREDENTIAL_SET, req);
+  },
+  deleteModelCredential(
+    profileId: string,
+  ): Promise<{ ok: boolean; deleted?: boolean; error?: string }> {
+    return ipcRenderer.invoke(IPC.MODEL_CREDENTIAL_DELETE, profileId);
   },
 };
 

@@ -2,7 +2,7 @@ import type { EmbeddingProvider, HookBus, LlmClient } from "@openintj/core";
 import type { ModelRuntimeErrorCode } from "./errors.js";
 
 /** LLM provider 标识（requested / actual）。 */
-export type LlmProviderId = "auto" | "ollama" | "hunyuan" | "mock";
+export type LlmProviderId = "auto" | "ollama" | "hunyuan" | "kimi" | "minimax" | "glm" | "mock";
 
 /** Embedding provider 标识。首期无 hunyuan/xenova 在 auto 链中（xenova 可显式选）。 */
 export type EmbedProviderId = "auto" | "simple" | "ollama" | "xenova" | "mock";

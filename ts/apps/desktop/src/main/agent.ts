@@ -9,6 +9,7 @@ import { type RateLimitOpts, RateLimitedLlmClient, forkJoin } from "@openintj/co
 import {
   DEFAULT_REACT_CONFIG,
   DEFAULT_TAO_CONFIG,
+  type ChatMessage,
   HookBus,
   type LlmClient,
   ReactStateMachine,
@@ -360,7 +361,7 @@ export interface DesktopAgent {
   workspace: { config: ResolvedWorkspaceConfig; tools: WorkspaceTools };
   /** 基于 HybridRetriever 的检索辅助；无论 retrievalMode 都可用。 */
   retrieveHybrid(query: string, opts?: DesktopRetrieveHybridOpts): Promise<DesktopHybridHit[]>;
-  run(query: string): Promise<TaoResult>;
+  run(query: string, opts?: DesktopRunOptions): Promise<TaoResult>;
   status(): {
     llm: ReturnType<LlmClient["getStatus"]> & { runtime?: ModelRuntimeStatus["llm"] };
     embed?: ModelRuntimeStatus["embed"];
@@ -390,6 +391,14 @@ export interface DesktopAgent {
     };
   };
   close(): Promise<void>;
+}
+
+export interface DesktopRunOptions {
+  signal?: AbortSignal;
+  history?: readonly ChatMessage[];
+  llm?: LlmClient;
+  /** Stable workspace/task/conversation tags written with both sides of the turn. */
+  contextTags?: readonly string[];
 }
 
 const resolveDesktopOtel = (opts: DesktopAgentOpts): AttachOtelOpts | undefined => {
@@ -690,20 +699,26 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     ...(taskPoolRecovery ? { taskPoolRecovery } : {}),
     workspace: { config: wsConfig, tools: wsTools },
     retrieveHybrid,
-    async run(query: string) {
+    async run(query: string, runOpts: DesktopRunOptions = {}) {
       await hooks.emit("event.PRODUCT_BEHAVIOR", {
         version: PRODUCT_BEHAVIOR_VERSION,
         enabled: productBehaviorEnabled,
       });
       if (dormant) dormant.record(query, "user", { stage: "run.input" });
+      const scopedMemories =
+        runOpts.contextTags && runOpts.contextTags.length > 0
+          ? memory.store.all.filter((fragment) =>
+              runOpts.contextTags?.every((tag) => fragment.taskTags.includes(tag)),
+            )
+          : memory.store.all;
       const preflight = productBehaviorEnabled
-        ? resolveDeterministicProductBehaviorAnswer(query, { memories: memory.store.all })
+        ? resolveDeterministicProductBehaviorAnswer(query, { memories: scopedMemories })
         : undefined;
       // 前端分类器：预分类 → taskType + 降 token 路由（高置信简单类走单次 LLM）。
       const cls = !preflight && classifier ? await classifier.classify(query) : undefined;
       const route = cls ? decideRoute(cls) : undefined;
       const routedTaskType = cls?.label ?? detectTaskType(query);
-      const taoOpts = (traceId?: string, signal?: AbortSignal) => ({
+      const taoOpts = (traceId?: string, signal: AbortSignal | undefined = runOpts.signal) => ({
         taskType: routedTaskType,
         ...(route?.single || (!cls && routedTaskType === TaskType.QUICK_RESPONSE)
           ? { enableReact: false }
@@ -711,6 +726,8 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
         ...(route ? { topK: route.topK } : {}),
         ...(traceId ? { traceId } : {}),
         ...(signal ? { signal } : {}),
+        ...(runOpts.history ? { history: runOpts.history } : {}),
+        ...(runOpts.llm ? { llm: runOpts.llm } : {}),
       });
       // 先跑（contextProvider 会检索此前已落盘的记忆），再记录本轮 → 避免检索命中当前输入本身。
       let result: TaoResult;
@@ -773,7 +790,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
           draft: result.finalAnswer,
           searchEvidence: resolveSearchEvidenceStatus(result.trajectory),
           revise: async (instruction) =>
-            llm.chat(
+            (runOpts.llm ?? llm).chat(
               [
                 {
                   role: "system",
@@ -788,7 +805,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       }
       // 把 search 工具命中的联网来源追加到答案末尾 → 随记忆/dormant 一起入库。
       result.finalAnswer = appendSourcesFooter(result.finalAnswer, result.trajectory);
-      const labelTags = cls ? [cls.label] : [];
+      const labelTags = [...(cls ? [cls.label] : []), ...(runOpts.contextTags ?? [])];
       await memory.recordUserInputAsync(query, labelTags);
       await memory.recordAssistantOutputAsync(result.finalAnswer, labelTags);
       if (classifier && cls) {

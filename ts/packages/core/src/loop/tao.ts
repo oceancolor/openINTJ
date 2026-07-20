@@ -11,6 +11,7 @@ import type { ReactStateMachine } from "./react.js";
 import type {
   ChatMessage,
   ImagePayload,
+  LlmClient,
   TaoConfig,
   TaoContext,
   TaoResult,
@@ -184,6 +185,10 @@ export class TaoLoop {
       topK?: number;
       /** Cooperative cancellation propagated into ReAct and tool execution. */
       signal?: AbortSignal;
+      /** Ordered messages from the persisted conversation, excluding the current query. */
+      history?: readonly ChatMessage[];
+      /** Conversation-scoped model override; never mutates the loop's default client. */
+      llm?: LlmClient;
     } = {},
   ): Promise<TaoResult> {
     opts.signal?.throwIfAborted();
@@ -202,7 +207,7 @@ export class TaoLoop {
       metrics: {},
     };
 
-    const history: ChatMessage[] = [];
+    const history: ChatMessage[] = [...(opts.history ?? [])];
     let totalReactSteps = 0;
     let totalTokensSpent = 0;
     let status: TaoStatus = "completed";
@@ -288,9 +293,10 @@ export class TaoLoop {
         systemPrompt: finalSystemPrompt,
       };
 
-      const reactOpts: { traceId?: string; signal?: AbortSignal } = {};
+      const reactOpts: { traceId?: string; signal?: AbortSignal; llm?: LlmClient } = {};
       if (traceId) reactOpts.traceId = traceId;
       if (opts.signal) reactOpts.signal = opts.signal;
+      if (opts.llm) reactOpts.llm = opts.llm;
       // enableReact=false 退化为单次 LLM 调用（不跑微循环、不下发工具）。
       const react = enableReact
         ? await this._react.run(reactInput, reactOpts)

@@ -34,6 +34,8 @@ export interface ReactDeps {
 export interface ReactRunOptions {
   traceId?: string;
   signal?: AbortSignal;
+  /** Per-run client override used by conversation-scoped model selection. */
+  llm?: LlmClient;
 }
 
 /**
@@ -177,6 +179,7 @@ export class ReactStateMachine {
 
   async run(input: ReactInput, opts: ReactRunOptions = {}): Promise<ReactOutput> {
     opts.signal?.throwIfAborted();
+    const llm = opts.llm ?? this._llm;
     const trajectory: TrajectoryEntry[] = [];
     const traceId = opts.traceId;
     const conversation: ChatMessage[] = [
@@ -211,7 +214,7 @@ export class ReactStateMachine {
       }
 
       const t0 = Date.now();
-      const llmText = await this._llm.chat(conversation, {
+      const llmText = await llm.chat(conversation, {
         temperature: 0.4,
         maxTokens: 1024,
         ...(opts.signal ? { signal: opts.signal } : {}),
@@ -435,6 +438,7 @@ export class ReactStateMachine {
    */
   async runSingle(input: ReactInput, opts: ReactRunOptions = {}): Promise<ReactOutput> {
     opts.signal?.throwIfAborted();
+    const llm = opts.llm ?? this._llm;
     const traceId = opts.traceId;
     const hookOpts = traceId ? { traceId } : undefined;
 
@@ -449,7 +453,7 @@ export class ReactStateMachine {
       ...input.messages,
     ];
     const t0 = Date.now();
-    const llmText = await this._llm.chat(conversation, {
+    const llmText = await llm.chat(conversation, {
       temperature: 0.4,
       maxTokens: 1024,
       ...(opts.signal ? { signal: opts.signal } : {}),

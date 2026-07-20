@@ -10,10 +10,11 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadOpenintjEnv, summarizeLlmEnv } from "@openintj/shared";
-import { BrowserWindow, app, dialog } from "electron";
+import { BrowserWindow, app, dialog, safeStorage } from "electron";
 import { type DesktopAgent, assembleDesktopAgent } from "./agent.js";
 import { type ConfigService, createConfigService } from "./config-store.js";
-import { type IpcDeps, registerIpcHandlers } from "./ipc-handlers.js";
+import { createCredentialStore } from "./credential-store.js";
+import { type IpcDeps, type IpcRegistration, registerIpcHandlers } from "./ipc-handlers.js";
 import { type AutoUpdaterHandle, initAutoUpdater } from "./updater.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -48,6 +49,14 @@ let mainWindow: BrowserWindow | undefined;
 let agent: DesktopAgent | undefined;
 let updater: AutoUpdaterHandle | undefined;
 let config: ConfigService | undefined;
+let ipcRegistration: IpcRegistration | undefined;
+let agentClosePromise: Promise<void> | undefined;
+
+const closeAgent = (): Promise<void> => {
+  if (!agent) return Promise.resolve();
+  agentClosePromise ??= agent.close();
+  return agentClosePromise;
+};
 
 const createWindow = (): BrowserWindow => {
   const win = new BrowserWindow({
@@ -82,6 +91,10 @@ void app
   .then(async () => {
     // 持久化的应用配置（用户在 UI 里改的偏好）。优先级：显式 env > 已存配置 > 默认。
     config = createConfigService(path.join(app.getPath("userData"), "config.json"));
+    const credentials = createCredentialStore(
+      path.join(app.getPath("userData"), "model-credentials.json"),
+      safeStorage,
+    );
     const savedConfig = config.get();
 
     const dataDir =
@@ -155,8 +168,25 @@ void app
       config?.update({ workspaceDir: picked });
       return picked;
     };
-    const ipcDeps: IpcDeps = { pickDirectory, ...(config ? { config } : {}) };
-    registerIpcHandlers(agent, mainWindow.webContents, undefined, ipcDeps);
+    const restart = async (): Promise<void> => {
+      ipcRegistration?.unregister();
+      await closeAgent();
+      app.relaunch();
+      app.quit();
+    };
+    const ipcDeps: IpcDeps = {
+      pickDirectory,
+      restart,
+      credentials,
+      credentialEnv: {
+        hunyuan: Boolean(process.env["HUNYUAN_API_KEY"]),
+        kimi: Boolean(process.env["KIMI_API_KEY"] ?? process.env["MOONSHOT_API_KEY"]),
+        minimax: Boolean(process.env["MINIMAX_API_KEY"]),
+        glm: Boolean(process.env["GLM_API_KEY"] ?? process.env["ZAI_API_KEY"]),
+      },
+      ...(config ? { config } : {}),
+    };
+    ipcRegistration = registerIpcHandlers(agent, mainWindow.webContents, undefined, ipcDeps);
 
     // #6 自动更新：仅打包后真正生效；dev/测试为 no-op。
     updater = initAutoUpdater({ getWebContents: () => mainWindow?.webContents });
@@ -164,7 +194,10 @@ void app
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {
         mainWindow = createWindow();
-        if (agent) registerIpcHandlers(agent, mainWindow.webContents, undefined, ipcDeps);
+        if (agent) {
+          ipcRegistration?.unregister();
+          ipcRegistration = registerIpcHandlers(agent, mainWindow.webContents, undefined, ipcDeps);
+        }
       }
     });
   })
@@ -181,11 +214,10 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", async () => {
   updater?.dispose();
-  if (agent) {
-    try {
-      await agent.close();
-    } catch (e) {
-      console.error("[OpenINTJ desktop] persist close failed:", e);
-    }
+  ipcRegistration?.unregister();
+  try {
+    await closeAgent();
+  } catch (e) {
+    console.error("[OpenINTJ desktop] persist close failed:", e);
   }
 });

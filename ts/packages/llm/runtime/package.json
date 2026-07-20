@@ -21,6 +21,7 @@
     "@openintj/embed-ollama": "workspace:*",
     "@openintj/embed-xenova": "workspace:*",
     "@openintj/llm-hunyuan": "workspace:*",
+    "@openintj/llm-openai-compat": "workspace:*",
     "@openintj/llm-ollama": "workspace:*"
   },
   "peerDependenciesMeta": {
