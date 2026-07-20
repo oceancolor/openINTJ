@@ -29,7 +29,7 @@ export const ChatPanel: React.FC<{
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#1e1e2e]">
+    <div className="flex flex-col h-full min-w-0 bg-[#1e1e2e]">
       <div className="h-10 px-3 border-b border-gray-800 flex items-center justify-between">
         <span className="text-xs text-gray-500">当前对话</span>
         <select
@@ -49,9 +49,7 @@ export const ChatPanel: React.FC<{
       </div>
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 ? (
-          <div className="text-gray-500 text-sm text-center mt-12">
-            👋 输入消息开始对话（默认 mock 模式，无网络也可用）
-          </div>
+          <div className="text-gray-500 text-sm text-center mt-12">👋 输入消息开始与 Hy3 对话</div>
         ) : (
           messages.map((m, i) => (
             <div

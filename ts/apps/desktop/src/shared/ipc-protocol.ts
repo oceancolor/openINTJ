@@ -459,7 +459,10 @@ export const ModelProfileSchema = z.object({
 });
 export type ModelProfile = z.infer<typeof ModelProfileSchema>;
 
+export const DEFAULT_DESKTOP_MODEL_PROFILE_ID = "hunyuan-hy3";
+
 export const DEFAULT_MODEL_PROFILES: readonly ModelProfile[] = [
+  { id: "hunyuan-hy3", name: "腾讯混元 Hy3", provider: "hunyuan", model: "hy3" },
   { id: "auto", name: "自动选择", provider: "auto", model: "auto", hasCredential: true },
   {
     id: "ollama",
@@ -468,7 +471,6 @@ export const DEFAULT_MODEL_PROFILES: readonly ModelProfile[] = [
     model: "qwen2.5:7b",
     hasCredential: true,
   },
-  { id: "hunyuan-hy3", name: "腾讯混元 Hy3", provider: "hunyuan", model: "hy3" },
   { id: "kimi-k3", name: "Kimi K3", provider: "kimi", model: "kimi-k3" },
   { id: "minimax-m3", name: "MiniMax M3", provider: "minimax", model: "MiniMax-M3" },
   { id: "glm-5.2", name: "GLM 5.2", provider: "glm", model: "glm-5.2" },
@@ -548,6 +550,7 @@ export const AppConfigSchema = z.object({
   llmProvider: ModelProviderSchema.optional(),
   modelProfiles: z.array(ModelProfileSchema.omit({ hasCredential: true })).optional(),
   activeModelProfileId: z.string().optional(),
+  modelDefaultsVersion: z.literal(1).optional(),
   activeWorkspaceId: z.string().optional(),
   activeTaskId: z.string().optional(),
   activeConversationId: z.string().optional(),

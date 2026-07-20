@@ -14,6 +14,27 @@ test.describe("desktop smoke (mock provider, no persist)", () => {
   test("boots and renders header", async ({ page }) => {
     await expect(page.locator("header").first()).toContainText("OpenINTJ");
     await expect(page.locator("header").first()).toContainText("v3.0 Local Desktop");
+    await expect(page.getByLabel("对话模型")).toHaveValue("hunyuan-hy3");
+  });
+
+  test("keeps transcript and composer together left of dashboard", async ({ page }) => {
+    const chat = page.locator("div.bg-\\[\\#1e1e2e\\]");
+    const input = page.locator('textarea[placeholder*="说点什么"]');
+    const dashboard = page
+      .getByRole("button", { name: /推理轨迹/ })
+      .locator("..")
+      .locator("..");
+    const [chatBox, inputBox, dashboardBox] = await Promise.all([
+      chat.boundingBox(),
+      input.boundingBox(),
+      dashboard.boundingBox(),
+    ]);
+    expect(chatBox).not.toBeNull();
+    expect(inputBox).not.toBeNull();
+    expect(dashboardBox).not.toBeNull();
+    expect(inputBox!.x).toBeGreaterThanOrEqual(chatBox!.x);
+    expect(inputBox!.x + inputBox!.width).toBeLessThanOrEqual(chatBox!.x + chatBox!.width);
+    expect(dashboardBox!.x).toBeGreaterThanOrEqual(chatBox!.x + chatBox!.width - 1);
   });
 
   test("status bar populates within 8s", async ({ page }) => {
@@ -24,6 +45,7 @@ test.describe("desktop smoke (mock provider, no persist)", () => {
   });
 
   test("chat round-trip: 你好 → mock greet answer", async ({ page }) => {
+    await page.getByLabel("对话模型").selectOption("mock");
     const input = page.locator('textarea[placeholder*="说点什么"]');
     await input.fill("你好");
     await page.getByRole("button", { name: "发送" }).click();
@@ -32,7 +54,7 @@ test.describe("desktop smoke (mock provider, no persist)", () => {
     // JSON 文本，所以必须把搜索范围圈在主聊天区内）。
     const chat = page.locator("div.bg-\\[\\#1e1e2e\\]");
     await expect(chat.getByText("你好", { exact: false }).first()).toBeVisible({ timeout: 5_000 });
-    await expect(chat.getByText("你好。有什么需要处理的？", { exact: true })).toBeVisible({
+    await expect(chat.getByText(/\[mock\] 收到：你好/)).toBeVisible({
       timeout: 15_000,
     });
   });
@@ -52,6 +74,7 @@ test.describe("desktop smoke (mock provider, no persist)", () => {
   });
 
   test("trajectory tab counts after chat", async ({ page }) => {
+    await page.getByLabel("对话模型").selectOption("mock");
     const input = page.locator('textarea[placeholder*="说点什么"]');
     await input.fill("hello");
     await page.getByRole("button", { name: "发送" }).click();

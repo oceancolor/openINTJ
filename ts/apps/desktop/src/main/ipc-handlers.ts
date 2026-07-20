@@ -62,6 +62,28 @@ const workspaceError = (e: unknown): { error: "workspace_error"; message: string
   message: e instanceof Error ? e.message : String(e),
 });
 
+const requestsFileArtifact = (query: string): boolean =>
+  /(?:创建|生成|写入|保存|输出|落盘|create|generate|write|save).{0,40}(?:文件|文档|代码|脚本|file|document|script|[A-Za-z0-9_.-]+\.[A-Za-z0-9]+)/iu.test(
+    query,
+  );
+
+const hasSuccessfulFileWrite = (trajectory: readonly unknown[]): boolean =>
+  trajectory.some((entry) => {
+    const state = (entry as { state?: { type?: string; toolResult?: unknown } })?.state;
+    if (state?.type !== "observation") return false;
+    const result = state.toolResult as
+      | { toolName?: string; success?: boolean; output?: unknown }
+      | undefined;
+    return result?.toolName === "write_file" && result.success === true;
+  });
+
+const fallbackArtifactPath = (query: string, taskId: string): string => {
+  const explicit = query.match(
+    /(?:^|[\s"'`（(])([A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_.-]+)*\.[A-Za-z0-9]{1,12})(?=$|[\s"'`，。）、)])/u,
+  )?.[1];
+  return explicit?.replaceAll("\\", "/") ?? `artifacts/${taskId}/result.md`;
+};
+
 /** 注册所有 IPC channel handler，并把 hook 事件转发为 webContents.send。 */
 export const registerIpcHandlers = (
   agent: DesktopAgent,
@@ -239,11 +261,24 @@ export const registerIpcHandlers = (
           }),
         { attributes: { "ipc.channel": IPC.CHAT } },
       );
+      let finalAnswer = result.finalAnswer;
+      if (
+        selected &&
+        requestsFileArtifact(parsed.data.query) &&
+        !hasSuccessfulFileWrite(result.trajectory)
+      ) {
+        const artifactPath = fallbackArtifactPath(parsed.data.query, selected.task.id);
+        await agent.workspace.tools.writeFile({
+          path: artifactPath,
+          content: result.finalAnswer,
+        });
+        finalAnswer = `${result.finalAnswer}\n\n已写入工作区：\`${artifactPath}\``;
+      }
       if (selected) {
         deps.workbench?.appendMessage({
           conversationId: selected.conversation.id,
           role: "assistant",
-          content: result.finalAnswer,
+          content: finalAnswer,
           traceId: result.traceId,
           tokens: result.totalTokensSpent,
           status: result.status,
@@ -251,7 +286,7 @@ export const registerIpcHandlers = (
       }
       const modelStatus = selectedLlm?.getStatus();
       return {
-        finalAnswer: result.finalAnswer,
+        finalAnswer,
         iterations: result.iterations,
         status: result.status,
         traceId: result.traceId,

@@ -8,6 +8,7 @@ import type {
   WorkbenchTask,
   WorkbenchWorkspace,
 } from "../shared/ipc-protocol.js";
+import { DEFAULT_DESKTOP_MODEL_PROFILE_ID } from "../shared/ipc-protocol.js";
 
 interface Statement {
   run(...params: unknown[]): { changes: number };
@@ -139,6 +140,7 @@ export const createWorkbenchStore = (opts: {
   idFactory?: () => string;
 }): WorkbenchStore => {
   if (opts.dbPath !== ":memory:") mkdirSync(dirname(opts.dbPath), { recursive: true });
+  mkdirSync(opts.defaultWorkspaceRoot, { recursive: true });
   const db = new (loadDatabase())(opts.dbPath);
   const now = opts.now ?? Date.now;
   const id = opts.idFactory ?? randomUUID;
@@ -170,6 +172,9 @@ export const createWorkbenchStore = (opts: {
       ON messages(conversation_id, created_at ASC);
     PRAGMA user_version = 1;
   `);
+  db.prepare("UPDATE conversations SET model_profile_id=? WHERE model_profile_id='auto'").run(
+    DEFAULT_DESKTOP_MODEL_PROFILE_ID,
+  );
 
   const seed = db.transaction(() => {
     const count = db.prepare("SELECT COUNT(*) AS count FROM workspaces").get() as { count: number };
@@ -193,7 +198,7 @@ export const createWorkbenchStore = (opts: {
     ).run(taskId, workspaceId, "Inbox", "active", timestamp, timestamp);
     db.prepare(
       "INSERT INTO conversations(id,task_id,title,model_profile_id,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-    ).run(conversationId, taskId, "新对话", "auto", timestamp, timestamp);
+    ).run(conversationId, taskId, "新对话", DEFAULT_DESKTOP_MODEL_PROFILE_ID, timestamp, timestamp);
   });
   seed();
 
@@ -234,6 +239,7 @@ export const createWorkbenchStore = (opts: {
       };
     },
     createWorkspace(input) {
+      mkdirSync(input.rootPath, { recursive: true });
       const timestamp = now();
       const workspaceId = id();
       db.prepare(

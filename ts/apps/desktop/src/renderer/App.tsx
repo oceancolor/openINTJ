@@ -5,6 +5,7 @@ import type {
   WorkbenchTask,
   WorkbenchWorkspace,
 } from "../shared/ipc-protocol.js";
+import { DEFAULT_DESKTOP_MODEL_PROFILE_ID } from "../shared/ipc-protocol.js";
 import { type ChatMessage, ChatPanel } from "./components/ChatPanel.js";
 import { DormantPanel } from "./components/DormantPanel.js";
 import { MemoryPanel } from "./components/MemoryPanel.js";
@@ -214,7 +215,7 @@ export const App = (): JSX.Element => {
     const createdConversation = await window.openintj.createWorkbenchConversation({
       parentId: createdTask.id,
       title: "新对话",
-      modelProfileId: profiles.find((profile) => profile.hasCredential)?.id ?? "auto",
+      modelProfileId: DEFAULT_DESKTOP_MODEL_PROFILE_ID,
     });
     setWorkspaces((current) => [created, ...current]);
     setTasks((current) => [createdTask, ...current]);
@@ -244,7 +245,7 @@ export const App = (): JSX.Element => {
     const createdConversation = await window.openintj.createWorkbenchConversation({
       parentId: created.id,
       title: "新对话",
-      modelProfileId: profiles.find((profile) => profile.hasCredential)?.id ?? "auto",
+      modelProfileId: DEFAULT_DESKTOP_MODEL_PROFILE_ID,
     });
     setConversations((current) => [createdConversation, ...current]);
     setActiveConversationId(createdConversation.id);
@@ -255,7 +256,7 @@ export const App = (): JSX.Element => {
     const created = await window.openintj.createWorkbenchConversation({
       parentId: activeTaskId,
       title: "新对话",
-      modelProfileId: profiles.find((profile) => profile.hasCredential)?.id ?? "auto",
+      modelProfileId: DEFAULT_DESKTOP_MODEL_PROFILE_ID,
     });
     setConversations((current) => [created, ...current]);
     setActiveConversationId(created.id);
@@ -280,6 +281,13 @@ export const App = (): JSX.Element => {
 
   const changeConversationModel = async (modelProfileId: string): Promise<void> => {
     if (!activeConversationId) return;
+    setConversations((current) =>
+      current.map((conversation) =>
+        conversation.id === activeConversationId
+          ? { ...conversation, modelProfileId }
+          : conversation,
+      ),
+    );
     const updated = await window.openintj.updateWorkbenchConversation({
       id: activeConversationId,
       modelProfileId,
@@ -308,7 +316,10 @@ export const App = (): JSX.Element => {
         </button>
       </header>
       <UpdateBanner />
-      <div className="flex-1 grid grid-cols-[240px_1fr_380px] min-h-0">
+      <div
+        className="flex-1 grid min-h-0"
+        style={{ gridTemplateColumns: "240px minmax(0, 1fr) 380px" }}
+      >
         <TaskSidebar
           workspaces={workspaces}
           tasks={tasks}

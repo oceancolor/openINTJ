@@ -7,10 +7,12 @@
  * - 应用生命周期 + 窗口管理
  */
 
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadOpenintjEnv, summarizeLlmEnv } from "@openintj/shared";
 import { BrowserWindow, app, dialog, safeStorage } from "electron";
+import { DEFAULT_DESKTOP_MODEL_PROFILE_ID, type ModelProvider } from "../shared/ipc-protocol.js";
 import { type DesktopAgent, assembleDesktopAgent } from "./agent.js";
 import { type ConfigService, createConfigService } from "./config-store.js";
 import { createCredentialStore } from "./credential-store.js";
@@ -108,15 +110,32 @@ void app
       safeStorage,
     );
     const modelRegistry = createModelRegistry({ config, credentials });
-    const savedConfig = config.get();
+    let savedConfig = config.get();
+    if (savedConfig.modelDefaultsVersion !== 1) {
+      savedConfig = config.update({
+        activeModelProfileId: DEFAULT_DESKTOP_MODEL_PROFILE_ID,
+        llmProvider: "hunyuan",
+        modelDefaultsVersion: 1,
+      });
+    }
+    if (!process.env["HUNYUAN_API_KEY"]) {
+      try {
+        const storedKey = credentials.get(DEFAULT_DESKTOP_MODEL_PROFILE_ID);
+        if (storedKey) process.env["HUNYUAN_API_KEY"] = storedKey;
+      } catch (error) {
+        console.warn("[OpenINTJ desktop] 无法读取安全存储中的 Hy3 凭据", error);
+      }
+    }
 
     const dataDir =
       process.env["OPENINTJ_DATA_DIR"] ?? path.join(app.getPath("userData"), "memory-store");
+    mkdirSync(dataDir, { recursive: true });
     // 工作区根（read_file / write_file 沙箱根）：默认 documents 下的 OpenINTJ 目录，避免落到随机 cwd。
     const workspaceDir =
       process.env["OPENINTJ_WORKSPACE_DIR"] ??
       savedConfig.workspaceDir ??
       path.join(app.getPath("documents"), "OpenINTJ");
+    mkdirSync(workspaceDir, { recursive: true });
     workbench = createWorkbenchStore({
       dbPath:
         process.env["OPENINTJ_DESKTOP_NO_PERSIST"] === "1"
@@ -126,9 +145,24 @@ void app
       ...(process.env["OPENINTJ_DESKTOP_NO_PERSIST"] === "1" ? {} : { defaultDataDir: dataDir }),
     });
     const llmProvider =
-      (process.env["LLM_PROVIDER"] as "auto" | "ollama" | "hunyuan" | "mock" | undefined) ??
+      (process.env["LLM_PROVIDER"] as ModelProvider | undefined) ??
       savedConfig.llmProvider ??
-      "auto";
+      "hunyuan";
+    const embedProvider =
+      ((process.env["EMBEDDING_PROVIDER"] ?? process.env["EMBED_PROVIDER"]) as
+        | "auto"
+        | "ollama"
+        | "mock"
+        | undefined) ?? savedConfig.embedProvider;
+    if (
+      process.env["HUNYUAN_MODEL"] === "hy3-preview" ||
+      process.env["HUNYUAN_MODEL"] === "hunyuan-turbos-latest"
+    ) {
+      console.warn(
+        `[OpenINTJ desktop] 已将旧 Hunyuan 模型 '${process.env["HUNYUAN_MODEL"]}' 迁移为 'hy3'`,
+      );
+      process.env["HUNYUAN_MODEL"] = "hy3";
+    }
     const envSummary = summarizeLlmEnv();
     console.log(`[OpenINTJ desktop] llm: ${envSummary.summary}`);
     if (llmProvider === "hunyuan" && !envSummary.hunyuan.hasKey) {
@@ -141,11 +175,17 @@ void app
     if (savedConfig.ollamaModel) process.env["OLLAMA_MODEL"] = savedConfig.ollamaModel;
     if (savedConfig.ollamaEmbedModel)
       process.env["OLLAMA_EMBED_MODEL"] = savedConfig.ollamaEmbedModel;
-    if (savedConfig.embedProvider) process.env["EMBED_PROVIDER"] = savedConfig.embedProvider;
+    if (
+      savedConfig.embedProvider &&
+      !process.env["EMBEDDING_PROVIDER"] &&
+      !process.env["EMBED_PROVIDER"]
+    ) {
+      process.env["EMBED_PROVIDER"] = savedConfig.embedProvider;
+    }
 
     agent = await assembleDesktopAgent({
       llmProvider,
-      ...(savedConfig.embedProvider ? { embedProvider: savedConfig.embedProvider } : {}),
+      ...(embedProvider ? { embedProvider } : {}),
       dataDir,
       workspaceDir,
       ...(savedConfig.retrievalMode ? { retrievalMode: savedConfig.retrievalMode } : {}),

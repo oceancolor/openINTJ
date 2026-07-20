@@ -7,9 +7,9 @@ import {
 } from "@openintj/classifier";
 import { type RateLimitOpts, RateLimitedLlmClient, forkJoin } from "@openintj/concurrency";
 import {
+  type ChatMessage,
   DEFAULT_REACT_CONFIG,
   DEFAULT_TAO_CONFIG,
-  type ChatMessage,
   HookBus,
   type LlmClient,
   ReactStateMachine,
@@ -401,6 +401,11 @@ export interface DesktopRunOptions {
   contextTags?: readonly string[];
 }
 
+const requestsWorkspaceArtifact = (query: string): boolean =>
+  /(?:创建|生成|写入|保存|输出|落盘|create|generate|write|save).{0,40}(?:文件|文档|代码|脚本|file|document|script|[A-Za-z0-9_.-]+\.[A-Za-z0-9]+)/iu.test(
+    query,
+  );
+
 const resolveDesktopOtel = (opts: DesktopAgentOpts): AttachOtelOpts | undefined => {
   if (opts.enableOtel === true) return {};
   if (opts.enableOtel && typeof opts.enableOtel === "object") return opts.enableOtel;
@@ -545,7 +550,14 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       callOpts?: { traceId?: string; timeoutMs?: number; signal?: AbortSignal },
     ) => toolHub.call(name, params, callOpts ?? {}),
   });
-  const baseSystemPrompt = opts.systemPrompt ?? DEFAULT_AGENT_SYSTEM_PROMPT;
+  const baseSystemPrompt =
+    opts.systemPrompt ??
+    [
+      DEFAULT_AGENT_SYSTEM_PROMPT,
+      `当前工作区根目录是 ${wsConfig.root}。`,
+      "当用户要求创建、生成、保存或修改文件时，必须调用 write_file 将完整产物写入工作区；",
+      "不得只在回答中展示代码或声称文件已创建。写入后在最终回答中明确列出相对路径。",
+    ].join("\n");
   const personaEnabled = resolvePersonaInjection(opts);
   const productBehaviorEnabled = resolveProductBehaviorEnabled(opts.enableProductBehavior);
   const taskPoolEnabled = resolveTaskPoolEnabled(opts.enableTaskPool);
@@ -711,13 +723,18 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
               runOpts.contextTags?.every((tag) => fragment.taskTags.includes(tag)),
             )
           : memory.store.all;
-      const preflight = productBehaviorEnabled
-        ? resolveDeterministicProductBehaviorAnswer(query, { memories: scopedMemories })
-        : undefined;
+      const artifactRequest = requestsWorkspaceArtifact(query);
+      const preflight =
+        productBehaviorEnabled && !artifactRequest
+          ? resolveDeterministicProductBehaviorAnswer(query, { memories: scopedMemories })
+          : undefined;
       // 前端分类器：预分类 → taskType + 降 token 路由（高置信简单类走单次 LLM）。
-      const cls = !preflight && classifier ? await classifier.classify(query) : undefined;
+      const cls =
+        !preflight && !artifactRequest && classifier ? await classifier.classify(query) : undefined;
       const route = cls ? decideRoute(cls) : undefined;
-      const routedTaskType = cls?.label ?? detectTaskType(query);
+      const routedTaskType = artifactRequest
+        ? TaskType.CODE_GENERATION
+        : (cls?.label ?? detectTaskType(query));
       const taoOpts = (traceId?: string, signal: AbortSignal | undefined = runOpts.signal) => ({
         taskType: routedTaskType,
         ...(route?.single || (!cls && routedTaskType === TaskType.QUICK_RESPONSE)

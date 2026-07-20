@@ -26,7 +26,7 @@ vi.mock("electron", () => ({
   BrowserWindow: class {},
 }));
 
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assembleDesktopAgent } from "../src/main/agent.js";
@@ -179,6 +179,56 @@ describe("IPC handler registration", () => {
       ]),
     );
     workbench.close();
+  });
+
+  it("CHAT materializes a requested file when the model omits write_file", async () => {
+    const handlers: Handlers = new Map();
+    const root = mkdtempSync(join(tmpdir(), "openintj-artifact-"));
+    const workbench = createWorkbenchStore({
+      dbPath: ":memory:",
+      defaultWorkspaceRoot: root,
+    });
+    const conversation = workbench.bootstrap().conversations[0]!;
+    const selectedClient = {
+      chat: vi.fn(async () => "FINAL: # 项目报告\n\n内容已完成。"),
+      visionChat: vi.fn(async () => "vision"),
+      getStatus: () => ({
+        provider: "hunyuan",
+        model: "hy3",
+        available: true,
+        mode: "live" as const,
+        status: "connected",
+        visionSupported: false,
+      }),
+    };
+    const agent = await assembleDesktopAgent({
+      llmProvider: "mock",
+      workspaceDir: root,
+    });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers), {
+      workbench,
+      modelRegistry: {
+        list: () => [],
+        resolve: vi.fn(async () => selectedClient),
+        test: vi.fn(async () => ({ ok: true, provider: "hunyuan", model: "hy3" })),
+        clear: vi.fn(),
+      },
+    });
+
+    const result = (await handlers.get(IPC.CHAT)?.(
+      {},
+      {
+        query: "请生成 report.md 文件",
+        conversationId: conversation.id,
+        modelProfileId: "hunyuan-hy3",
+      },
+    )) as { finalAnswer: string };
+
+    expect(readFileSync(join(root, "report.md"), "utf8")).toContain("项目报告");
+    expect(result.finalAnswer).toContain("已写入工作区：`report.md`");
+    await agent.close();
+    workbench.close();
+    rmSync(root, { recursive: true, force: true });
   });
 
   it("STATUS returns 4-plane snapshot", async () => {

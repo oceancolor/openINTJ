@@ -1,17 +1,23 @@
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createWorkbenchStore } from "../src/main/workbench-store.js";
 
 describe("WorkbenchStore", () => {
   it("seeds Inbox and persists task conversations with ordered messages", () => {
     let seq = 0;
+    const root = mkdtempSync(join(tmpdir(), "openintj-workbench-"));
     const store = createWorkbenchStore({
       dbPath: ":memory:",
-      defaultWorkspaceRoot: "C:\\workspace",
+      defaultWorkspaceRoot: root,
       now: () => 1_000 + seq,
       idFactory: () => `id-${++seq}`,
     });
     const seeded = store.bootstrap();
     expect(seeded.workspaces).toHaveLength(1);
+    expect(seeded.workspaces[0]?.rootPath).toBe(root);
+    expect(seeded.conversations[0]?.modelProfileId).toBe("hunyuan-hy3");
     expect(seeded.tasks[0]?.title).toBe("Inbox");
     expect(seeded.conversations).toHaveLength(1);
 
@@ -44,17 +50,23 @@ describe("WorkbenchStore", () => {
     ]);
     expect(store.getConversation(conversation.id).workspace.id).toBe(seeded.workspaces[0]!.id);
     store.close();
+    rmSync(root, { recursive: true, force: true });
   });
 
-  it("archives tasks without deleting their conversations", () => {
+  it("physically creates workspace directories and archives without deleting conversations", () => {
+    const root = mkdtempSync(join(tmpdir(), "openintj-workbench-"));
+    const createdRoot = join(root, "created-workspace");
     const store = createWorkbenchStore({
       dbPath: ":memory:",
-      defaultWorkspaceRoot: "C:\\workspace",
+      defaultWorkspaceRoot: root,
     });
+    store.createWorkspace({ name: "Created", rootPath: createdRoot });
+    expect(existsSync(createdRoot)).toBe(true);
     const seeded = store.bootstrap();
     const archived = store.updateTask(seeded.tasks[0]!.id, { status: "archived" });
     expect(archived.status).toBe("archived");
     expect(store.bootstrap().conversations).toHaveLength(1);
     store.close();
+    rmSync(root, { recursive: true, force: true });
   });
 });
