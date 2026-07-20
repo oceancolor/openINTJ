@@ -163,18 +163,18 @@ export const summarizeLlmEnv = (
   };
   const kimi = {
     hasKey: Boolean((env["KIMI_API_KEY"] ?? env["MOONSHOT_API_KEY"])?.trim()),
-    baseUrl: env["KIMI_BASE_URL"] ?? "https://api.moonshot.cn/v1",
-    model: env["KIMI_MODEL"] ?? "kimi-k2.5",
+    baseUrl: env["KIMI_BASE_URL"] ?? "https://api.moonshot.ai/v1",
+    model: env["KIMI_MODEL"] ?? "kimi-k3",
   };
   const minimax = {
     hasKey: Boolean(env["MINIMAX_API_KEY"]?.trim()),
-    baseUrl: env["MINIMAX_BASE_URL"] ?? "https://api.minimaxi.com/v1",
-    model: env["MINIMAX_MODEL"] ?? "MiniMax-M2.1",
+    baseUrl: env["MINIMAX_BASE_URL"] ?? "https://api.minimax.io/v1",
+    model: env["MINIMAX_MODEL"] ?? "MiniMax-M3",
   };
   const glm = {
-    hasKey: Boolean((env["GLM_API_KEY"] ?? env["ZHIPUAI_API_KEY"])?.trim()),
-    baseUrl: env["GLM_BASE_URL"] ?? "https://open.bigmodel.cn/api/paas/v4",
-    model: env["GLM_MODEL"] ?? "glm-4.7",
+    hasKey: Boolean((env["GLM_API_KEY"] ?? env["ZAI_API_KEY"] ?? env["ZHIPUAI_API_KEY"])?.trim()),
+    baseUrl: env["GLM_BASE_URL"] ?? "https://api.z.ai/api/paas/v4",
+    model: env["GLM_MODEL"] ?? "glm-5.2",
   };
   const cloud = { kimi, minimax, glm };
   const tail =

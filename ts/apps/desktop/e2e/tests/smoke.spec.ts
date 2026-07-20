@@ -32,8 +32,23 @@ test.describe("desktop smoke (mock provider, no persist)", () => {
     // JSON 文本，所以必须把搜索范围圈在主聊天区内）。
     const chat = page.locator("div.bg-\\[\\#1e1e2e\\]");
     await expect(chat.getByText("你好", { exact: false }).first()).toBeVisible({ timeout: 5_000 });
-    // MockLlmClient 是唯一显式 mock 路径；真实 provider adapter 不再生成 mock 文本。
-    await expect(chat.getByText(/\[mock\] 收到：你好/)).toBeVisible({ timeout: 15_000 });
+    await expect(chat.getByText("你好。有什么需要处理的？", { exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
+  });
+
+  test("task tree creates a conversation and switches its model", async ({ page }) => {
+    await expect(page.getByText("Inbox", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "+ 任务" }).click();
+    await expect(page.getByText("新任务", { exact: true })).toBeVisible();
+
+    const selector = page.getByLabel("对话模型");
+    await selector.selectOption("mock");
+    const input = page.locator('textarea[placeholder*="说点什么"]');
+    await input.fill("对比测试");
+    await page.getByRole("button", { name: "发送" }).click();
+    const chat = page.locator("div.bg-\\[\\#1e1e2e\\]");
+    await expect(chat.getByText(/\[mock\] 收到：对比测试/)).toBeVisible({ timeout: 15_000 });
   });
 
   test("trajectory tab counts after chat", async ({ page }) => {

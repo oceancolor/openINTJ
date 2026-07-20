@@ -32,6 +32,7 @@ import { join } from "node:path";
 import { assembleDesktopAgent } from "../src/main/agent.js";
 import { createConfigService } from "../src/main/config-store.js";
 import { type IpcDeps, registerIpcHandlers } from "../src/main/ipc-handlers.js";
+import { createWorkbenchStore } from "../src/main/workbench-store.js";
 import {
   WorkspaceInfoSchema,
   WorkspaceReadResponseSchema,
@@ -120,6 +121,64 @@ describe("IPC handler registration", () => {
       error?: string;
     };
     expect(r.error).toBe("invalid_request");
+  });
+
+  it("CHAT persists a conversation turn and uses its selected model", async () => {
+    const handlers: Handlers = new Map();
+    const workbench = createWorkbenchStore({
+      dbPath: ":memory:",
+      defaultWorkspaceRoot: "F:\\workspace",
+    });
+    const conversation = workbench.bootstrap().conversations[0]!;
+    workbench.updateConversation(conversation.id, { modelProfileId: "glm-5.2" });
+    const selectedClient = {
+      chat: vi.fn(async () => "FINAL: 来自 GLM"),
+      visionChat: vi.fn(async () => "vision"),
+      getStatus: () => ({
+        provider: "glm",
+        model: "glm-5.2",
+        available: true,
+        mode: "live" as const,
+        status: "connected",
+        visionSupported: false,
+      }),
+    };
+    const modelRegistry = {
+      list: () => [],
+      resolve: vi.fn(async () => selectedClient),
+      test: vi.fn(async () => ({ ok: true, provider: "glm", model: "glm-5.2" })),
+      clear: vi.fn(),
+    };
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers), {
+      workbench,
+      modelRegistry,
+    });
+
+    const result = (await handlers.get(IPC.CHAT)?.(
+      {},
+      { query: "继续", conversationId: conversation.id },
+    )) as { finalAnswer: string; provider: string };
+
+    expect(result.finalAnswer).toBe("来自 GLM");
+    expect(result.provider).toBe("glm");
+    expect(modelRegistry.resolve).toHaveBeenCalledWith("glm-5.2");
+    expect(workbench.listMessages(conversation.id).map((entry) => entry.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+    await handlers.get(IPC.CHAT)?.({}, { query: "再继续", conversationId: conversation.id });
+    const secondCallMessages = selectedClient.chat.mock.calls.at(-1)?.[0] as Array<{
+      role: string;
+      content: string;
+    }>;
+    expect(secondCallMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "user", content: "继续" }),
+        expect.objectContaining({ role: "assistant", content: "来自 GLM" }),
+      ]),
+    );
+    workbench.close();
   });
 
   it("STATUS returns 4-plane snapshot", async () => {
@@ -681,6 +740,87 @@ describe("IPC handler registration", () => {
       error?: string;
     };
     expect(r.error).toBe("invalid_request");
+  });
+
+  it("APP_RESTART delegates to the graceful restart dependency", async () => {
+    const handlers: Handlers = new Map();
+    const restart = vi.fn(async () => {});
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers), { restart });
+
+    await expect(handlers.get(IPC.APP_RESTART)?.({}, undefined)).resolves.toEqual({ ok: true });
+    expect(restart).toHaveBeenCalledOnce();
+  });
+
+  it("APP_RESTART aborts in-flight chat before relaunching", async () => {
+    const handlers: Handlers = new Map();
+    const restart = vi.fn(async () => {});
+    const hangingClient = {
+      chat: vi.fn(
+        async (_messages: unknown, opts?: { signal?: AbortSignal }): Promise<string> =>
+          new Promise((_resolve, reject) => {
+            opts?.signal?.addEventListener(
+              "abort",
+              () => reject(new DOMException("aborted", "AbortError")),
+              { once: true },
+            );
+          }),
+      ),
+      visionChat: vi.fn(async () => "vision"),
+      getStatus: () => ({
+        provider: "glm",
+        model: "glm-5.2",
+        available: true,
+        mode: "live" as const,
+        status: "connected",
+        visionSupported: false,
+      }),
+    };
+    const modelRegistry = {
+      list: () => [],
+      resolve: vi.fn(async () => hangingClient),
+      test: vi.fn(async () => ({ ok: true, provider: "glm", model: "glm-5.2" })),
+      clear: vi.fn(),
+    };
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers), {
+      restart,
+      modelRegistry,
+    });
+
+    const chat = handlers.get(IPC.CHAT)?.(
+      {},
+      { query: "深入分析这个复杂系统", modelProfileId: "glm-5.2" },
+    );
+    await vi.waitFor(() => expect(hangingClient.chat).toHaveBeenCalled());
+    await handlers.get(IPC.APP_RESTART)?.({}, undefined);
+
+    await expect(chat).rejects.toThrow("aborted");
+    expect(restart).toHaveBeenCalledOnce();
+  });
+
+  it("MODEL_PROFILES reports credential presence without exposing the key", async () => {
+    const handlers: Handlers = new Map();
+    const values = new Map<string, string>();
+    const credentials = {
+      has: (id: string) => values.has(id),
+      get: (id: string) => values.get(id),
+      set: (id: string, value: string) => void values.set(id, value),
+      delete: (id: string) => values.delete(id),
+    };
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers), { credentials });
+    const key = "super-secret-key";
+
+    await expect(
+      handlers.get(IPC.MODEL_CREDENTIAL_SET)?.({}, { profileId: "kimi-k3", apiKey: key }),
+    ).resolves.toEqual({ ok: true });
+    const profiles = (await handlers.get(IPC.MODEL_PROFILES)?.({}, undefined)) as Array<{
+      id: string;
+      hasCredential: boolean;
+    }>;
+    expect(profiles.find((profile) => profile.id === "kimi-k3")?.hasCredential).toBe(true);
+    expect(JSON.stringify(profiles)).not.toContain(key);
   });
 
   // ---------- 技能自学习 Phase 2：审批 IPC 契约 ----------

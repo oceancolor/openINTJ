@@ -40,7 +40,7 @@ runtime 依赖 core 接口和具体 LLM/embed adapter，三端依赖 runtime。�
 LLM provider 集合为：
 
 ```text
-auto | ollama | hunyuan | mock
+auto | ollama | hunyuan | kimi | minimax | glm | mock
 ```
 
 embedding provider 集合为：
@@ -75,6 +75,10 @@ mock fallback 必须显示在状态、日志和 UI 中；不能把 actual provid
 用户显式选择 `ollama` 时，服务不可达、模型未安装、超时或请求失败必须报错，禁止静默 mock。
 
 相同原则适用于显式 Hunyuan：缺凭据或鉴权失败必须报错。显式 `mock` 是唯一主动请求 mock 的方式；`auto` 落到 mock 是选择状态机的可见结果。
+
+Kimi、MiniMax 与 GLM 同样采用显式选择、缺凭据 fail closed。它们共享
+OpenAI-compatible transport，但保留独立 provider ID、默认端点、模型与状态，不能把
+transport 名称当作实际 provider。
 
 ### 5. 状态报告实际结果
 
@@ -206,6 +210,6 @@ auto 仍可选择 mock，但它是 actual provider 的公开状态，而不是 a
 2. 需要运行期熔断并在真实 provider 间自动切换；
 3. embedding 在线迁移成为产品要求；
 4. Ollama tag 的可变性要求把 model digest/revision 纳入指纹；
-5. token streaming 或 OpenAI-compatible 成为主路径；
+5. token streaming 成为主路径；
 6. mock 不再允许作为生产默认的最终候选。
 

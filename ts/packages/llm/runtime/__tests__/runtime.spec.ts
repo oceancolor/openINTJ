@@ -38,9 +38,9 @@ describe("parseLlmProvider", () => {
 
 describe("explicit OpenAI-compatible providers", () => {
   const cases = [
-    ["kimi", "KIMI_API_KEY", "kimi-k2.5", "https://api.moonshot.cn/v1"],
-    ["minimax", "MINIMAX_API_KEY", "MiniMax-M2.1", "https://api.minimaxi.com/v1"],
-    ["glm", "GLM_API_KEY", "glm-4.7", "https://open.bigmodel.cn/api/paas/v4"],
+    ["kimi", "KIMI_API_KEY", "kimi-k3", "https://api.moonshot.ai/v1"],
+    ["minimax", "MINIMAX_API_KEY", "MiniMax-M3", "https://api.minimax.io/v1"],
+    ["glm", "GLM_API_KEY", "glm-5.2", "https://api.z.ai/api/paas/v4"],
   ] as const;
 
   it.each(cases)(

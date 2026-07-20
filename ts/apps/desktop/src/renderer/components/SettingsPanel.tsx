@@ -15,8 +15,10 @@ import type {
   AppConfig,
   AppConfigPatch,
   ModelProfile,
+  ModelProvider,
   WorkspaceInfo,
 } from "../../shared/ipc-protocol.js";
+import { DEFAULT_MODEL_PROFILES } from "../../shared/ipc-protocol.js";
 
 const isError = (r: unknown): r is { error: string } =>
   typeof r === "object" && r !== null && "error" in r;
@@ -66,6 +68,13 @@ export const SettingsPanel: React.FC = () => {
   const [saved, setSaved] = React.useState(false);
   const [profiles, setProfiles] = React.useState<ModelProfile[]>([]);
   const [credentialDrafts, setCredentialDrafts] = React.useState<Record<string, string>>({});
+  const [profileTests, setProfileTests] = React.useState<Record<string, string>>({});
+  const [newProfile, setNewProfile] = React.useState({
+    name: "",
+    provider: "kimi" as ModelProvider,
+    model: "",
+    baseUrl: "",
+  });
 
   const refresh = React.useCallback(async (): Promise<void> => {
     const api = window.openintj;
@@ -168,6 +177,51 @@ export const SettingsPanel: React.FC = () => {
     }
   };
 
+  const testProfile = async (profileId: string): Promise<void> => {
+    setProfileTests((current) => ({ ...current, [profileId]: "测试中…" }));
+    const result = await window.openintj.testModelProfile(profileId);
+    setProfileTests((current) => ({
+      ...current,
+      [profileId]: result.ok ? "连接成功" : `失败：${result.error ?? "unknown"}`,
+    }));
+  };
+
+  const persistProfile = async (profile: ModelProfile): Promise<void> => {
+    const next = [
+      ...(config?.modelProfiles ?? []).filter((item) => item.id !== profile.id),
+      {
+        id: profile.id,
+        name: profile.name,
+        provider: profile.provider,
+        model: profile.model,
+        ...(profile.baseUrl ? { baseUrl: profile.baseUrl } : {}),
+      },
+    ];
+    await patch({ modelProfiles: next });
+    setProfiles(await window.openintj.modelProfiles());
+  };
+
+  const addProfile = async (): Promise<void> => {
+    if (!newProfile.name.trim() || !newProfile.model.trim() || !newProfile.provider) return;
+    const profile: ModelProfile = {
+      id: `custom-${Date.now().toString(36)}`,
+      name: newProfile.name.trim(),
+      provider: newProfile.provider,
+      model: newProfile.model.trim(),
+      ...(newProfile.baseUrl.trim() ? { baseUrl: newProfile.baseUrl.trim() } : {}),
+    };
+    await persistProfile(profile);
+    setNewProfile({ name: "", provider: "kimi", model: "", baseUrl: "" });
+  };
+
+  const deleteProfile = async (profile: ModelProfile): Promise<void> => {
+    await patch({
+      modelProfiles: (config?.modelProfiles ?? []).filter((item) => item.id !== profile.id),
+    });
+    await window.openintj.deleteModelCredential(profile.id);
+    setProfiles(await window.openintj.modelProfiles());
+  };
+
   const cfg = config ?? {};
 
   return (
@@ -230,6 +284,63 @@ export const SettingsPanel: React.FC = () => {
               <div className="text-gray-500">
                 {profile.provider} / {profile.model}
               </div>
+              <div className="grid grid-cols-2 gap-1">
+                <input
+                  aria-label={`${profile.name} model`}
+                  value={profile.model}
+                  onChange={(event) =>
+                    setProfiles((current) =>
+                      current.map((item) =>
+                        item.id === profile.id ? { ...item, model: event.target.value } : item,
+                      ),
+                    )
+                  }
+                  className="bg-gray-800 rounded px-2 py-1"
+                />
+                <input
+                  aria-label={`${profile.name} base URL`}
+                  value={profile.baseUrl ?? ""}
+                  placeholder="Base URL（默认可留空）"
+                  onChange={(event) =>
+                    setProfiles((current) =>
+                      current.map((item) =>
+                        item.id === profile.id
+                          ? { ...item, baseUrl: event.target.value || undefined }
+                          : item,
+                      ),
+                    )
+                  }
+                  className="bg-gray-800 rounded px-2 py-1"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void persistProfile(profile)}
+                  className="px-2 py-0.5 rounded bg-cyan-900 hover:bg-cyan-800"
+                >
+                  保存 Profile
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void testProfile(profile.id)}
+                  className="px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600"
+                >
+                  测试连接
+                </button>
+                <span className="text-gray-500">{profileTests[profile.id]}</span>
+                {!DEFAULT_MODEL_PROFILES.some((item) => item.id === profile.id) ? (
+                  <button
+                    type="button"
+                    onClick={() => void deleteProfile(profile)}
+                    className="ml-auto text-red-400"
+                  >
+                    删除
+                  </button>
+                ) : null}
+              </div>
               {needsKey ? (
                 <div className="flex gap-1">
                   <input
@@ -258,6 +369,61 @@ export const SettingsPanel: React.FC = () => {
             </div>
           );
         })}
+        <div className="rounded border border-dashed border-gray-700 p-2 space-y-1">
+          <div className="text-gray-400">添加自定义 Profile</div>
+          <div className="grid grid-cols-2 gap-1">
+            <input
+              placeholder="显示名称"
+              value={newProfile.name}
+              onChange={(event) =>
+                setNewProfile((current) => ({ ...current, name: event.target.value }))
+              }
+              className="bg-gray-800 rounded px-2 py-1"
+            />
+            <select
+              value={newProfile.provider}
+              onChange={(event) =>
+                setNewProfile((current) => ({
+                  ...current,
+                  provider: event.target.value as ModelProvider,
+                }))
+              }
+              className="bg-gray-800 rounded px-2 py-1"
+            >
+              {PROVIDERS.filter((provider) => !["auto", "mock"].includes(provider)).map(
+                (provider) => (
+                  <option key={provider} value={provider}>
+                    {provider}
+                  </option>
+                ),
+              )}
+            </select>
+            <input
+              placeholder="模型 ID"
+              value={newProfile.model}
+              onChange={(event) =>
+                setNewProfile((current) => ({ ...current, model: event.target.value }))
+              }
+              className="bg-gray-800 rounded px-2 py-1"
+            />
+            <input
+              placeholder="Base URL"
+              value={newProfile.baseUrl}
+              onChange={(event) =>
+                setNewProfile((current) => ({ ...current, baseUrl: event.target.value }))
+              }
+              className="bg-gray-800 rounded px-2 py-1"
+            />
+          </div>
+          <button
+            type="button"
+            disabled={busy || !newProfile.name.trim() || !newProfile.model.trim()}
+            onClick={() => void addProfile()}
+            className="px-2 py-1 rounded bg-purple-800 disabled:bg-gray-700"
+          >
+            添加 Profile
+          </button>
+        </div>
       </section>
 
       {/* 应用配置 */}

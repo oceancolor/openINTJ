@@ -1,4 +1,5 @@
 import React from "react";
+import type { ModelProfile } from "../../shared/ipc-protocol.js";
 
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
@@ -9,7 +10,10 @@ export const ChatPanel: React.FC<{
   messages: ChatMessage[];
   onSend: (text: string) => void;
   pending: boolean;
-}> = ({ messages, onSend, pending }) => {
+  profiles?: ModelProfile[] | undefined;
+  modelProfileId?: string | undefined;
+  onModelChange?: ((profileId: string) => void) | undefined;
+}> = ({ messages, onSend, pending, profiles = [], modelProfileId, onModelChange }) => {
   const [input, setInput] = React.useState("");
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
@@ -26,6 +30,23 @@ export const ChatPanel: React.FC<{
 
   return (
     <div className="flex flex-col h-full bg-[#1e1e2e]">
+      <div className="h-10 px-3 border-b border-gray-800 flex items-center justify-between">
+        <span className="text-xs text-gray-500">当前对话</span>
+        <select
+          aria-label="对话模型"
+          value={modelProfileId ?? ""}
+          disabled={pending}
+          onChange={(event) => onModelChange?.(event.target.value)}
+          className="bg-gray-800 text-gray-200 rounded px-2 py-1 text-xs"
+        >
+          {profiles.map((profile) => (
+            <option key={profile.id} value={profile.id} disabled={!profile.hasCredential}>
+              {profile.name}
+              {profile.hasCredential ? "" : "（需密钥）"}
+            </option>
+          ))}
+        </select>
+      </div>
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 ? (
           <div className="text-gray-500 text-sm text-center mt-12">

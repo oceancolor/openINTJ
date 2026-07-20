@@ -138,9 +138,9 @@ describe("@openintj/shared env loader", () => {
   });
 
   it.each([
-    ["kimi", "KIMI_API_KEY", "kimi-k2.5"],
-    ["minimax", "MINIMAX_API_KEY", "MiniMax-M2.1"],
-    ["glm", "GLM_API_KEY", "glm-4.7"],
+    ["kimi", "KIMI_API_KEY", "kimi-k3"],
+    ["minimax", "MINIMAX_API_KEY", "MiniMax-M3"],
+    ["glm", "GLM_API_KEY", "glm-5.2"],
   ] as const)("summarizeLlmEnv supports %s without leaking its key", (provider, key, model) => {
     const s = summarizeLlmEnv({
       LLM_PROVIDER: provider,

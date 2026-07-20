@@ -13,6 +13,8 @@ import { z } from "zod";
 export const ChatRequestSchema = z.object({
   query: z.string().min(1),
   systemPrompt: z.string().optional(),
+  conversationId: z.string().min(1).optional(),
+  modelProfileId: z.string().min(1).optional(),
 });
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 
@@ -21,6 +23,8 @@ export const ChatResponseSchema = z.object({
   iterations: z.number().int().nonnegative(),
   status: z.string(),
   traceId: z.string(),
+  provider: z.string().optional(),
+  model: z.string().optional(),
 });
 export type ChatResponse = z.infer<typeof ChatResponseSchema>;
 
@@ -477,6 +481,66 @@ export const ModelCredentialSetSchema = z.object({
 });
 export type ModelCredentialSet = z.infer<typeof ModelCredentialSetSchema>;
 
+export const WorkbenchWorkspaceSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  rootPath: z.string(),
+  dataDir: z.string().optional(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type WorkbenchWorkspace = z.infer<typeof WorkbenchWorkspaceSchema>;
+
+export const WorkbenchTaskSchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  title: z.string(),
+  status: z.enum(["active", "completed", "archived"]),
+  taskPoolRunId: z.string().optional(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type WorkbenchTask = z.infer<typeof WorkbenchTaskSchema>;
+
+export const WorkbenchConversationSchema = z.object({
+  id: z.string(),
+  taskId: z.string(),
+  title: z.string(),
+  modelProfileId: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type WorkbenchConversation = z.infer<typeof WorkbenchConversationSchema>;
+
+export const WorkbenchMessageSchema = z.object({
+  id: z.string(),
+  conversationId: z.string(),
+  role: z.enum(["user", "assistant", "system"]),
+  content: z.string(),
+  traceId: z.string().optional(),
+  tokens: z.number().int().nonnegative().optional(),
+  status: z.string().optional(),
+  createdAt: z.number(),
+});
+export type WorkbenchMessage = z.infer<typeof WorkbenchMessageSchema>;
+
+export const WorkbenchCreateSchema = z.object({
+  parentId: z.string().optional(),
+  name: z.string().min(1).max(200).optional(),
+  title: z.string().min(1).max(200).optional(),
+  rootPath: z.string().optional(),
+  modelProfileId: z.string().optional(),
+});
+
+export const WorkbenchUpdateSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1).max(200).optional(),
+  name: z.string().min(1).max(200).optional(),
+  status: z.enum(["active", "completed", "archived"]).optional(),
+  modelProfileId: z.string().optional(),
+  taskPoolRunId: z.string().optional(),
+});
+
 /**
  * ?????????????????updateConfig ?????? * ??????**????**??????????workspaceDir ????????fs.watch ?????? */
 export const AppConfigSchema = z.object({
@@ -484,6 +548,9 @@ export const AppConfigSchema = z.object({
   llmProvider: ModelProviderSchema.optional(),
   modelProfiles: z.array(ModelProfileSchema.omit({ hasCredential: true })).optional(),
   activeModelProfileId: z.string().optional(),
+  activeWorkspaceId: z.string().optional(),
+  activeTaskId: z.string().optional(),
+  activeConversationId: z.string().optional(),
   embedProvider: z.enum(["auto", "simple", "ollama", "xenova", "mock"]).optional(),
   ollamaBaseUrl: z.string().optional(),
   ollamaModel: z.string().optional(),
@@ -561,7 +628,15 @@ export const IPC = {
   MODEL_PROFILES: "openintj:model.profiles",
   MODEL_CREDENTIAL_SET: "openintj:model.credential.set",
   MODEL_CREDENTIAL_DELETE: "openintj:model.credential.delete",
+  MODEL_TEST: "openintj:model.test",
   APP_RESTART: "openintj:app.restart",
+  WORKBENCH_BOOTSTRAP: "openintj:workbench.bootstrap",
+  WORKBENCH_WORKSPACE_CREATE: "openintj:workbench.workspace.create",
+  WORKBENCH_TASK_CREATE: "openintj:workbench.task.create",
+  WORKBENCH_TASK_UPDATE: "openintj:workbench.task.update",
+  WORKBENCH_CONVERSATION_CREATE: "openintj:workbench.conversation.create",
+  WORKBENCH_CONVERSATION_UPDATE: "openintj:workbench.conversation.update",
+  WORKBENCH_MESSAGES: "openintj:workbench.messages",
   // server-push events
   EVT_TAO: "openintj:evt.tao",
   EVT_REACT: "openintj:evt.react",

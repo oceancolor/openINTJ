@@ -15,7 +15,9 @@ import { type DesktopAgent, assembleDesktopAgent } from "./agent.js";
 import { type ConfigService, createConfigService } from "./config-store.js";
 import { createCredentialStore } from "./credential-store.js";
 import { type IpcDeps, type IpcRegistration, registerIpcHandlers } from "./ipc-handlers.js";
+import { createModelRegistry } from "./model-registry.js";
 import { type AutoUpdaterHandle, initAutoUpdater } from "./updater.js";
+import { type WorkbenchStore, createWorkbenchStore } from "./workbench-store.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -51,11 +53,21 @@ let updater: AutoUpdaterHandle | undefined;
 let config: ConfigService | undefined;
 let ipcRegistration: IpcRegistration | undefined;
 let agentClosePromise: Promise<void> | undefined;
+let workbench: WorkbenchStore | undefined;
+let workbenchClosed = false;
 
 const closeAgent = (): Promise<void> => {
   if (!agent) return Promise.resolve();
   agentClosePromise ??= agent.close();
   return agentClosePromise;
+};
+
+const closeApplicationState = async (): Promise<void> => {
+  await closeAgent();
+  if (workbench && !workbenchClosed) {
+    workbench.close();
+    workbenchClosed = true;
+  }
 };
 
 const createWindow = (): BrowserWindow => {
@@ -95,6 +107,7 @@ void app
       path.join(app.getPath("userData"), "model-credentials.json"),
       safeStorage,
     );
+    const modelRegistry = createModelRegistry({ config, credentials });
     const savedConfig = config.get();
 
     const dataDir =
@@ -104,6 +117,14 @@ void app
       process.env["OPENINTJ_WORKSPACE_DIR"] ??
       savedConfig.workspaceDir ??
       path.join(app.getPath("documents"), "OpenINTJ");
+    workbench = createWorkbenchStore({
+      dbPath:
+        process.env["OPENINTJ_DESKTOP_NO_PERSIST"] === "1"
+          ? ":memory:"
+          : path.join(app.getPath("userData"), "workbench.sqlite"),
+      defaultWorkspaceRoot: workspaceDir,
+      ...(process.env["OPENINTJ_DESKTOP_NO_PERSIST"] === "1" ? {} : { defaultDataDir: dataDir }),
+    });
     const llmProvider =
       (process.env["LLM_PROVIDER"] as "auto" | "ollama" | "hunyuan" | "mock" | undefined) ??
       savedConfig.llmProvider ??
@@ -170,7 +191,7 @@ void app
     };
     const restart = async (): Promise<void> => {
       ipcRegistration?.unregister();
-      await closeAgent();
+      await closeApplicationState();
       app.relaunch();
       app.quit();
     };
@@ -178,6 +199,8 @@ void app
       pickDirectory,
       restart,
       credentials,
+      modelRegistry,
+      workbench,
       credentialEnv: {
         hunyuan: Boolean(process.env["HUNYUAN_API_KEY"]),
         kimi: Boolean(process.env["KIMI_API_KEY"] ?? process.env["MOONSHOT_API_KEY"]),
@@ -216,7 +239,7 @@ app.on("before-quit", async () => {
   updater?.dispose();
   ipcRegistration?.unregister();
   try {
-    await closeAgent();
+    await closeApplicationState();
   } catch (e) {
     console.error("[OpenINTJ desktop] persist close failed:", e);
   }

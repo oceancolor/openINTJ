@@ -32,6 +32,10 @@ import {
   type SkillListResponse,
   type SkillProposalDecision,
   type StatusResponse,
+  type WorkbenchConversation,
+  type WorkbenchMessage,
+  type WorkbenchTask,
+  type WorkbenchWorkspace,
   type WorkspaceError,
   type WorkspaceInfo,
   type WorkspacePickResponse,
@@ -196,6 +200,55 @@ const api = {
     profileId: string,
   ): Promise<{ ok: boolean; deleted?: boolean; error?: string }> {
     return ipcRenderer.invoke(IPC.MODEL_CREDENTIAL_DELETE, profileId);
+  },
+  testModelProfile(
+    profileId: string,
+  ): Promise<{ ok: boolean; provider?: string; model?: string; error?: string }> {
+    return ipcRenderer.invoke(IPC.MODEL_TEST, profileId);
+  },
+  workbenchBootstrap(): Promise<{
+    workspaces: WorkbenchWorkspace[];
+    tasks: WorkbenchTask[];
+    conversations: WorkbenchConversation[];
+  }> {
+    return ipcRenderer.invoke(IPC.WORKBENCH_BOOTSTRAP);
+  },
+  createWorkbenchWorkspace(req: {
+    name: string;
+    rootPath: string;
+  }): Promise<WorkbenchWorkspace> {
+    return ipcRenderer.invoke(IPC.WORKBENCH_WORKSPACE_CREATE, req);
+  },
+  createWorkbenchTask(req: {
+    parentId: string;
+    title: string;
+  }): Promise<WorkbenchTask> {
+    return ipcRenderer.invoke(IPC.WORKBENCH_TASK_CREATE, req);
+  },
+  updateWorkbenchTask(req: {
+    id: string;
+    title?: string;
+    status?: "active" | "completed" | "archived";
+    taskPoolRunId?: string;
+  }): Promise<WorkbenchTask> {
+    return ipcRenderer.invoke(IPC.WORKBENCH_TASK_UPDATE, req);
+  },
+  createWorkbenchConversation(req: {
+    parentId: string;
+    title: string;
+    modelProfileId?: string;
+  }): Promise<WorkbenchConversation> {
+    return ipcRenderer.invoke(IPC.WORKBENCH_CONVERSATION_CREATE, req);
+  },
+  updateWorkbenchConversation(req: {
+    id: string;
+    title?: string;
+    modelProfileId?: string;
+  }): Promise<WorkbenchConversation> {
+    return ipcRenderer.invoke(IPC.WORKBENCH_CONVERSATION_UPDATE, req);
+  },
+  workbenchMessages(conversationId: string): Promise<WorkbenchMessage[]> {
+    return ipcRenderer.invoke(IPC.WORKBENCH_MESSAGES, conversationId);
   },
 };
 

@@ -10,6 +10,12 @@
 
 ### Added
 
+- **Desktop 多模型任务工作台**：新增 Kimi K3、MiniMax M3、GLM 5.2
+  OpenAI-compatible provider；模型 Profile/连接测试、`safeStorage` 加密凭据、对话级即时
+  切换与有界历史；新增工作区 → 任务 → 对话 → 消息 SQLite 持久化、Inbox 首启迁移、
+  任务树/恢复/归档，以及可关联 TaskPool run 的字段。
+- **Desktop 受控重启**：标题栏和设置页提供重启入口；重启前停止接收新 chat、abort
+  在途 LLM 请求、注销 IPC/监听并关闭 Agent 与工作台数据库。
 - **ModelRuntime lifecycle / observability**：新增限频 single-flight `refreshHealth()`、
   `ModelRuntimeError`、structured provider attempts/lastError；typed
   `model.provider.*` / `model.embedding.fingerprint.*` hooks 对应 OTel spans/counters。
@@ -42,6 +48,9 @@
 - **文档**：`RFC-006-product-behavior-contract.md`、`RFC-007-task-orchestration.md`（RFC-005 + ADR-002 已有）。
 
 ### Changed
+
+- Hunyuan 默认模型从已退役的 `hy3-preview` / `hunyuan-turbos-latest` 迁移到正式
+  `hy3`，默认端点改为 TokenHub；只映射已知旧默认值，自定义端点和模型保持不变。
 
 - **Product Behavior v1.1 可执行契约**：确定性排序/转换/算术约束/关键澄清/越权破坏请求
   在 LLM 与工具前本地处理；结构化对比和分阶段计划支持一次有界答案修订；单句要求确定性收口。

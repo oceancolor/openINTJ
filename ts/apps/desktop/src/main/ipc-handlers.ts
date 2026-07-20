@@ -13,12 +13,16 @@ import {
   ModelCredentialSetSchema,
   SkillListRequestSchema,
   SkillProposalDecisionSchema,
+  WorkbenchCreateSchema,
+  WorkbenchUpdateSchema,
   WorkspaceReadRequestSchema,
   WorkspaceWriteRequestSchema,
 } from "../shared/ipc-protocol.js";
 import type { DesktopAgent } from "./agent.js";
 import type { ConfigService } from "./config-store.js";
 import type { CredentialStore } from "./credential-store.js";
+import type { ModelRegistry } from "./model-registry.js";
+import type { WorkbenchStore } from "./workbench-store.js";
 
 const DORMANT_NOT_ENABLED = {
   error: "dormant_not_enabled",
@@ -49,6 +53,8 @@ export interface IpcDeps {
   credentials?: CredentialStore;
   /** Environment-provided credentials count as configured but remain outside the store. */
   credentialEnv?: Partial<Record<"hunyuan" | "kimi" | "minimax" | "glm", boolean>>;
+  modelRegistry?: ModelRegistry;
+  workbench?: WorkbenchStore;
 }
 
 const workspaceError = (e: unknown): { error: "workspace_error"; message: string } => ({
@@ -64,6 +70,8 @@ export const registerIpcHandlers = (
   deps: IpcDeps = {},
 ): IpcRegistration => {
   const offs: Array<() => void> = [];
+  const activeChats = new Set<AbortController>();
+  let restarting = false;
 
   api.handle(IPC.PING, async () => ({ ok: true, ts: Date.now() }));
 
@@ -74,15 +82,18 @@ export const registerIpcHandlers = (
 
   api.handle(IPC.APP_RESTART, async () => {
     if (!deps.restart) return { ok: false, reason: "restart_unavailable" };
+    restarting = true;
+    for (const controller of activeChats) controller.abort(new Error("app_restarting"));
     await deps.restart();
     return { ok: true };
   });
 
   api.handle(IPC.MODEL_PROFILES, async () => {
     const custom = deps.config?.get().modelProfiles ?? [];
-    const merged = new Map(
-      [...DEFAULT_MODEL_PROFILES, ...custom].map((profile) => [profile.id, profile]),
-    );
+    const profiles = [...DEFAULT_MODEL_PROFILES, ...custom] as Array<
+      (typeof DEFAULT_MODEL_PROFILES)[number]
+    >;
+    const merged = new Map(profiles.map((profile) => [profile.id, profile]));
     return [...merged.values()].map((profile) => ({
       ...profile,
       hasCredential:
@@ -100,13 +111,83 @@ export const registerIpcHandlers = (
     if (!parsed.success) return { ok: false, error: "invalid_request" };
     if (!deps.credentials) return { ok: false, error: "credential_store_unavailable" };
     deps.credentials.set(parsed.data.profileId, parsed.data.apiKey);
+    deps.modelRegistry?.clear(parsed.data.profileId);
     return { ok: true };
   });
 
   api.handle(IPC.MODEL_CREDENTIAL_DELETE, async (_evt, profileId: unknown) => {
     if (typeof profileId !== "string") return { ok: false, error: "invalid_request" };
     if (!deps.credentials) return { ok: false, error: "credential_store_unavailable" };
-    return { ok: true, deleted: deps.credentials.delete(profileId) };
+    const deleted = deps.credentials.delete(profileId);
+    deps.modelRegistry?.clear(profileId);
+    return { ok: true, deleted };
+  });
+
+  api.handle(IPC.MODEL_TEST, async (_evt, profileId: unknown) => {
+    if (typeof profileId !== "string") return { ok: false, error: "invalid_request" };
+    if (!deps.modelRegistry) return { ok: false, error: "model_registry_unavailable" };
+    return deps.modelRegistry.test(profileId);
+  });
+
+  api.handle(IPC.WORKBENCH_BOOTSTRAP, async () => {
+    if (!deps.workbench) return { workspaces: [], tasks: [], conversations: [] };
+    return deps.workbench.bootstrap();
+  });
+  api.handle(IPC.WORKBENCH_WORKSPACE_CREATE, async (_evt, raw: unknown) => {
+    const parsed = WorkbenchCreateSchema.safeParse(raw);
+    if (!parsed.success || !parsed.data.name || !parsed.data.rootPath || !deps.workbench) {
+      return { error: "invalid_request" };
+    }
+    return deps.workbench.createWorkspace({
+      name: parsed.data.name,
+      rootPath: parsed.data.rootPath,
+    });
+  });
+  api.handle(IPC.WORKBENCH_TASK_CREATE, async (_evt, raw: unknown) => {
+    const parsed = WorkbenchCreateSchema.safeParse(raw);
+    if (!parsed.success || !parsed.data.parentId || !parsed.data.title || !deps.workbench) {
+      return { error: "invalid_request" };
+    }
+    return deps.workbench.createTask({
+      workspaceId: parsed.data.parentId,
+      title: parsed.data.title,
+    });
+  });
+  api.handle(IPC.WORKBENCH_TASK_UPDATE, async (_evt, raw: unknown) => {
+    const parsed = WorkbenchUpdateSchema.safeParse(raw);
+    if (!parsed.success || !deps.workbench) return { error: "invalid_request" };
+    return deps.workbench.updateTask(parsed.data.id, {
+      ...(parsed.data.title !== undefined ? { title: parsed.data.title } : {}),
+      ...(parsed.data.status !== undefined ? { status: parsed.data.status } : {}),
+      ...(parsed.data.taskPoolRunId !== undefined
+        ? { taskPoolRunId: parsed.data.taskPoolRunId }
+        : {}),
+    });
+  });
+  api.handle(IPC.WORKBENCH_CONVERSATION_CREATE, async (_evt, raw: unknown) => {
+    const parsed = WorkbenchCreateSchema.safeParse(raw);
+    if (!parsed.success || !parsed.data.parentId || !parsed.data.title || !deps.workbench) {
+      return { error: "invalid_request" };
+    }
+    return deps.workbench.createConversation({
+      taskId: parsed.data.parentId,
+      title: parsed.data.title,
+      modelProfileId: parsed.data.modelProfileId ?? "auto",
+    });
+  });
+  api.handle(IPC.WORKBENCH_CONVERSATION_UPDATE, async (_evt, raw: unknown) => {
+    const parsed = WorkbenchUpdateSchema.safeParse(raw);
+    if (!parsed.success || !deps.workbench) return { error: "invalid_request" };
+    return deps.workbench.updateConversation(parsed.data.id, {
+      ...(parsed.data.title !== undefined ? { title: parsed.data.title } : {}),
+      ...(parsed.data.modelProfileId !== undefined
+        ? { modelProfileId: parsed.data.modelProfileId }
+        : {}),
+    });
+  });
+  api.handle(IPC.WORKBENCH_MESSAGES, async (_evt, conversationId: unknown) => {
+    if (typeof conversationId !== "string" || !deps.workbench) return [];
+    return deps.workbench.listMessages(conversationId);
   });
 
   api.handle(IPC.CHAT, async (_evt, raw: unknown) => {
@@ -114,15 +195,81 @@ export const registerIpcHandlers = (
     if (!parsed.success) {
       return { error: "invalid_request", issues: parsed.error.issues };
     }
-    const result = await withRootSpan("openintj.ipc.chat", () => agent.run(parsed.data.query), {
-      attributes: { "ipc.channel": IPC.CHAT },
-    });
-    return {
-      finalAnswer: result.finalAnswer,
-      iterations: result.iterations,
-      status: result.status,
-      traceId: result.traceId,
-    };
+    if (restarting) return { error: "app_restarting" };
+    const controller = new AbortController();
+    activeChats.add(controller);
+    let persistedConversationId: string | undefined;
+    try {
+      const selected = parsed.data.conversationId
+        ? deps.workbench?.getConversation(parsed.data.conversationId)
+        : undefined;
+      const priorMessages = selected
+        ? deps.workbench
+            ?.listMessages(selected.conversation.id, 40)
+            .filter((entry) => entry.role !== "system")
+            .map((entry) => ({ role: entry.role, content: entry.content }))
+        : undefined;
+      const profileId = parsed.data.modelProfileId ?? selected?.conversation.modelProfileId;
+      const selectedLlm =
+        profileId && deps.modelRegistry ? await deps.modelRegistry.resolve(profileId) : undefined;
+      if (selected) {
+        persistedConversationId = selected.conversation.id;
+        deps.workbench?.appendMessage({
+          conversationId: selected.conversation.id,
+          role: "user",
+          content: parsed.data.query,
+        });
+      }
+      const result = await withRootSpan(
+        "openintj.ipc.chat",
+        () =>
+          agent.run(parsed.data.query, {
+            signal: controller.signal,
+            ...(priorMessages ? { history: priorMessages } : {}),
+            ...(selectedLlm ? { llm: selectedLlm } : {}),
+            ...(selected
+              ? {
+                  contextTags: [
+                    `workspace:${selected.workspace.id}`,
+                    `task:${selected.task.id}`,
+                    `conversation:${selected.conversation.id}`,
+                  ],
+                }
+              : {}),
+          }),
+        { attributes: { "ipc.channel": IPC.CHAT } },
+      );
+      if (selected) {
+        deps.workbench?.appendMessage({
+          conversationId: selected.conversation.id,
+          role: "assistant",
+          content: result.finalAnswer,
+          traceId: result.traceId,
+          tokens: result.totalTokensSpent,
+          status: result.status,
+        });
+      }
+      const modelStatus = selectedLlm?.getStatus();
+      return {
+        finalAnswer: result.finalAnswer,
+        iterations: result.iterations,
+        status: result.status,
+        traceId: result.traceId,
+        ...(modelStatus ? { provider: modelStatus.provider, model: modelStatus.model } : {}),
+      };
+    } catch (error) {
+      if (persistedConversationId) {
+        deps.workbench?.appendMessage({
+          conversationId: persistedConversationId,
+          role: "assistant",
+          content: error instanceof Error ? error.message : String(error),
+          status: "failed",
+        });
+      }
+      throw error;
+    } finally {
+      activeChats.delete(controller);
+    }
   });
 
   api.handle(IPC.MEMORY_QUERY, async (_evt, raw: unknown) => {
@@ -234,7 +381,11 @@ export const registerIpcHandlers = (
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     if (!deps.config) return parsed.data;
     try {
-      return deps.config.update(parsed.data);
+      const updated = deps.config.update(parsed.data);
+      if (parsed.data.modelProfiles || parsed.data.activeModelProfileId) {
+        deps.modelRegistry?.clear();
+      }
+      return updated;
     } catch (e) {
       return { error: "invalid_request", message: e instanceof Error ? e.message : String(e) };
     }
@@ -450,6 +601,14 @@ export const registerIpcHandlers = (
       api.removeHandler(IPC.MODEL_PROFILES);
       api.removeHandler(IPC.MODEL_CREDENTIAL_SET);
       api.removeHandler(IPC.MODEL_CREDENTIAL_DELETE);
+      api.removeHandler(IPC.MODEL_TEST);
+      api.removeHandler(IPC.WORKBENCH_BOOTSTRAP);
+      api.removeHandler(IPC.WORKBENCH_WORKSPACE_CREATE);
+      api.removeHandler(IPC.WORKBENCH_TASK_CREATE);
+      api.removeHandler(IPC.WORKBENCH_TASK_UPDATE);
+      api.removeHandler(IPC.WORKBENCH_CONVERSATION_CREATE);
+      api.removeHandler(IPC.WORKBENCH_CONVERSATION_UPDATE);
+      api.removeHandler(IPC.WORKBENCH_MESSAGES);
       api.removeHandler(IPC.CHAT);
       api.removeHandler(IPC.MEMORY_QUERY);
       api.removeHandler(IPC.AUDIT_RECENT);
