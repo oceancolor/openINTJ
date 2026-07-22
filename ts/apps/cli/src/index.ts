@@ -14,7 +14,7 @@ const program = new Command();
 program
   .name("openintj")
   .description("OpenINTJ Agent — TAO/ReAct 本地优先 Agent 框架")
-  .version("3.0.0-alpha.0");
+  .version("0.3.0-alpha.0");
 
 program
   .command("chat")

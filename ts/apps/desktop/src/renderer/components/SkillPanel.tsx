@@ -177,8 +177,8 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ enabled }) => {
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-end px-3 py-2 border-b border-gray-800">
+    <div className="flex flex-col h-full min-h-0">
+      <div className="shrink-0 flex items-center justify-end px-3 py-2 border-b border-gray-800">
         <button
           type="button"
           onClick={() => void handleDistill()}
@@ -189,7 +189,7 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ enabled }) => {
         </button>
       </div>
 
-      <div className="flex items-center gap-1 px-3 py-1 border-b border-gray-800 text-xs">
+      <div className="shrink-0 flex items-center gap-1 px-3 py-1 border-b border-gray-800 text-xs">
         {STATUS_TABS.map((t) => (
           <button
             key={t.key}
@@ -218,7 +218,7 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ enabled }) => {
         </div>
       ) : null}
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-2 text-xs">
+      <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2 text-xs">
         {proposals.length === 0 ? (
           <div className="text-gray-500">
             {filter === "pending" ? "暂无待审批提案 — 点击蒸馏从成功轨迹提炼候选技能" : "暂无数据"}
@@ -298,7 +298,7 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ enabled }) => {
         )}
       </div>
 
-      <div className="border-t border-gray-800">
+      <div className="shrink-0 border-t border-gray-800">
         <button
           type="button"
           onClick={() => setShowActive((v) => !v)}

@@ -37,8 +37,8 @@ export const MemoryPanel: React.FC = () => {
   }, []);
 
   return (
-    <div className="flex flex-col h-full text-xs">
-      <div className="p-2 border-b border-gray-800 flex gap-2">
+    <div className="flex flex-col h-full min-h-0 text-xs">
+      <div className="shrink-0 p-2 border-b border-gray-800 flex gap-2">
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -57,7 +57,7 @@ export const MemoryPanel: React.FC = () => {
           {loading ? "…" : "检索"}
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto p-2 space-y-2">
+      <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2">
         {error ? <div className="text-red-400">[错误] {error}</div> : null}
         {hits === undefined ? (
           <div className="text-gray-500">输入关键词检索，或留空点「检索」查看最近记忆。</div>

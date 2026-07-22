@@ -185,8 +185,8 @@ export const DormantPanel: React.FC<DormantPanelProps> = ({ enabled }) => {
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-end px-3 py-2 border-b border-gray-800">
+    <div className="flex flex-col h-full min-h-0">
+      <div className="shrink-0 flex items-center justify-end px-3 py-2 border-b border-gray-800">
         <button
           type="button"
           onClick={() => void handleMine()}
@@ -197,7 +197,7 @@ export const DormantPanel: React.FC<DormantPanelProps> = ({ enabled }) => {
         </button>
       </div>
 
-      <div className="flex items-center gap-1 px-3 py-1 border-b border-gray-800 text-xs">
+      <div className="shrink-0 flex items-center gap-1 px-3 py-1 border-b border-gray-800 text-xs">
         {STATUS_TABS.map((t) => (
           <button
             key={t.key}
@@ -226,7 +226,7 @@ export const DormantPanel: React.FC<DormantPanelProps> = ({ enabled }) => {
         </div>
       ) : null}
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-2 text-xs">
+      <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2 text-xs">
         {proposals.length === 0 ? (
           <div className="text-gray-500">
             {filter === "pending" ? "暂无待审批 proposal — 点击 Mine 触发分析" : "暂无数据"}
@@ -297,7 +297,7 @@ export const DormantPanel: React.FC<DormantPanelProps> = ({ enabled }) => {
         )}
       </div>
 
-      <div className="border-t border-gray-800">
+      <div className="shrink-0 border-t border-gray-800">
         <button
           type="button"
           onClick={() => setShowPersona((v) => !v)}

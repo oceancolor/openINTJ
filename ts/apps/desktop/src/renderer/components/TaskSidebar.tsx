@@ -21,8 +21,8 @@ export const TaskSidebar: React.FC<{
   onRenameTask: (task: WorkbenchTask) => void;
   onArchiveTask: (task: WorkbenchTask) => void;
 }> = (props) => (
-  <aside className="h-full bg-[#11111b] border-r border-gray-800 flex flex-col text-xs">
-    <div className="p-3 border-b border-gray-800">
+  <aside className="h-full min-h-0 bg-[#11111b] border-r border-gray-800 flex flex-col text-xs">
+    <div className="shrink-0 p-3 border-b border-gray-800">
       <div className="flex justify-between text-gray-400 mb-1">
         <span>工作区</span>
         <button type="button" onClick={props.onCreateWorkspace} className="hover:text-gray-200">
@@ -41,7 +41,7 @@ export const TaskSidebar: React.FC<{
         ))}
       </select>
     </div>
-    <div className="p-2 flex items-center justify-between">
+    <div className="shrink-0 p-2 flex items-center justify-between">
       <span className="text-gray-400">任务</span>
       <button
         type="button"
@@ -51,7 +51,7 @@ export const TaskSidebar: React.FC<{
         + 任务
       </button>
     </div>
-    <div className="flex-1 overflow-y-auto px-2 space-y-1">
+    <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2 space-y-1">
       {props.tasks
         .filter(
           (task) => task.workspaceId === props.activeWorkspaceId && task.status !== "archived",

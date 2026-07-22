@@ -1,5 +1,5 @@
 /**
- * Electron Main Process 入口（OpenINTJ Desktop v3.0）
+ * Electron Main Process 入口（OpenINTJ Desktop v0.3）
  *
  * - createMainWindow()：BrowserWindow + preload bridge
  * - assembleDesktopAgent()：装配 4-plane + TAO/ReAct

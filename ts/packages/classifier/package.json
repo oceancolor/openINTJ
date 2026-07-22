@@ -1,6 +1,6 @@
 {
   "name": "@openintj/classifier",
-  "version": "3.0.0-alpha.0",
+  "version": "0.3.0-alpha.0",
   "private": true,
   "type": "module",
   "description": "前端可强化任务分类器：embedding kNN/质心 + 关键词兜底 + 使用反馈强化（与记忆共享『越用越好』反馈信号）",

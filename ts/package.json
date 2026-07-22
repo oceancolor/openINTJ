@@ -1,8 +1,8 @@
 {
   "name": "openintj",
-  "version": "3.0.0-alpha.0",
+  "version": "0.3.0-alpha.0",
   "private": true,
-  "description": "OpenINTJ v3 — TS-first agent framework with Electron local-first desktop client",
+  "description": "OpenINTJ v0.3 — TS-first agent framework with Electron local-first desktop client",
   "license": "MIT",
   "packageManager": "pnpm@9.12.0",
   "engines": {

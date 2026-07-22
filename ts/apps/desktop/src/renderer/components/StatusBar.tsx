@@ -7,7 +7,9 @@ export type StatusSnapshot = StatusResponse;
 export const StatusBar: React.FC<{ status: StatusSnapshot | undefined }> = ({ status }) => {
   if (!status) {
     return (
-      <div className="px-4 py-1 text-xs text-gray-500 border-t border-gray-800">加载状态中...</div>
+      <div className="shrink-0 px-4 py-1 text-xs text-gray-500 border-t border-gray-800">
+        加载状态中...
+      </div>
     );
   }
   const runtimeLlm = status.modelRuntime.llm;
@@ -19,7 +21,7 @@ export const StatusBar: React.FC<{ status: StatusSnapshot | undefined }> = ({ st
         ? "bg-yellow-400"
         : "bg-red-400";
   return (
-    <div className="flex items-center gap-4 px-4 py-1 text-xs text-gray-400 border-t border-gray-800 bg-[#181825]">
+    <div className="shrink-0 flex items-center gap-4 px-4 py-1 text-xs text-gray-400 border-t border-gray-800 bg-[#181825] overflow-x-auto whitespace-nowrap [&>span]:shrink-0">
       <span className="flex items-center gap-1">
         <span className={`inline-block w-2 h-2 rounded-full ${dotColor}`} />
         LLM: {runtimeLlm.provider} ({runtimeLlm.model}) · {runtimeLlm.mode}

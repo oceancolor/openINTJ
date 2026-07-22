@@ -318,10 +318,10 @@ export const App = (): JSX.Element => {
   const skillsPending = status?.skills?.pendingProposals ?? 0;
 
   return (
-    <div className="flex flex-col h-screen text-gray-200">
-      <header className="px-4 py-2 border-b border-gray-800 bg-[#181825] flex items-center gap-2">
+    <div className="flex flex-col h-screen overflow-hidden text-gray-200">
+      <header className="shrink-0 px-4 py-2 border-b border-gray-800 bg-[#181825] flex items-center gap-2">
         <span className="text-base font-semibold">OpenINTJ</span>
-        <span className="text-xs text-gray-500">v3.0 Local Desktop</span>
+        <span className="text-xs text-gray-500">v0.3 Local Desktop</span>
         <button
           type="button"
           onClick={() => void window.openintj.restartApp()}
@@ -365,15 +365,15 @@ export const App = (): JSX.Element => {
           }
           onModelChange={(id) => void changeConversationModel(id)}
         />
-        <div className="flex flex-col h-full bg-[#11111b] border-l border-gray-800">
-          <div className="flex items-center border-b border-gray-800 text-xs">
+        <div className="flex flex-col h-full min-h-0 bg-[#11111b] border-l border-gray-800">
+          <div className="shrink-0 flex items-center border-b border-gray-800 text-xs overflow-x-auto whitespace-nowrap">
             <button
               type="button"
               onClick={() => setRightTab("trajectory")}
               className={
                 rightTab === "trajectory"
-                  ? "px-3 py-2 text-gray-100 border-b-2 border-purple-500"
-                  : "px-3 py-2 text-gray-500 hover:text-gray-300"
+                  ? "shrink-0 px-3 py-2 text-gray-100 border-b-2 border-purple-500"
+                  : "shrink-0 px-3 py-2 text-gray-500 hover:text-gray-300"
               }
             >
               推理轨迹
@@ -386,8 +386,8 @@ export const App = (): JSX.Element => {
               onClick={() => setRightTab("memory")}
               className={
                 rightTab === "memory"
-                  ? "px-3 py-2 text-gray-100 border-b-2 border-purple-500"
-                  : "px-3 py-2 text-gray-500 hover:text-gray-300"
+                  ? "shrink-0 px-3 py-2 text-gray-100 border-b-2 border-purple-500"
+                  : "shrink-0 px-3 py-2 text-gray-500 hover:text-gray-300"
               }
             >
               记忆
@@ -397,8 +397,8 @@ export const App = (): JSX.Element => {
               onClick={() => setRightTab("dormant")}
               className={
                 rightTab === "dormant"
-                  ? "px-3 py-2 text-gray-100 border-b-2 border-purple-500"
-                  : "px-3 py-2 text-gray-500 hover:text-gray-300"
+                  ? "shrink-0 px-3 py-2 text-gray-100 border-b-2 border-purple-500"
+                  : "shrink-0 px-3 py-2 text-gray-500 hover:text-gray-300"
               }
             >
               Dormant
@@ -413,8 +413,8 @@ export const App = (): JSX.Element => {
               onClick={() => setRightTab("skills")}
               className={
                 rightTab === "skills"
-                  ? "px-3 py-2 text-gray-100 border-b-2 border-purple-500"
-                  : "px-3 py-2 text-gray-500 hover:text-gray-300"
+                  ? "shrink-0 px-3 py-2 text-gray-100 border-b-2 border-purple-500"
+                  : "shrink-0 px-3 py-2 text-gray-500 hover:text-gray-300"
               }
             >
               技能
@@ -429,8 +429,8 @@ export const App = (): JSX.Element => {
               onClick={() => setRightTab("settings")}
               className={
                 rightTab === "settings"
-                  ? "px-3 py-2 text-gray-100 border-b-2 border-purple-500"
-                  : "px-3 py-2 text-gray-500 hover:text-gray-300"
+                  ? "shrink-0 px-3 py-2 text-gray-100 border-b-2 border-purple-500"
+                  : "shrink-0 px-3 py-2 text-gray-500 hover:text-gray-300"
               }
             >
               设置

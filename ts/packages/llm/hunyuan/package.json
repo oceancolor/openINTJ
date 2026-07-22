@@ -1,6 +1,6 @@
 {
   "name": "@openintj/llm-hunyuan",
-  "version": "3.0.0-alpha.0",
+  "version": "0.3.0-alpha.0",
   "private": true,
   "type": "module",
   "description": "腾讯混元大模型适配",

@@ -49,7 +49,7 @@ export const UpdateBanner: React.FC = () => {
         : "bg-blue-900/50 text-blue-100 border-blue-700";
 
   return (
-    <div className={`px-4 py-1.5 text-xs flex items-center gap-3 border-b ${tone}`}>
+    <div className={`shrink-0 px-4 py-1.5 text-xs flex items-center gap-3 border-b ${tone}`}>
       <span className="flex-1">{text}</span>
       {status === "downloaded" ? (
         <button

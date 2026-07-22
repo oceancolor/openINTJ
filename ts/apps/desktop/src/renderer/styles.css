@@ -10,3 +10,38 @@ body,
   padding: 0;
   background: #1e1e2e;
 }
+
+/* 应用外壳固定视口高度，内部区域各自滚动，避免整窗滚动导致状态栏/输入框被遮挡。 */
+body {
+  overflow: hidden;
+}
+
+/* 统一细滚动条样式：默认可见但不喧宾夺主，滚动区悬停时更明显。 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #45475a transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: #45475a;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: #585b70;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}

@@ -1,6 +1,6 @@
 {
   "name": "@openintj/cli",
-  "version": "3.0.0-alpha.0",
+  "version": "0.3.0-alpha.0",
   "private": true,
   "type": "module",
   "description": "OpenINTJ 终端版（开发/调试用）",

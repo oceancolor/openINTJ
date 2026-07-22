@@ -1,6 +1,6 @@
 {
   "name": "@openintj/server",
-  "version": "3.0.0-alpha.0",
+  "version": "0.3.0-alpha.0",
   "private": true,
   "type": "module",
   "description": "OpenINTJ HTTP 服务（云端模式，可选）",

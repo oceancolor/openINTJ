@@ -1,6 +1,6 @@
 {
   "name": "@openintj/concurrency",
-  "version": "3.0.0-alpha.0",
+  "version": "0.3.0-alpha.0",
   "private": true,
   "type": "module",
   "description": "RFC-003 方向一并发原语库（仅 RateLimitedLlmClient 已接入产品；其余 Mutex/Channel/ConditionVar/AgentPool/ForkJoin/Backpressure 为实验性，见 README）",

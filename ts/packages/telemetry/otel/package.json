@@ -1,6 +1,6 @@
 {
   "name": "@openintj/telemetry-otel",
-  "version": "3.0.0-alpha.0",
+  "version": "0.3.0-alpha.0",
   "private": true,
   "type": "module",
   "description": "OpenINTJ Hooks → OpenTelemetry 适配：attach 到 HookBus → 自动 span/metric；默认 no-op",

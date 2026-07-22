@@ -1,6 +1,6 @@
 {
   "name": "@openintj/llm-openai-compat",
-  "version": "3.0.0-alpha.0",
+  "version": "0.3.0-alpha.0",
   "private": true,
   "type": "module",
   "description": "OpenAI 兼容接口适配",

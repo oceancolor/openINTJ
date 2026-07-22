@@ -1,6 +1,6 @@
 {
   "name": "@openintj/skills",
-  "version": "3.0.0-alpha.0",
+  "version": "0.3.0-alpha.0",
   "private": true,
   "type": "module",
   "description": "技能系统：作者编写的 SKILL.md 能力包，两级（目录 + 嵌入检索）按需注入，opt-in 降 token；为自学习技能预留可插拔 SkillSource",
