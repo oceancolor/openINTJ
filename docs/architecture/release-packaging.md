@@ -1,8 +1,8 @@
 # 打包发布 & 自动更新（#6）
 
-> 状态：**未签名 Windows NSIS 已于 2026-07-19 本机产出**（electron-builder 配置 +
-> electron-updater + CI 发布工作流 + renderer 更新条均已接线）。
-> 签名正式发布仍有运维阻塞（品牌图标、证书 secrets、合入 main、正式 tag）。
+> 状态：**品牌图标已入库**；Release CI 在缺证书时产出未签名 Win/mac/Linux 包
+> （不再把空 `CSC_LINK` 当成文件路径）。**真正代码签名 / Apple 公证仍需仓库 secrets。**
+> 桌面版本 `0.3.0`，正式 tag 为 `v0.3.0`（不是旧阶段标签 `v3.0.0-alpha.*`）。
 
 桌面端（`ts/apps/desktop`）用 **electron-builder** 出安装包、**electron-updater** 从 GitHub Release 拉更新。
 
@@ -15,7 +15,7 @@
 | 主进程接线 | `ts/apps/desktop/src/main/index.ts` | 启动装 updater，退出 `dispose` |
 | IPC 契约 | `ts/apps/desktop/src/shared/ipc-protocol.ts` | `UPDATE_CHECK` / `UPDATE_INSTALL` 调用；`EVT_UPDATE` 流式状态；`UpdateEventSchema` |
 | 更新条 UI | `ts/apps/desktop/src/renderer/components/UpdateBanner.tsx` | 有可用更新/下载中/已就绪/出错时显示；已下载给「重启安装」（挂在 `App.tsx`） |
-| CI 发布 | `.github/workflows/release.yml` | 打 `v*` tag → win/mac 构建 → `electron-builder --publish always` → GitHub Release |
+| CI 发布 | `.github/workflows/release.yml` | 打 `v*` tag → win/mac/linux 构建 → `electron-builder --publish always` → GitHub Release |
 | 原生 ABI 对齐 | `ts/apps/desktop/scripts/ensure-electron-abi.cjs` | 把 better-sqlite3 / lancedb 的 `.node` 对齐到 Electron ABI（打包/开发前置） |
 
 更新事件状态机（`EVT_UPDATE.status`）：`checking → available → downloading → downloaded`（失败 `error`；未打包 `disabled`；无更新 `not-available`）。
@@ -45,15 +45,12 @@ pnpm workspace 包由 electron-vite 打进主进程 bundle，并在 desktop 中�
 2. 版本号：`ts/apps/desktop/package.json` 的 `version` 决定安装包/`latest.yml` 版本号，需与 tag 对齐。
 3. 打 tag 并推：
    ```bash
-   git tag v3.0.0
-   git push origin v3.0.0
+   git tag v0.3.0
+   git push origin v0.3.0
    ```
-4. `release.yml` 触发：windows-latest + macos-latest 各自 `electron-builder --publish always`，用内置 `GITHUB_TOKEN`
-   上传安装包 + `latest.yml` / `latest-mac.yml` 到对应 GitHub Release；签名环境由下列 repository
-   secrets 显式映射：
-   - Windows：`WIN_CSC_LINK`、`WIN_CSC_KEY_PASSWORD`
-   - macOS：`MAC_CSC_LINK`、`MAC_CSC_KEY_PASSWORD`、`APPLE_ID`、
-     `APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID`
+4. `release.yml` 触发：windows / macos / ubuntu 各自 `electron-builder --publish always`，用内置
+   `GITHUB_TOKEN` 上传安装包 + `latest.yml` / `latest-mac.yml` / `latest-linux.yml`。
+   证书与公证 secrets 见第五节；未配置则发未签名包。
 5. 已安装的客户端下次启动（延迟 4s）自动检查该 Release 并后台下载；用户可在更新条点「重启安装」。
 
 `workflow_dispatch` 也能手动触发（用于验证，不打 tag 时 version 取 package.json）。
@@ -63,15 +60,30 @@ pnpm workspace 包由 electron-vite 打进主进程 bundle，并在 desktop 中�
 - 单测：`ts/apps/desktop/__tests__/updater.spec.ts`（未打包禁用路径 + force 模式下事件转发/进度取整）。
 - 本机联调：设 `OPENINTJ_FORCE_UPDATER=1` 启动 dev，可走真实 `checkForUpdates`（需可达的 Release 源）。
 
-## 五、已知手动缺口（发布前需人工处理）
+## 五、代码签名 secrets（可选；缺省则未签名发布）
 
-- **品牌图标**：`ts/apps/desktop/resources/` 目前只有 `.gitkeep`。放 `icon.png`（≥512²，建议 1024²）后 electron-builder
-  会自动派生 Win `.ico` / mac `.icns`；不放则用 Electron 默认图标（能出包，仅不带品牌）。
-- **代码签名**：2026-07-19 `gh secret list` 为空；当前未签名 → Windows SmartScreen /
-  macOS Gatekeeper 会告警。
-  - Win：配置 `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD`（或另行接入 Azure Trusted Signing）。
-  - mac：`hardenedRuntime` 与 `notarize` 已开，仍需上节列出的 Apple 证书及 notarization secrets。
-- **Linux CI**：`release.yml` 矩阵含 ubuntu AppImage；本地仍可用 `--linux` 打包。
-- **首个正式 release 尚未切**：GitHub 当前无 Release；当前实现分支仍需提交、合入 `main`，
-  将 desktop `version` 与 tag 对齐后才能进行签名端到端验证。Windows 未签名安装包
-  `OpenINTJ-3.0.0-alpha.0-x64.exe` 已本机产出，macOS 跨平台打包仍需由 CI 验证。
+仓库目前没有签名证书。未配置时 CI **仍应成功**，只是安装包未签名：Windows SmartScreen /
+macOS Gatekeeper 会告警。要做签名/公证，在 GitHub repo Settings → Secrets 添加：
+
+| Secret | 用途 |
+|---|---|
+| `WIN_CSC_LINK` | Windows 代码签名证书（`.p12`/`.pfx` 的 HTTPS URL 或 electron-builder 可读取的路径） |
+| `WIN_CSC_KEY_PASSWORD` | 上述证书密码 |
+| `MAC_CSC_LINK` | Developer ID Application 证书（`.p12`） |
+| `MAC_CSC_KEY_PASSWORD` | 上述证书密码 |
+| `APPLE_ID` | 用于公证的 Apple ID |
+| `APPLE_APP_SPECIFIC_PASSWORD` | Apple 应用专用密码 |
+| `APPLE_TEAM_ID` | Apple Team ID |
+
+工作流**只有非空**时才导出 `CSC_LINK`；mac 也只有存在 `APPLE_ID` 时才打开 `notarize`。
+不要把空字符串写进 `CSC_LINK`——electron-builder 会把它当成文件路径，
+上次 `v0.3.0-alpha.0` 的 macOS job 即因此失败（`.../ts/apps/desktop not a file`）。
+
+Windows 也可另行接入 Azure Trusted Signing，不走 `CSC_LINK`。
+
+## 六、已知手动缺口
+
+- **代码签名证书**：仍需人工把上表 secrets 配进 `oceancolor/openINTJ`。
+- **合入 `main` 再打 tag**：实现目前在 `rfc-005-007-implementation`；docs 约定正式包从 `main` 切 `v0.3.0`。
+- **品牌图标已解决**：`ts/apps/desktop/resources/icon.png`（1024²）。
+- **Linux CI**：`release.yml` 矩阵含 ubuntu AppImage。

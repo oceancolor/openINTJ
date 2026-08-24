@@ -321,7 +321,7 @@ export const App = (): JSX.Element => {
     <div className="flex flex-col h-screen overflow-hidden text-gray-200">
       <header className="shrink-0 px-4 py-2 border-b border-gray-800 bg-[#181825] flex items-center gap-2">
         <span className="text-base font-semibold">OpenINTJ</span>
-        <span className="text-xs text-gray-500">v0.3 Local Desktop</span>
+        <span className="text-xs text-gray-500">v0.3.0</span>
         <button
           type="button"
           onClick={() => void window.openintj.restartApp()}

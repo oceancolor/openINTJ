@@ -25,6 +25,7 @@ publish:
   repo: openINTJ
   releaseType: release
 win:
+  icon: resources/icon.png
   target:
     - target: nsis
       arch: [x64]
@@ -34,13 +35,16 @@ nsis:
   allowToChangeInstallationDirectory: true
   shortcutName: OpenINTJ
 mac:
+  icon: resources/icon.png
   target:
     - target: dmg
       arch: [x64, arm64]
   category: public.app-category.developer-tools
   hardenedRuntime: true
   gatekeeperAssess: false
-  notarize: true
+  # 默认关闭公证：缺 APPLE_ID 时 notarize:true 会让 CI 失败。
+  # Release 工作流在检测到 Apple secrets 后会加 --config.mac.notarize=true。
+  notarize: false
 dmg:
   contents:
     - x: 130
@@ -50,6 +54,7 @@ dmg:
       type: link
       path: /Applications
 linux:
+  icon: resources/icon.png
   target:
     - target: AppImage
       arch: [x64]

@@ -7,7 +7,7 @@
  * - 应用生命周期 + 窗口管理
  */
 
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadOpenintjEnv, summarizeLlmEnv } from "@openintj/shared";
@@ -148,6 +148,7 @@ const assembleFromSavedConfig = async (savedConfig: AppConfig): Promise<DesktopA
 };
 
 const createWindow = (): BrowserWindow => {
+  const iconPath = path.join(__dirname, "../../resources/icon.png");
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -155,6 +156,7 @@ const createWindow = (): BrowserWindow => {
     minHeight: 600,
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     show: false,
+    ...(existsSync(iconPath) ? { icon: iconPath } : {}),
     webPreferences: {
       contextIsolation: true,
       sandbox: false,

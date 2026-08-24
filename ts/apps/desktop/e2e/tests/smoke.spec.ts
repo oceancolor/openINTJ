@@ -13,7 +13,7 @@ import { expect, test } from "../fixtures.js";
 test.describe("desktop smoke (mock provider, no persist)", () => {
   test("boots and renders header", async ({ page }) => {
     await expect(page.locator("header").first()).toContainText("OpenINTJ");
-    await expect(page.locator("header").first()).toContainText("v0.3 Local Desktop");
+    await expect(page.locator("header").first()).toContainText("v0.3.0");
     await expect(page.getByLabel("对话模型")).toHaveValue("hunyuan-hy3");
   });
 

@@ -1,7 +1,7 @@
 # 下一次工作交接备忘
 
 > 本文件用于工作中断 / 多日离开后快速恢复上下文。
-> 上次更新：2026-08-24（技能工具硬隔离、Desktop 配置热重装、搜索 harness、Linux CI）。
+> 上次更新：2026-08-24（v0.3.0 发布准备：品牌图标、未签名可发布 CI）。
 
 ---
 
@@ -16,13 +16,15 @@
 3. ~~**真实搜索验收入口**~~：✅ 2026-08-24。`RUN_SEARCH_LIVE=1` gated harness 已加；
    仍需本机配置 Tavily/Brave key 后实跑，才能把 T3 事实质量从 fail-closed 推进到真 provider 基线。
 4. ~~**Linux CI 打包**~~：✅ 2026-08-24。`release.yml` 增加 ubuntu AppImage。
-5. **签名正式发布**：仍阻塞于品牌图标、证书 secrets、合入 main、正式 tag。未签名 NSIS 此前已产出。
+5. **签名正式发布**：图标与未签名 CI 已就绪（desktop `0.3.0`）。**真正签名仍阻塞于仓库 secrets**
+   （`WIN_CSC_*` / `MAC_CSC_*` / Apple 公证）。下一步：合入 `main` 后打 `v0.3.0`。
+   未签名 NSIS 此前已本机产出；上次 GitHub `v0.3.0-alpha.0` 的 macOS job 因空 `CSC_LINK` 失败，已修。
 6. **后续独立 RFC**（不混入本轮）：动态 LLM 拆图、默认多 Agent、streaming / 更完整 OpenAI-compatible
    provider、embedding migration。`qwen2.5:7b` 仍受本机内存限制。
 
 2026-08-24 未做 / 需人工：
 
-- 品牌 `icon.png`（`ts/apps/desktop/resources/`）与 Win/mac 签名 secrets
+- 把 Win/mac 签名与 Apple 公证 secrets 配进 GitHub；合入 `main` 后打 `v0.3.0`
 - `RUN_SEARCH_LIVE=1` 真机跑批并把数字写回 RFC-006 T3
 - 蒸馏候选语义去重；Mutex/Channel/CV/Pool 仍实验性
 

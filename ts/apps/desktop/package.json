@@ -1,9 +1,14 @@
 {
   "name": "@openintj/desktop",
-  "version": "0.3.0-alpha.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "OpenINTJ Electron 桌面客户端（Win/Mac local-first）",
+  "description": "OpenINTJ Electron 桌面客户端（Win/Mac/Linux local-first）",
+  "author": "OpenINTJ",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/oceancolor/openINTJ.git"
+  },
   "main": "./out/main/index.js",
   "scripts": {
     "build": "electron-vite build",

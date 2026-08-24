@@ -1,7 +1,8 @@
 name: Release
 
-# 打 tag（v3.0.0 等）时构建 Win/macOS/Linux 安装包并发布到 GitHub Release。
+# 打 tag（v0.3.0 等）时构建 Win/macOS/Linux 安装包并发布到 GitHub Release。
 # electron-updater 从该 Release 拉取更新（latest.yml / latest-mac.yml / latest-linux.yml + 安装包）。
+# 证书 secrets 未配置时产出未签名包；切勿把空 CSC_LINK 传给 electron-builder（会当成文件路径失败）。
 on:
   push:
     tags:
@@ -68,13 +69,33 @@ jobs:
         env:
           # electron-builder 用 GH_TOKEN 上传安装包到 GitHub Release。
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 平台证书使用不同 secret；未配置时 electron-builder 仍可产出未签名包。
-          CSC_LINK: ${{ matrix.os == 'windows-latest' && secrets.WIN_CSC_LINK || secrets.MAC_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ matrix.os == 'windows-latest' && secrets.WIN_CSC_KEY_PASSWORD || secrets.MAC_CSC_KEY_PASSWORD }}
+          # 空字符串也会被 electron-builder 当成 CSC_LINK 文件路径；先放进独立变量，非空再导出。
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: pnpm exec electron-builder --config electron-builder.yml ${{ matrix.flag }} --publish always
+        run: |
+          set -eo pipefail
+          export CSC_IDENTITY_AUTO_DISCOVERY=false
+          unset CSC_LINK CSC_KEY_PASSWORD || true
+
+          if [ "${RUNNER_OS}" = "Windows" ] && [ -n "${WIN_CSC_LINK:-}" ]; then
+            export CSC_LINK="${WIN_CSC_LINK}"
+            export CSC_KEY_PASSWORD="${WIN_CSC_KEY_PASSWORD:-}"
+          elif [ "${RUNNER_OS}" = "macOS" ] && [ -n "${MAC_CSC_LINK:-}" ]; then
+            export CSC_LINK="${MAC_CSC_LINK}"
+            export CSC_KEY_PASSWORD="${MAC_CSC_KEY_PASSWORD:-}"
+          fi
+
+          EXTRA=()
+          if [ "${RUNNER_OS}" = "macOS" ] && [ -n "${APPLE_ID:-}" ]; then
+            EXTRA+=(--config.mac.notarize=true)
+          fi
+
+          pnpm exec electron-builder --config electron-builder.yml ${{ matrix.flag }} --publish always "${EXTRA[@]}"
 
       - name: Upload installers as workflow artifacts
         if: always()

@@ -4,9 +4,11 @@
 版本号沿用 [SemVer](https://semver.org/lang/zh-CN/) 与
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 
-## [Unreleased] —— 未完成项续作 (2026-08-24)
+## [0.3.0] — 2026-08-24
 
-> 接续 07-22 桌面 v0.3：技能工具硬隔离、Desktop 配置热重装、真实搜索 gated harness、Linux CI 打包。
+桌面端首个正式安装包版本（tag `v0.3.0`，相对预发布 `v0.3.0-alpha.0`）。
+含 RFC-005/006/007/008、桌面工作台，以及本轮运行时收口。
+GitHub 尚未配置代码签名 secrets 时，CI 产出未签名 Win/mac/Linux 包，不再因空 `CSC_LINK` 失败。
 
 ### Added
 
@@ -16,12 +18,15 @@
   会话级字段不触发重装；Ollama URL 在失焦时写入。
 - **真实搜索 gated harness**：`RUN_SEARCH_LIVE=1` 跑 Tavily/Brave 真请求（不进 normal CI）。
 - **Linux CI 打包**：`release.yml` 矩阵增加 ubuntu AppImage。
+- **品牌图标**：`ts/apps/desktop/resources/icon.png`（1024²），electron-builder 派生 ico/icns。
+- **未签名可发布的 Release CI**：缺 `WIN_CSC_*` / `MAC_CSC_*` / Apple 公证 secrets 时跳过签名与公证。
 
 ### Changed
 
 - 技能 prompt 从「建议优先使用工具」改为「本轮仅可使用工具」，与硬隔离一致。
+- Desktop `package.json` 版本 `0.3.0-alpha.0` → `0.3.0`；窗口标题栏显示 `v0.3.0`。
 
-## [Unreleased] —— 三方向 RFC 首期实现 (2026-07-14)
+## [0.3.0] RFC-005/006/007/008 首期（2026-07-14，随本版一并发布）
 
 > RFC-005 ModelRuntime + ADR-002、RFC-006 Product Behavior、RFC-007 TaskPool MVD。
 
