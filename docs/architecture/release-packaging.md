@@ -2,7 +2,8 @@
 
 > 状态：**品牌图标已入库**；Release CI 在缺证书时产出未签名 Win/mac/Linux 包
 > （不再把空 `CSC_LINK` 当成文件路径）。**真正代码签名 / Apple 公证仍需仓库 secrets。**
-> 桌面版本 `0.3.0`，正式 tag 为 `v0.3.0`（不是旧阶段标签 `v3.0.0-alpha.*`）。
+> 桌面版本 `0.3.0`；**未签名 GitHub Release `v0.3.0` 已于 2026-08-24 从
+> `rfc-005-007-implementation` 发出**（Win NSIS / macOS DMG x64+arm64 / Linux AppImage）。
 
 桌面端（`ts/apps/desktop`）用 **electron-builder** 出安装包、**electron-updater** 从 GitHub Release 拉更新。
 
@@ -84,6 +85,8 @@ Windows 也可另行接入 Azure Trusted Signing，不走 `CSC_LINK`。
 ## 六、已知手动缺口
 
 - **代码签名证书**：仍需人工把上表 secrets 配进 `oceancolor/openINTJ`。
-- **合入 `main` 再打 tag**：实现目前在 `rfc-005-007-implementation`；docs 约定正式包从 `main` 切 `v0.3.0`。
+- **`origin/main` 与实现分支无共同历史**：GitHub 默认 `main` 目前是 2026-04 的 Python 上传，
+  不能开 PR。`v0.3.0` 未签名包已从 `rfc-005-007-implementation` 的 tag 发出。
+  是否把实现分支设为默认、或重建 `main`，需仓库管理员决定。
 - **品牌图标已解决**：`ts/apps/desktop/resources/icon.png`（1024²）。
 - **Linux CI**：`release.yml` 矩阵含 ubuntu AppImage。
