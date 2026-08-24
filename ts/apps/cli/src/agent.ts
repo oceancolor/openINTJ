@@ -166,6 +166,7 @@ const buildAgentCore = (
   hooksInput?: HookBus,
 ): Omit<AssembledAgent, "run" | "productBehavior"> & {
   tao: TaoLoop;
+  runTao: TaoLoop["run"];
   selfConsistency: ReturnType<typeof resolveSelfConsistency>;
   classifier?: ReinforcingClassifier;
   skillLearning?: SkillLearningRuntime;
@@ -280,14 +281,16 @@ const buildAgentCore = (
     ? assembleSkillContext({
         embedder: memory.store.embedder,
         hooks,
+        onSelected: (query, taskType, ids, tools) => {
+          toolHub.setRunAllowlist(tools);
+          skillLearning?.noteSelected(query, taskType, ids);
+        },
         ...(skillLearning
           ? {
               extraSources: [
                 new DbSkillSource({ approvedSkills: () => skillLearning.listApproved() }),
               ],
               weightFor: (id: string) => skillLearning.weightFor(id),
-              onSelected: (query, taskType, ids) =>
-                skillLearning.noteSelected(query, taskType, ids),
             }
           : {}),
       })
@@ -326,6 +329,9 @@ const buildAgentCore = (
     },
   });
 
+  const runTao: TaoLoop["run"] = (query, runOpts) =>
+    toolHub.runInAllowlistScope(() => tao.run(query, runOpts));
+
   const selfConsistency = resolveSelfConsistency(opts.selfConsistency);
   const classifier = enableClassifier
     ? new ReinforcingClassifier({ embedder: memory.store.embedder })
@@ -351,6 +357,7 @@ const buildAgentCore = (
     ...(skillLearning ? { skillLearning } : {}),
     ...(dormant ? { dormant } : {}),
     tao,
+    runTao,
     selfConsistency,
     ensureClassifier,
     taskPoolEnabled,
@@ -474,13 +481,13 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
         const graph = planGraphToTaskGraph(plan);
         const poolResult = await core.taskPool.submitRun(graph, async (node, ctx) => {
           const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
-          return core.tao.run(stepQuery, taoOpts(ctx.traceId, ctx.signal));
+          return core.runTao(stepQuery, taoOpts(ctx.traceId, ctx.signal));
         });
         result = synthesizeTaskPoolAnswer(poolResult, executionQuery);
       } else if (orchestrationMode === "self-consistency" && core.selfConsistency) {
         const { fulfilled } = await forkJoin(
           Array.from({ length: core.selfConsistency.samples }, (_, i) => i),
-          (i) => core.tao.run(executionQuery, taoOpts(`${randomUUID()}-sc${i}`)),
+          (i) => core.runTao(executionQuery, taoOpts(`${randomUUID()}-sc${i}`)),
           {
             hooks: core.hooks,
             group: "self-consistency",
@@ -492,7 +499,7 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
         );
         result = selectConsistentAnswer(fulfilled, core.selfConsistency.strategy) ?? fulfilled[0]!;
       } else {
-        result = await core.tao.run(executionQuery, taoOpts());
+        result = await core.runTao(executionQuery, taoOpts());
       }
     }
     if (inputStructure?.action === "proceed") {

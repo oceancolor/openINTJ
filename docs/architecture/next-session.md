@@ -1,14 +1,36 @@
 # 下一次工作交接备忘
 
 > 本文件用于工作中断 / 多日离开后快速恢复上下文。
-> 上次更新：2026-07-19（完成 RFC-005/006/007 落地后的文档与生产差距复核）。
+> 上次更新：2026-08-24（技能工具硬隔离、Desktop 配置热重装、搜索 harness、Linux CI）。
 
 ---
 
-## 🎯 当前工作队列（2026-07-19 更新）
+## 🎯 当前工作队列（2026-08-24 更新）
 
-RFC-005/006/007 的核心库、三端 opt-in 接线与确定性测试已经落地，但不能据此宣称生产闭环。
-下一轮先完成以下六项正确性 / 产品接线，再推进扩展 RFC：
+07-19 六项生产接线与 RFC-008 / 桌面工作台已经落地。本轮把交接里仍能写代码的未完成项收了一轮：
+
+1. ~~**技能工具硬隔离**~~：✅ 2026-08-24。ToolHub ALS allowlist + 三端 `runTao` 接线；
+   seed 技能改为 `read_file` 等注册名，camelCase 仍兼容。
+2. ~~**Desktop 配置热重装**~~：✅ 2026-08-24。运行时配置保存后 assemble 新 agent，失败则保留旧实例。
+   全进程重启入口仍保留（Chromium 开关等）。
+3. ~~**真实搜索验收入口**~~：✅ 2026-08-24。`RUN_SEARCH_LIVE=1` gated harness 已加；
+   仍需本机配置 Tavily/Brave key 后实跑，才能把 T3 事实质量从 fail-closed 推进到真 provider 基线。
+4. ~~**Linux CI 打包**~~：✅ 2026-08-24。`release.yml` 增加 ubuntu AppImage。
+5. **签名正式发布**：仍阻塞于品牌图标、证书 secrets、合入 main、正式 tag。未签名 NSIS 此前已产出。
+6. **后续独立 RFC**（不混入本轮）：动态 LLM 拆图、默认多 Agent、streaming / 更完整 OpenAI-compatible
+   provider、embedding migration。`qwen2.5:7b` 仍受本机内存限制。
+
+2026-08-24 未做 / 需人工：
+
+- 品牌 `icon.png`（`ts/apps/desktop/resources/`）与 Win/mac 签名 secrets
+- `RUN_SEARCH_LIVE=1` 真机跑批并把数字写回 RFC-006 T3
+- 蒸馏候选语义去重；Mutex/Channel/CV/Pool 仍实验性
+
+---
+
+### 2026-07-19 生产接线（已完成）
+
+RFC-005/006/007 的核心库、三端 opt-in 接线与确定性测试已经落地。当时补齐的六项：
 
 1. ~~**TaskPool 重启恢复**~~：✅ 2026-07-19 完成。server/desktop 启动扫描
    `listIncompleteRuns()`；默认 cancel 防重复副作用，显式 `OPENINTJ_TASK_POOL_RECOVERY=resume`
@@ -31,8 +53,8 @@ RFC-005/006/007 的核心库、三端 opt-in 接线与确定性测试已经落�
    Desktop 设置页和 StatusBar 均显示依赖及激活原因。
 6. ~~**三端配置 / 状态一致性**~~：✅ 2026-07-19 完成。CLI embedding provider 选项补齐
    simple/xenova，与 server/desktop 共用完整 provider 集；三端统一输出 ModelRuntime structured
-   status、顶层 embed/classifier、健康刷新和 TaskPool activation capability。Desktop 配置仍明确为保存后重启生效，
-   CLI flags 仅作用于当前进程，server env/opts 在启动装配时生效。
+   status、顶层 embed/classifier、健康刷新和 TaskPool activation capability。Desktop 运行时配置
+   于 2026-08-24 改为保存后热重装；CLI flags 仅作用于当前进程，server env/opts 在启动装配时生效。
 
 2026-07-19 真实环境验收已执行：
 
@@ -752,12 +774,10 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 
 - ~~权重衰减 / LRU~~ ✅ 读时指数半衰期（`weightHalfLifeSec` / `OPENINTJ_SKILL_WEIGHT_HALFLIFE_SEC`）：`weightFor`
   按距 `lastUsed` 的时长衰减，`reinforce` 累加前先衰减旧值；不设即历史行为。
-- ~~工具子集绑定~~ ✅ `Skill.tools`（frontmatter/sqlite/db 全链路）：文本协议下**软绑定**（技能块渲染「优先使用工具」行），
-  并经 `skillToolAllowlist` + `assembleSkillContext.onSelected` 暴露命中并集供装配方做工具面收窄。
+- ~~工具子集绑定~~ ✅ `Skill.tools` 硬隔离：技能块渲染「本轮仅可使用工具」，三端 ToolHub 按并集收窄 list/call。
 - ~~蒸馏质量~~ ✅ `createLlmSkillDistiller` 校验强化：name/body 必填 + body 最小长度 + 各字段截断 + triggers/tools
   归一去重 + taskTypes 枚举校验 + 批内去重；新增 `llm-distill.spec`（12 例）。
-- 仍未做：新工具**注册/隔离**（当前只做软绑定 + allowlist 暴露，未在 ToolHub 层按技能硬收窄可用工具面）；
-  蒸馏候选**语义相似度**去重（当前按 id/name）。
+- 仍未做：蒸馏候选**语义相似度**去重（当前按 id/name）；新工具类型仍需作者在 ToolHub 注册后才能被技能绑定。
 
 ---
 
@@ -846,7 +866,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 - **设置面板**（`apps/desktop/src/renderer/components/SettingsPanel.tsx`，接进右栏「设置」tab）：
   - 工作区段：`workspaceInfo()` 显示沙箱根/命令开关/白名单；「选择目录…」→ `workspacePickDir()`
     （持久化到 config，下次启动生效）。
-  - 配置段：`getConfig()`/`updateConfig()` 编辑 llmProvider / retrievalMode + 7 个开关；改完提示「需重启生效」。
+  - 配置段：`getConfig()`/`updateConfig()` 编辑 llmProvider / retrievalMode + 7 个开关；运行时项保存后热重装 agent。
   - 变更流段：`onWorkspaceEvent()` 实时列出 `fs.watch` 的 rename/change（最近 20 条）。
 - **config 字段补全**（`ipc-protocol.ts` `AppConfigSchema`）：新增 `enablePersona / enableSkills /
   enableSkillLearning / enableClassifier`，并在 `main/index.ts` 启动装配时透传给 `assembleDesktopAgent`。
@@ -861,8 +881,8 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 - **测试**：dormant +6（fallback 编排：worker 透传 / 抛错回退等价 PatternMiner / 空事件；DormantRuntime
   mineRunner 接线：走 worker / llmExtract 不走 / 未配不走）；desktop config schema 扩展经现有 ipc-handlers
   契约测试守护。typecheck + biome 全绿；真实 worker 线程手动 e2e 通过（3 patterns off-thread）。
-- **未做（明确留量）**：config 热重载（当前需重启；面板已标注）；renderer 无 jsdom 单测 → 面板交互留
-  Playwright。`skillLearning` 已由保存配置透传到 desktop agent 装配，不再是 env-only。
+- **未做（明确留量）**：renderer 无 jsdom 单测 → 面板交互留 Playwright。config 热重载已于 2026-08-24 落地。
+  `skillLearning` 已由保存配置透传到 desktop agent 装配，不再是 env-only。
 
 ### 12.6 方向一并发原语接真实 agent：self-consistency 并发上限（2026-07-08）
 
@@ -922,7 +942,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
   `resolveSkillWeightHalfLifeSec` 三端接线）。读时指数衰减 `w*0.5^(age/halfLife)`：`weightFor` 供选择器偏置随冷却
   自然回落，`reinforce` 累加前先把旧值衰减到当下（陈旧高权重不永久霸榜）。不设 → 历史行为。
 - **工具子集绑定**：`Skill.tools`（frontmatter `tools:` 解析 / sqlite `SkillSchema` default [] 向后兼容 / db 源透传 /
-  蒸馏草案携带）。文本协议下**软绑定**：`renderSkillPrompt` 命中技能追加「建议优先使用工具：…」引导 Action；
+  蒸馏草案携带）。命中后技能块写「本轮仅可使用工具」；三端 ToolHub 按并集硬收窄 list/call。
   `skillToolAllowlist` 求命中并集，经 `assembleSkillContext.onSelected(query,taskType,ids,tools)` 暴露供装配方收窄。
   内建 seed（code-review/debugging/web-research）已声明 tools 示例。
 - **蒸馏质量**：`createLlmSkillDistiller` 校验强化 —— name/body 必填 + body 最小长度（默认 16）+ name/desc/body 截断 +

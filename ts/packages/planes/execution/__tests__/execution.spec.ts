@@ -208,6 +208,52 @@ describe("ToolHub", () => {
     expect(after).toHaveBeenCalledOnce();
     expect(onError).not.toHaveBeenCalled();
   });
+
+  it("runInAllowlistScope 收窄 list 并拒绝未授权工具，不触发熔断", async () => {
+    const handler = vi.fn(() => ({ ok: true }));
+    const hub = new ToolHub();
+    hub.registerBuiltinTools({
+      search: () => ({ hits: [] }),
+      writeFile: handler,
+    });
+
+    const listed = await hub.runInAllowlistScope(async () => {
+      hub.setRunAllowlist(["search"]);
+      return hub.list().map((t) => t.name);
+    });
+    expect(listed).toEqual(["search"]);
+
+    const blocked = await hub.runInAllowlistScope(async () => {
+      hub.setRunAllowlist(["search"]);
+      return hub.call("write_file", { path: "a.txt", content: "x" });
+    });
+    expect(blocked.success).toBe(false);
+    expect(blocked.error).toMatch(/技能未授权工具/);
+    expect(handler).not.toHaveBeenCalled();
+
+    const allowed = await hub.runInAllowlistScope(async () => {
+      hub.setRunAllowlist(["search"]);
+      return hub.call("search", { query: "q" });
+    });
+    expect(allowed.success).toBe(true);
+  });
+
+  it("camelCase 别名解析到已注册工具，且空 allowlist 不限制", async () => {
+    const hub = new ToolHub();
+    hub.registerBuiltinTools({
+      search: () => ({ hits: ["ok"] }),
+    });
+    const aliased = await hub.call("readFile", { path: "missing.txt" });
+    expect(aliased.toolName).toBe("read_file");
+
+    const unrestricted = await hub.runInAllowlistScope(async () => {
+      hub.setRunAllowlist([]);
+      return hub.list().map((t) => t.name);
+    });
+    expect(unrestricted).toEqual(
+      expect.arrayContaining(["read_file", "write_file", "execute_command", "search"]),
+    );
+  });
 });
 
 describe("Executor (sequential)", () => {

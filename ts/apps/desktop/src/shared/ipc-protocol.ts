@@ -608,6 +608,29 @@ export type AppConfig = z.infer<typeof AppConfigSchema>;
 export const AppConfigPatchSchema = AppConfigSchema.partial();
 export type AppConfigPatch = z.infer<typeof AppConfigPatchSchema>;
 
+/** Keys that require reassembling the Desktop agent (in-process hot reload). */
+export const AGENT_RUNTIME_CONFIG_KEYS = [
+  "workspaceDir",
+  "llmProvider",
+  "embedProvider",
+  "ollamaBaseUrl",
+  "ollamaModel",
+  "ollamaEmbedModel",
+  "retrievalMode",
+  "enableCommands",
+  "allowedCommands",
+  "enableDormant",
+  "enablePersona",
+  "enableProductBehavior",
+  "enableSkills",
+  "enableSkillLearning",
+  "enableClassifier",
+  "enableTaskPool",
+] as const satisfies ReadonlyArray<keyof AppConfig>;
+
+export const isAgentRuntimeConfigPatch = (patch: AppConfigPatch): boolean =>
+  AGENT_RUNTIME_CONFIG_KEYS.some((key) => patch[key] !== undefined);
+
 /** Phase 3.3 ??approve/reject ???????? shape??*/
 export const DormantDecisionErrorSchema = z.object({
   error: z.union([

@@ -4,6 +4,23 @@
 版本号沿用 [SemVer](https://semver.org/lang/zh-CN/) 与
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 
+## [Unreleased] —— 未完成项续作 (2026-08-24)
+
+> 接续 07-22 桌面 v0.3：技能工具硬隔离、Desktop 配置热重装、真实搜索 gated harness、Linux CI 打包。
+
+### Added
+
+- **技能工具硬隔离**：命中技能声明的 `tools` 后，ToolHub 按并集收窄 `list()` / `call()`；
+  camelCase 别名归一到 `read_file` 等注册名。空声明不限制。并发 `tao.run` 用 ALS 隔离。
+- **Desktop 配置热重装**：设置页保存 workspace / 模型 / 功能开关后原地重装 agent，无需退出进程。
+  会话级字段不触发重装；Ollama URL 在失焦时写入。
+- **真实搜索 gated harness**：`RUN_SEARCH_LIVE=1` 跑 Tavily/Brave 真请求（不进 normal CI）。
+- **Linux CI 打包**：`release.yml` 矩阵增加 ubuntu AppImage。
+
+### Changed
+
+- 技能 prompt 从「建议优先使用工具」改为「本轮仅可使用工具」，与硬隔离一致。
+
 ## [Unreleased] —— 三方向 RFC 首期实现 (2026-07-14)
 
 > RFC-005 ModelRuntime + ADR-002、RFC-006 Product Behavior、RFC-007 TaskPool MVD。

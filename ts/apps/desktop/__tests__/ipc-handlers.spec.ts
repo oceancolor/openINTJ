@@ -813,6 +813,21 @@ describe("IPC handler registration", () => {
     expect(after.retrievalMode).toBe("hybrid");
   });
 
+  it("CONFIG_UPDATE 运行时项会热重装 agent，会话项不会", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ointj-cfg-reload-"));
+    const config = createConfigService(join(dir, "config.json"));
+    const handlers: Handlers = new Map();
+    const reloadAgent = vi.fn(async () => {});
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers), { config, reloadAgent });
+
+    await handlers.get(IPC.CONFIG_UPDATE)?.({}, { activeConversationId: "conv-1" });
+    expect(reloadAgent).not.toHaveBeenCalled();
+
+    await handlers.get(IPC.CONFIG_UPDATE)?.({}, { retrievalMode: "hybrid" });
+    expect(reloadAgent).toHaveBeenCalledOnce();
+  });
+
   it("CONFIG_UPDATE 拒绝非法补丁", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ointj-cfg-bad-"));
     const config = createConfigService(join(dir, "config.json"));
@@ -879,7 +894,7 @@ describe("IPC handler registration", () => {
     await vi.waitFor(() => expect(hangingClient.chat).toHaveBeenCalled());
     await handlers.get(IPC.APP_RESTART)?.({}, undefined);
 
-    await expect(chat).rejects.toThrow("aborted");
+    await expect(chat).rejects.toThrow(/aborted|app_restarting/);
     expect(restart).toHaveBeenCalledOnce();
   });
 

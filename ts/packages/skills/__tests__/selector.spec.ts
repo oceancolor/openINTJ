@@ -179,7 +179,7 @@ describe("renderSkillPrompt", () => {
     expect(block).toContain("审查步骤");
   });
 
-  it("声明了 tools 的技能渲染出「优先使用工具」软绑定行", () => {
+  it("声明了 tools 的技能渲染出硬隔离工具行", () => {
     const block = renderSkillPrompt([
       {
         skill: mkSkill({
@@ -191,14 +191,14 @@ describe("renderSkillPrompt", () => {
         score: 0.9,
       },
     ]);
-    expect(block).toContain("建议优先使用工具：readFile, search");
+    expect(block).toContain("本轮仅可使用工具：read_file, search");
   });
 
   it("未声明 tools 时不渲染软绑定行", () => {
     const block = renderSkillPrompt([
       { skill: mkSkill({ id: "cr", name: "Code Review", body: "审查" }), score: 0.9 },
     ]);
-    expect(block).not.toContain("建议优先使用工具");
+    expect(block).not.toContain("本轮仅可使用工具");
   });
 });
 
@@ -209,7 +209,7 @@ describe("skillToolAllowlist", () => {
       { skill: mkSkill({ id: "b", tools: ["search", "writeFile"] }), score: 0.8 },
       { skill: mkSkill({ id: "c" }), score: 0.7 },
     ]);
-    expect(allow).toEqual(["readFile", "search", "writeFile"]);
+    expect(allow).toEqual(["read_file", "search", "write_file"]);
   });
 
   it("无命中 / 均未声明 tools → 空数组", () => {

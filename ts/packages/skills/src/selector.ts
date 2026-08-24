@@ -1,6 +1,7 @@
 import {
   type EmbeddingProvider,
   type TaskTypeType,
+  canonicalToolNames,
   cosineSimilarity,
   estimateTokens,
 } from "@openintj/core";
@@ -124,7 +125,7 @@ export const renderSkillPrompt = (skills: readonly SelectedSkill[]): string => {
     const head = `## ${s.skill.name}`;
     // 工具软绑定：文本协议下提示优先工具子集，引导 Action 选择。
     const toolLine = s.skill.tools.length
-      ? `\n（建议优先使用工具：${s.skill.tools.join(", ")}）`
+      ? `\n（本轮仅可使用工具：${canonicalToolNames(s.skill.tools).join(", ")}）`
       : "";
     return `${head}${toolLine}\n${s.skill.body.trim()}`;
   });
@@ -136,15 +137,5 @@ export const renderSkillPrompt = (skills: readonly SelectedSkill[]): string => {
  * 例如把 ToolHub 的可用工具与之取交集。空数组表示「本轮命中技能未约束工具」。
  */
 export const skillToolAllowlist = (skills: readonly SelectedSkill[]): string[] => {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const s of skills) {
-    for (const t of s.skill.tools) {
-      if (!seen.has(t)) {
-        seen.add(t);
-        out.push(t);
-      }
-    }
-  }
-  return out;
+  return canonicalToolNames(skills.flatMap((s) => s.skill.tools));
 };

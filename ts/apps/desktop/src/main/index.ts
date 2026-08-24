@@ -12,7 +12,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadOpenintjEnv, summarizeLlmEnv } from "@openintj/shared";
 import { BrowserWindow, app, dialog, safeStorage } from "electron";
-import { DEFAULT_DESKTOP_MODEL_PROFILE_ID, type ModelProvider } from "../shared/ipc-protocol.js";
+import {
+  type AppConfig,
+  DEFAULT_DESKTOP_MODEL_PROFILE_ID,
+  type ModelProvider,
+} from "../shared/ipc-protocol.js";
 import { type DesktopAgent, assembleDesktopAgent } from "./agent.js";
 import { type ConfigService, createConfigService } from "./config-store.js";
 import { createCredentialStore } from "./credential-store.js";
@@ -72,6 +76,77 @@ const closeApplicationState = async (): Promise<void> => {
   }
 };
 
+const applySavedLlmEnv = (savedConfig: AppConfig): void => {
+  if (savedConfig.ollamaBaseUrl) process.env["OLLAMA_BASE_URL"] = savedConfig.ollamaBaseUrl;
+  if (savedConfig.ollamaModel) process.env["OLLAMA_MODEL"] = savedConfig.ollamaModel;
+  if (savedConfig.ollamaEmbedModel)
+    process.env["OLLAMA_EMBED_MODEL"] = savedConfig.ollamaEmbedModel;
+  if (
+    savedConfig.embedProvider &&
+    !process.env["EMBEDDING_PROVIDER"] &&
+    !process.env["EMBED_PROVIDER"]
+  ) {
+    process.env["EMBED_PROVIDER"] = savedConfig.embedProvider;
+  }
+};
+
+const resolveDesktopPaths = (savedConfig: AppConfig): { dataDir: string; workspaceDir: string } => {
+  const dataDir =
+    process.env["OPENINTJ_DATA_DIR"] ?? path.join(app.getPath("userData"), "memory-store");
+  mkdirSync(dataDir, { recursive: true });
+  const workspaceDir =
+    process.env["OPENINTJ_WORKSPACE_DIR"] ??
+    savedConfig.workspaceDir ??
+    path.join(app.getPath("documents"), "OpenINTJ");
+  mkdirSync(workspaceDir, { recursive: true });
+  return { dataDir, workspaceDir };
+};
+
+const assembleFromSavedConfig = async (savedConfig: AppConfig): Promise<DesktopAgent> => {
+  applySavedLlmEnv(savedConfig);
+  const { dataDir, workspaceDir } = resolveDesktopPaths(savedConfig);
+  const llmProvider =
+    (process.env["LLM_PROVIDER"] as ModelProvider | undefined) ??
+    savedConfig.llmProvider ??
+    "hunyuan";
+  const embedProvider =
+    ((process.env["EMBEDDING_PROVIDER"] ?? process.env["EMBED_PROVIDER"]) as
+      | "auto"
+      | "ollama"
+      | "mock"
+      | undefined) ?? savedConfig.embedProvider;
+  return assembleDesktopAgent({
+    llmProvider,
+    ...(embedProvider ? { embedProvider } : {}),
+    dataDir,
+    workspaceDir,
+    ...(savedConfig.retrievalMode ? { retrievalMode: savedConfig.retrievalMode } : {}),
+    ...(savedConfig.enableCommands !== undefined
+      ? { enableCommands: savedConfig.enableCommands }
+      : {}),
+    ...(savedConfig.allowedCommands ? { allowedCommands: savedConfig.allowedCommands } : {}),
+    ...(savedConfig.enableDormant !== undefined
+      ? { enableDormant: savedConfig.enableDormant }
+      : {}),
+    ...(savedConfig.enablePersona !== undefined
+      ? { enablePersona: savedConfig.enablePersona }
+      : {}),
+    ...(savedConfig.enableProductBehavior !== undefined
+      ? { enableProductBehavior: savedConfig.enableProductBehavior }
+      : {}),
+    ...(savedConfig.enableSkills !== undefined ? { enableSkills: savedConfig.enableSkills } : {}),
+    ...(savedConfig.enableSkillLearning !== undefined
+      ? { enableSkillLearning: savedConfig.enableSkillLearning }
+      : {}),
+    ...(savedConfig.enableClassifier !== undefined
+      ? { enableClassifier: savedConfig.enableClassifier }
+      : {}),
+    ...(savedConfig.enableTaskPool !== undefined
+      ? { enableTaskPool: savedConfig.enableTaskPool }
+      : {}),
+  });
+};
+
 const createWindow = (): BrowserWindow => {
   const win = new BrowserWindow({
     width: 1400,
@@ -127,15 +202,7 @@ void app
       }
     }
 
-    const dataDir =
-      process.env["OPENINTJ_DATA_DIR"] ?? path.join(app.getPath("userData"), "memory-store");
-    mkdirSync(dataDir, { recursive: true });
-    // 工作区根（read_file / write_file 沙箱根）：默认 documents 下的 OpenINTJ 目录，避免落到随机 cwd。
-    const workspaceDir =
-      process.env["OPENINTJ_WORKSPACE_DIR"] ??
-      savedConfig.workspaceDir ??
-      path.join(app.getPath("documents"), "OpenINTJ");
-    mkdirSync(workspaceDir, { recursive: true });
+    const { dataDir, workspaceDir } = resolveDesktopPaths(savedConfig);
     workbench = createWorkbenchStore({
       dbPath:
         process.env["OPENINTJ_DESKTOP_NO_PERSIST"] === "1"
@@ -148,12 +215,6 @@ void app
       (process.env["LLM_PROVIDER"] as ModelProvider | undefined) ??
       savedConfig.llmProvider ??
       "hunyuan";
-    const embedProvider =
-      ((process.env["EMBEDDING_PROVIDER"] ?? process.env["EMBED_PROVIDER"]) as
-        | "auto"
-        | "ollama"
-        | "mock"
-        | undefined) ?? savedConfig.embedProvider;
     if (
       process.env["HUNYUAN_MODEL"] === "hy3-preview" ||
       process.env["HUNYUAN_MODEL"] === "hunyuan-turbos-latest"
@@ -171,54 +232,14 @@ void app
           "                  把 HUNYUAN_API_KEY 写进仓库根 .env / .env.local，或用 LLM_PROVIDER=auto。",
       );
     }
-    if (savedConfig.ollamaBaseUrl) process.env["OLLAMA_BASE_URL"] = savedConfig.ollamaBaseUrl;
-    if (savedConfig.ollamaModel) process.env["OLLAMA_MODEL"] = savedConfig.ollamaModel;
-    if (savedConfig.ollamaEmbedModel)
-      process.env["OLLAMA_EMBED_MODEL"] = savedConfig.ollamaEmbedModel;
-    if (
-      savedConfig.embedProvider &&
-      !process.env["EMBEDDING_PROVIDER"] &&
-      !process.env["EMBED_PROVIDER"]
-    ) {
-      process.env["EMBED_PROVIDER"] = savedConfig.embedProvider;
-    }
 
-    agent = await assembleDesktopAgent({
-      llmProvider,
-      ...(embedProvider ? { embedProvider } : {}),
-      dataDir,
-      workspaceDir,
-      ...(savedConfig.retrievalMode ? { retrievalMode: savedConfig.retrievalMode } : {}),
-      ...(savedConfig.enableCommands !== undefined
-        ? { enableCommands: savedConfig.enableCommands }
-        : {}),
-      ...(savedConfig.allowedCommands ? { allowedCommands: savedConfig.allowedCommands } : {}),
-      ...(savedConfig.enableDormant !== undefined
-        ? { enableDormant: savedConfig.enableDormant }
-        : {}),
-      ...(savedConfig.enablePersona !== undefined
-        ? { enablePersona: savedConfig.enablePersona }
-        : {}),
-      ...(savedConfig.enableProductBehavior !== undefined
-        ? { enableProductBehavior: savedConfig.enableProductBehavior }
-        : {}),
-      ...(savedConfig.enableSkills !== undefined ? { enableSkills: savedConfig.enableSkills } : {}),
-      ...(savedConfig.enableSkillLearning !== undefined
-        ? { enableSkillLearning: savedConfig.enableSkillLearning }
-        : {}),
-      ...(savedConfig.enableClassifier !== undefined
-        ? { enableClassifier: savedConfig.enableClassifier }
-        : {}),
-      ...(savedConfig.enableTaskPool !== undefined
-        ? { enableTaskPool: savedConfig.enableTaskPool }
-        : {}),
-    });
+    agent = await assembleFromSavedConfig(savedConfig);
     console.log(
       `[OpenINTJ desktop] persistence=${agent.persistenceInfo.mode} dataDir=${agent.persistenceInfo.dataDir ?? "<in-memory>"}`,
     );
     mainWindow = createWindow();
 
-    // 弹系统目录选择框，选定后即时持久化为新工作区根（下次启动生效）。
+    // 弹系统目录选择框，选定后即时持久化并热重装 agent。
     const pickDirectory = async (): Promise<string | null> => {
       const res = await dialog.showOpenDialog(mainWindow!, {
         properties: ["openDirectory", "createDirectory"],
@@ -235,9 +256,31 @@ void app
       app.relaunch();
       app.quit();
     };
+    const reloadAgent = async (): Promise<void> => {
+      if (!config) throw new Error("config_unavailable");
+      const next = await assembleFromSavedConfig(config.get());
+      ipcRegistration?.unregister();
+      const previous = agent;
+      agent = next;
+      agentClosePromise = undefined;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        ipcRegistration = registerIpcHandlers(agent, mainWindow.webContents, undefined, ipcDeps);
+      }
+      if (previous) {
+        try {
+          await previous.close();
+        } catch (error) {
+          console.warn("[OpenINTJ desktop] previous agent close failed during reload", error);
+        }
+      }
+      console.log(
+        `[OpenINTJ desktop] agent reloaded persistence=${agent.persistenceInfo.mode} dataDir=${agent.persistenceInfo.dataDir ?? "<in-memory>"}`,
+      );
+    };
     const ipcDeps: IpcDeps = {
       pickDirectory,
       restart,
+      reloadAgent,
       credentials,
       modelRegistry,
       workbench,

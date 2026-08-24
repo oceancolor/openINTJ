@@ -105,7 +105,7 @@ describe("createLlmSkillDistiller", () => {
       ),
     );
     const drafts = await distill([sample()]);
-    expect(drafts[0]!.tools).toEqual(["readFile", "search"]);
+    expect(drafts[0]!.tools).toEqual(["read_file", "search"]);
   });
 
   it("name / body / description 超长被截断", async () => {

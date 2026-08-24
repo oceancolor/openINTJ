@@ -111,8 +111,8 @@ flowchart LR
 - ~~桌面「技能审批」UI 面板~~：✅ `SkillPanel` 已实现蒸馏、筛选、approve/reject/revoke，
   并接入 renderer tab。
 - ~~权重时间衰减 / LRU~~：✅ 已实现按 `lastUsed` 的可配置指数半衰期；selector 缓存有界。
-- ~~工具子集软绑定~~：✅ `Skill.tools` 已贯通 frontmatter/SQLite/DB/distill，
-  prompt 会提示优先工具并暴露 `skillToolAllowlist`。
+- ~~工具子集硬隔离~~：✅ `Skill.tools` 已贯通 frontmatter/SQLite/DB/distill，
+  prompt 写「本轮仅可使用工具」，ToolHub 按 allowlist 收窄 `list()`/`call()`。
 - **仍待设计**：ToolHub 层硬隔离 / 收窄工具面（当前 allowlist 只暴露给装配方，不执行安全边界）；
   蒸馏候选语义相似度去重（当前按 id/name）；技能绑定“新注册工具”的治理模型。
 

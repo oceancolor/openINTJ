@@ -616,14 +616,16 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     ? await assembleSkillContext({
         embedder: persistentStore.embedder,
         hooks,
+        onSelected: (query, taskType, ids, tools) => {
+          toolHub.setRunAllowlist(tools);
+          skillLearning?.noteSelected(query, taskType, ids);
+        },
         ...(skillLearning
           ? {
               extraSources: [
-                new DbSkillSource({ approvedSkills: () => skillLearning!.listApproved() }),
+                new DbSkillSource({ approvedSkills: () => skillLearning.listApproved() }),
               ],
-              weightFor: (id: string) => skillLearning!.weightFor(id),
-              onSelected: (query, taskType, ids) =>
-                skillLearning!.noteSelected(query, taskType, ids),
+              weightFor: (id: string) => skillLearning.weightFor(id),
             }
           : {}),
       })
@@ -666,6 +668,9 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     },
   });
 
+  const runTao: TaoLoop["run"] = (query, runOpts) =>
+    toolHub.runInAllowlistScope(() => tao.run(query, runOpts));
+
   const retrieveHybrid = buildHybridRetrieve(persistentStore, hybridIndex);
   const selfConsistency = resolveSelfConsistency(opts.selfConsistency);
 
@@ -690,7 +695,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     taskPool && taskStore
       ? await taskPool.recoverIncomplete(async (node, ctx) => {
           const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
-          return tao.run(stepQuery, {
+          return runTao(stepQuery, {
             traceId: ctx.traceId,
             signal: ctx.signal,
           });
@@ -809,14 +814,14 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
           const graph = planGraphToTaskGraph(plan);
           const poolResult = await taskPool.submitRun(graph, async (node, ctx) => {
             const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
-            return tao.run(stepQuery, taoOpts(ctx.traceId, ctx.signal));
+            return runTao(stepQuery, taoOpts(ctx.traceId, ctx.signal));
           });
           result = synthesizeTaskPoolAnswer(poolResult, executionQuery);
         } else if (orchestrationMode === "self-consistency" && selfConsistency) {
           // 方向一/二：并行多采样 + 投票。forkJoin 会发 forkjoin.* 事件 → OTel span/metric。
           const { fulfilled } = await forkJoin(
             Array.from({ length: selfConsistency.samples }, (_, i) => i),
-            (i) => tao.run(executionQuery, taoOpts(`${randomUUID()}-sc${i}`)),
+            (i) => runTao(executionQuery, taoOpts(`${randomUUID()}-sc${i}`)),
             {
               hooks,
               group: "self-consistency",
@@ -828,7 +833,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
           );
           result = selectConsistentAnswer(fulfilled, selfConsistency.strategy) ?? fulfilled[0]!;
         } else {
-          result = await tao.run(executionQuery, taoOpts());
+          result = await runTao(executionQuery, taoOpts());
         }
       }
       if (inputStructure?.action === "proceed") {

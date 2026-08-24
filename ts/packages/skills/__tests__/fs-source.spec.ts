@@ -94,7 +94,7 @@ describe("FsSkillSource", () => {
     expect(s.triggers).toEqual(["review", "pr"]);
     expect(s.taskTypes).toEqual(["code_generation"]);
     expect(s.priority).toBe(5);
-    expect(s.tools).toEqual(["readFile", "search"]);
+    expect(s.tools).toEqual(["read_file", "search"]);
     expect(s.body).toContain("审查步骤");
   });
 

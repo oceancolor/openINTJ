@@ -1,7 +1,7 @@
 name: Release
 
-# 打 tag（v3.0.0 等）时构建 Win/macOS 安装包并发布到 GitHub Release。
-# electron-updater 从该 Release 拉取更新（latest.yml / latest-mac.yml + 安装包）。
+# 打 tag（v3.0.0 等）时构建 Win/macOS/Linux 安装包并发布到 GitHub Release。
+# electron-updater 从该 Release 拉取更新（latest.yml / latest-mac.yml / latest-linux.yml + 安装包）。
 on:
   push:
     tags:
@@ -31,8 +31,15 @@ jobs:
             flag: "--win"
           - os: macos-latest
             flag: "--mac"
+          - os: ubuntu-latest
+            flag: "--linux"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Linux AppImage deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libfuse2
+        working-directory: .
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -78,6 +85,7 @@ jobs:
             ts/apps/desktop/release/*.exe
             ts/apps/desktop/release/*.dmg
             ts/apps/desktop/release/*.zip
+            ts/apps/desktop/release/*.AppImage
             ts/apps/desktop/release/*.yml
           retention-days: 14
           if-no-files-found: ignore

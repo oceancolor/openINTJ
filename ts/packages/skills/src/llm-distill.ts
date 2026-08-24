@@ -1,4 +1,4 @@
-import { TaskType, type TaskTypeType } from "@openintj/core";
+import { TaskType, type TaskTypeType, canonicalToolNames } from "@openintj/core";
 import type {
   CandidateSkillDraft,
   LlmSkillDistiller,
@@ -57,7 +57,7 @@ const buildPrompt = (samples: readonly TrajectorySample[], maxDrafts: number): s
     "",
     `Output at most ${maxDrafts} skill(s) as a JSON array. Each item MUST be:`,
     `{ "id": string(kebab-case), "name": string, "description": string, "triggers": string[], "taskTypes": string[], "tools": string[], "body": string }`,
-    `"taskTypes" must be from: ${[...VALID_TASK_TYPES].join(", ")}. "tools" are tool names the skill should prefer.`,
+    `"taskTypes" must be from: ${[...VALID_TASK_TYPES].join(", ")}. "tools" are ToolHub names (read_file, write_file, execute_command, search).`,
     'Return ONLY the JSON array, no prose. If nothing is reusable, return "[]".',
   ].join("\n");
 };
@@ -114,7 +114,7 @@ const toDraft = (o: unknown, lim: DraftLimits): CandidateSkillDraft | undefined 
     VALID_TASK_TYPES.has(t),
   ) as TaskTypeType[];
   if (taskTypes.length > 0) draft.taskTypes = taskTypes;
-  const tools = normStringArray(r["tools"], lim.maxTools);
+  const tools = canonicalToolNames(normStringArray(r["tools"], lim.maxTools));
   if (tools.length > 0) draft.tools = tools;
   return draft;
 };

@@ -241,6 +241,31 @@ describe("TaoLoop.run (single iteration)", () => {
     expect(capturedSystem).not.toContain("STATIC_PROMPT");
   });
 
+  it("availableTools 在 contextProvider 之后调用，便于技能收窄工具面", async () => {
+    const hooks = new HookBus({ logger: silent });
+    const order: string[] = [];
+    const tao = new TaoLoop({
+      config: { ...DEFAULT_TAO_CONFIG, maxTaoIterations: 1 },
+      hooks,
+      react: new ReactStateMachine({
+        config: DEFAULT_REACT_CONFIG,
+        hooks,
+        llm: makeLlm(["FINAL: ok"]),
+        toolRunner: passingRunner,
+      }),
+      availableTools: () => {
+        order.push("tools");
+        return [];
+      },
+      contextProvider: () => {
+        order.push("context");
+        return "CTX";
+      },
+    });
+    await tao.run("你好世界");
+    expect(order).toEqual(["context", "tools"]);
+  });
+
   it("run(opts.topK) 透传给 contextProvider（外部路由降 token 用），未传则 undefined", async () => {
     const hooks = new HookBus({ logger: silent });
     const llm: LlmClient = {

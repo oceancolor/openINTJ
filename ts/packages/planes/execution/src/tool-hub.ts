@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import {
   AgentError,
@@ -9,6 +10,8 @@ import {
   type ToolDescriptor,
   ToolDescriptorSchema,
   type ToolHandler,
+  canonicalToolName,
+  canonicalToolNames,
 } from "@openintj/core";
 import { CircuitBreaker } from "./circuit-breaker.js";
 
@@ -46,6 +49,11 @@ export class ToolHub {
   private readonly hooks?: HookBus;
   private readonly breakerConfig: { failureThreshold?: number; recoveryTimeoutMs?: number };
   private readonly gate?: ToolGate;
+  /**
+   * Per-run skill tool allowlist. Empty `names` means no extra restriction.
+   * Concurrent tao.run / TaskPool steps each enter their own ALS scope.
+   */
+  private readonly allowlistAls = new AsyncLocalStorage<{ names?: readonly string[] }>();
 
   constructor(opts: ToolHubOpts = {}) {
     if (opts.hooks !== undefined) this.hooks = opts.hooks;
@@ -75,7 +83,38 @@ export class ToolHub {
   }
 
   list(): ToolDescriptor[] {
-    return [...this.tools.values()];
+    const all = [...this.tools.values()];
+    const allow = this.currentAllowlist();
+    if (!allow) return all;
+    const allowed = new Set(allow);
+    return all.filter((tool) => allowed.has(tool.name));
+  }
+
+  /**
+   * Enter a per-run allowlist box. `setRunAllowlist` from skill `onSelected`
+   * mutates this box so `list()` / `call()` see the same restriction.
+   */
+  runInAllowlistScope<T>(fn: () => T): T {
+    return this.allowlistAls.run({}, fn);
+  }
+
+  /** Empty / undeclared tools = no restriction. No-op outside `runInAllowlistScope`. */
+  setRunAllowlist(names: readonly string[]): void {
+    const box = this.allowlistAls.getStore();
+    if (!box) return;
+    const canonical = canonicalToolNames(names);
+    if (canonical.length > 0) box.names = canonical;
+    else delete box.names;
+  }
+
+  private currentAllowlist(): readonly string[] | undefined {
+    return this.allowlistAls.getStore()?.names;
+  }
+
+  private resolveRegisteredName(name: string): string {
+    if (this.tools.has(name)) return name;
+    const canonical = canonicalToolName(name);
+    return this.tools.has(canonical) ? canonical : name;
   }
 
   /** 工具调用：含熔断、超时、钩子事件、错误语义。 */
@@ -85,7 +124,8 @@ export class ToolHub {
     opts?: { traceId?: string; timeoutMs?: number; signal?: AbortSignal },
   ): Promise<ToolCallResult> {
     opts?.signal?.throwIfAborted();
-    const descriptor = this.tools.get(name);
+    const resolvedName = this.resolveRegisteredName(name);
+    const descriptor = this.tools.get(resolvedName);
     if (!descriptor) {
       const result: ToolCallResult = {
         toolName: name,
@@ -99,12 +139,12 @@ export class ToolHub {
       return result;
     }
 
-    const breaker = this.breakers.get(name);
+    const breaker = this.breakers.get(resolvedName);
     if (breaker && !breaker.canExecute()) {
       const result: ToolCallResult = {
-        toolName: name,
+        toolName: resolvedName,
         success: false,
-        error: `熔断器已打开（state=${breaker.state}），暂停调用 ${name}`,
+        error: `熔断器已打开（state=${breaker.state}），暂停调用 ${resolvedName}`,
         durationMs: 0,
         traceId: opts?.traceId ?? "",
         callId: randomUUID(),
@@ -113,7 +153,7 @@ export class ToolHub {
         const emitOpts = opts?.traceId ? { traceId: opts.traceId } : undefined;
         await this.hooks.emit(
           "event.CIRCUIT_OPENED",
-          { tool: name, failureCount: descriptor.timeoutS },
+          { tool: resolvedName, failureCount: descriptor.timeoutS },
           emitOpts,
         );
       }
@@ -125,18 +165,36 @@ export class ToolHub {
       const emitOpts = opts?.traceId ? { traceId: opts.traceId } : undefined;
       const ctx = await this.hooks.emit(
         "tool.beforeCall",
-        { tool: name, params, toolDescriptor: descriptor },
+        { tool: resolvedName, params, toolDescriptor: descriptor },
         emitOpts,
       );
       // 允许 hook 改写 params（typed payload mutation）
       params = (ctx.params as Record<string, unknown>) ?? params;
     }
 
+    const allow = this.currentAllowlist();
+    if (allow && !allow.includes(descriptor.name)) {
+      const blocked: ToolCallResult = {
+        toolName: resolvedName,
+        success: false,
+        error: `技能未授权工具: ${resolvedName}`,
+        durationMs: 0,
+        traceId: opts?.traceId ?? "",
+        callId: randomUUID(),
+      };
+      this.recordHistory(blocked);
+      if (this.hooks) {
+        const emitOpts = opts?.traceId ? { traceId: opts.traceId } : undefined;
+        await this.hooks.emit("tool.afterCall", { tool: resolvedName, result: blocked }, emitOpts);
+      }
+      return blocked;
+    }
+
     // 治理闸门：策略 / 配额检查（在 params 定型后）。拒绝 = 终态失败结果，不触发熔断
     // （治理拒绝不是工具故障），也不发 tool.onError（避免被当作可重试错误）。
     if (this.gate) {
       try {
-        await this.gate({ tool: name, params, descriptor });
+        await this.gate({ tool: resolvedName, params, descriptor });
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         const blocked: ToolCallResult = {
@@ -150,13 +208,17 @@ export class ToolHub {
         this.recordHistory(blocked);
         if (this.hooks) {
           const emitOpts = opts?.traceId ? { traceId: opts.traceId } : undefined;
-          await this.hooks.emit("tool.afterCall", { tool: name, result: blocked }, emitOpts);
+          await this.hooks.emit(
+            "tool.afterCall",
+            { tool: resolvedName, result: blocked },
+            emitOpts,
+          );
         }
         return blocked;
       }
     }
 
-    const handler = this.handlers.get(name);
+    const handler = this.handlers.get(resolvedName);
     const start = Date.now();
     let result: ToolCallResult;
 
@@ -164,11 +226,11 @@ export class ToolHub {
       const timeoutMs = opts?.timeoutMs ?? descriptor.timeoutS * 1000;
       const output =
         handler !== undefined
-          ? await runWithTimeout(handler(params), timeoutMs, name, opts?.signal)
+          ? await runWithTimeout(handler(params), timeoutMs, resolvedName, opts?.signal)
           : { status: "no_handler", params };
 
       result = {
-        toolName: name,
+        toolName: resolvedName,
         success: true,
         output,
         durationMs: Date.now() - start,
@@ -180,7 +242,7 @@ export class ToolHub {
       if (opts?.signal?.aborted) throw opts.signal.reason ?? err;
       const errorMessage = err instanceof Error ? err.message : String(err);
       result = {
-        toolName: name,
+        toolName: resolvedName,
         success: false,
         error: errorMessage,
         durationMs: Date.now() - start,
@@ -194,7 +256,7 @@ export class ToolHub {
         await this.hooks.emit(
           "tool.onError",
           {
-            tool: name,
+            tool: resolvedName,
             error: err instanceof Error ? err : new Error(errorMessage),
             willRetry: descriptor.errorSemantics === "retry",
           },
@@ -207,7 +269,7 @@ export class ToolHub {
 
     if (this.hooks) {
       const emitOpts = opts?.traceId ? { traceId: opts.traceId } : undefined;
-      await this.hooks.emit("tool.afterCall", { tool: name, result }, emitOpts);
+      await this.hooks.emit("tool.afterCall", { tool: resolvedName, result }, emitOpts);
     }
 
     return result;

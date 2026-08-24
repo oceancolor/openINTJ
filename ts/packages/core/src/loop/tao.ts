@@ -254,18 +254,8 @@ export class TaoLoop {
       );
 
       // ----- Act -----
-      const tools = this.availableTools();
-      await this._hooks.emit(
-        "tao.beforeAct",
-        {
-          plan: planLike,
-          availableTools: tools,
-          iteration: ctx.iteration,
-        },
-        taoOpts,
-      );
-
-      // 基础 system prompt：优先用 contextProvider（可注入检索到的记忆），否则用静态 systemPrompt。
+      // 先跑 contextProvider（技能选择 / 记忆注入），再 list 工具，
+      // 让本轮 skill allowlist 能收窄 ReAct 看到的工具面。
       let baseSystem = this.systemPrompt;
       if (this.contextProvider) {
         try {
@@ -283,6 +273,16 @@ export class TaoLoop {
           baseSystem = this.systemPrompt;
         }
       }
+      const tools = this.availableTools();
+      await this._hooks.emit(
+        "tao.beforeAct",
+        {
+          plan: planLike,
+          availableTools: tools,
+          iteration: ctx.iteration,
+        },
+        taoOpts,
+      );
       const finalSystemPrompt =
         baseSystem.length > 0 ? `${baseSystem}\n\n${built.systemPrompt}` : built.systemPrompt;
 

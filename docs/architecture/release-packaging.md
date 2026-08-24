@@ -71,7 +71,7 @@ pnpm workspace 包由 electron-vite 打进主进程 bundle，并在 desktop 中�
   macOS Gatekeeper 会告警。
   - Win：配置 `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD`（或另行接入 Azure Trusted Signing）。
   - mac：`hardenedRuntime` 与 `notarize` 已开，仍需上节列出的 Apple 证书及 notarization secrets。
-- **Linux CI**：`electron-builder.yml` 声明了 Linux AppImage，但 `release.yml` 矩阵只跑 win/mac；Linux 目前只支持本地 `--linux` 打包。
+- **Linux CI**：`release.yml` 矩阵含 ubuntu AppImage；本地仍可用 `--linux` 打包。
 - **首个正式 release 尚未切**：GitHub 当前无 Release；当前实现分支仍需提交、合入 `main`，
   将 desktop `version` 与 tag 对齐后才能进行签名端到端验证。Windows 未签名安装包
   `OpenINTJ-3.0.0-alpha.0-x64.exe` 已本机产出，macOS 跨平台打包仍需由 CI 验证。

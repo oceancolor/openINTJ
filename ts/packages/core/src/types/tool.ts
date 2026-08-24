@@ -31,3 +31,32 @@ export type ToolCallResult = z.infer<typeof ToolCallResultSchema>;
 
 export const ToolHandlerSignature = Symbol.for("openintj.toolHandler");
 export type ToolHandler = (params: Record<string, unknown>) => Promise<unknown> | unknown;
+
+/** Skill frontmatter / LLM 草稿常用 camelCase，与 ToolHub 注册名对齐。 */
+const TOOL_NAME_ALIASES: Record<string, string> = {
+  readFile: "read_file",
+  read_file: "read_file",
+  writeFile: "write_file",
+  write_file: "write_file",
+  executeCommand: "execute_command",
+  execute_command: "execute_command",
+  search: "search",
+};
+
+export const canonicalToolName = (name: string): string => {
+  const trimmed = name.trim();
+  if (trimmed.length === 0) return trimmed;
+  return TOOL_NAME_ALIASES[trimmed] ?? trimmed;
+};
+
+export const canonicalToolNames = (names: readonly string[]): string[] => {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const name of names) {
+    const canonical = canonicalToolName(name);
+    if (canonical.length === 0 || seen.has(canonical)) continue;
+    seen.add(canonical);
+    out.push(canonical);
+  }
+  return out;
+};

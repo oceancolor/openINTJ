@@ -3,6 +3,7 @@ import { createToolCallGate } from "@openintj/plane-governance";
 import { withRootSpan } from "@openintj/telemetry-otel";
 import { type IpcMain, type WebContents, ipcMain } from "electron";
 import {
+  AGENT_RUNTIME_CONFIG_KEYS,
   AppConfigPatchSchema,
   ChatRequestSchema,
   DEFAULT_MODEL_PROFILES,
@@ -17,6 +18,7 @@ import {
   WorkbenchUpdateSchema,
   WorkspaceReadRequestSchema,
   WorkspaceWriteRequestSchema,
+  isAgentRuntimeConfigPatch,
 } from "../shared/ipc-protocol.js";
 import type { DesktopAgent } from "./agent.js";
 import type { ConfigService } from "./config-store.js";
@@ -49,6 +51,11 @@ export interface IpcDeps {
   config?: ConfigService;
   /** Gracefully close state and relaunch the Electron process. */
   restart?: () => Promise<void>;
+  /**
+   * Reassemble the Desktop agent from the latest saved config without quitting.
+   * Used after runtime settings (workspace, models, feature flags) change.
+   */
+  reloadAgent?: () => Promise<void>;
   /** Encrypted model API keys; never returned to renderer. */
   credentials?: CredentialStore;
   /** Environment-provided credentials count as configured but remain outside the store. */
@@ -408,7 +415,12 @@ export const registerIpcHandlers = (
     if (!deps.pickDirectory) return { canceled: true };
     try {
       const root = await deps.pickDirectory();
-      return root ? { canceled: false, root } : { canceled: true };
+      if (!root) return { canceled: true };
+      if (deps.reloadAgent) {
+        for (const controller of activeChats) controller.abort(new Error("config_reloading"));
+        await deps.reloadAgent();
+      }
+      return { canceled: false, root };
     } catch (e) {
       return workspaceError(e);
     }
@@ -422,13 +434,24 @@ export const registerIpcHandlers = (
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     if (!deps.config) return parsed.data;
     try {
+      const previous = deps.config.get();
       const updated = deps.config.update(parsed.data);
       if (parsed.data.modelProfiles || parsed.data.activeModelProfileId) {
         deps.modelRegistry?.clear();
       }
+      const runtimeChanged = AGENT_RUNTIME_CONFIG_KEYS.some(
+        (key) => JSON.stringify(previous[key]) !== JSON.stringify(updated[key]),
+      );
+      if (deps.reloadAgent && runtimeChanged) {
+        for (const controller of activeChats) controller.abort(new Error("config_reloading"));
+        await deps.reloadAgent();
+      }
       return updated;
     } catch (e) {
-      return { error: "invalid_request", message: e instanceof Error ? e.message : String(e) };
+      return {
+        error: isAgentRuntimeConfigPatch(parsed.data) ? "reload_failed" : "invalid_request",
+        message: e instanceof Error ? e.message : String(e),
+      };
     }
   });
 

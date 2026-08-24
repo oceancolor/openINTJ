@@ -1,7 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { TaskType, type TaskTypeType } from "@openintj/core";
+import { TaskType, type TaskTypeType, canonicalToolNames } from "@openintj/core";
 import { parseFrontmatter } from "./frontmatter.js";
 import type { Skill, SkillSource } from "./types.js";
 
@@ -60,9 +60,11 @@ const parseSkillFile = (raw: string, filePath: string): Skill | undefined => {
     taskTypes,
     priority,
     version: asString(data["version"], "0.0.0").trim() || "0.0.0",
-    tools: asStringArray(data["tools"])
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0),
+    tools: canonicalToolNames(
+      asStringArray(data["tools"])
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    ),
     body,
     source: filePath,
   };

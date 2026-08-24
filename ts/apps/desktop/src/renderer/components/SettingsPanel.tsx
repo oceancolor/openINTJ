@@ -4,8 +4,8 @@
  * 两段：
  *  1. 工作区：显示当前沙箱根 / 命令开关 / 白名单（workspaceInfo）；「选择目录」弹系统对话框
  *     （workspacePickDir，持久化到 config，下次启动生效）；底部实时显示 fs.watch 变更（onWorkspaceEvent）。
- *  2. 应用配置：读/写 AppConfig（getConfig/updateConfig）。多数项**需重启**才对已装配 agent 生效——
- *     面板显式标注，改完提示重启。
+ *  2. 应用配置：读/写 AppConfig（getConfig/updateConfig）。运行时项保存后会热重装 agent；
+ *     进程级项仍可用「重启 OpenINTJ」。
  *
  * 说明：desktop renderer 无 jsdom 单测；本面板逻辑经 IPC 契约测试（ipc-handlers.spec）间接覆盖，
  * 交互留给手动 / Playwright e2e。
@@ -116,12 +116,17 @@ export const SettingsPanel: React.FC = () => {
     try {
       const r = await api.updateConfig(p);
       if (isError(r)) {
-        setError(r.error);
+        const detail =
+          "message" in r && typeof (r as { message?: unknown }).message === "string"
+            ? `: ${(r as { message: string }).message}`
+            : "";
+        setError(`${r.error}${detail}`);
         return;
       }
       setConfig(r);
       setSaved(true);
       window.setTimeout(() => setSaved(false), 1500);
+      await refresh();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -231,7 +236,7 @@ export const SettingsPanel: React.FC = () => {
       ) : null}
       {saved ? (
         <div className="mx-3 mt-2 px-2 py-1 bg-green-900/40 text-green-200 rounded">
-          已保存（多数项需重启生效）
+          已保存并立即生效
         </div>
       ) : null}
 
@@ -475,13 +480,16 @@ export const SettingsPanel: React.FC = () => {
         </label>
 
         <label className="flex flex-col gap-1">
-          <span className="text-gray-400">Ollama（重启生效）</span>
+          <span className="text-gray-400">Ollama</span>
           <input
             type="text"
             placeholder="OLLAMA_BASE_URL"
             value={cfg.ollamaBaseUrl ?? ""}
             disabled={busy}
-            onChange={(e) => void patch({ ollamaBaseUrl: e.target.value || undefined })}
+            onChange={(e) =>
+              setConfig((c) => ({ ...(c ?? {}), ollamaBaseUrl: e.target.value || undefined }))
+            }
+            onBlur={(e) => void patch({ ollamaBaseUrl: e.target.value.trim() || undefined })}
             className="bg-gray-800 text-gray-200 rounded px-2 py-1"
           />
           <input
@@ -489,7 +497,10 @@ export const SettingsPanel: React.FC = () => {
             placeholder="OLLAMA_MODEL"
             value={cfg.ollamaModel ?? ""}
             disabled={busy}
-            onChange={(e) => void patch({ ollamaModel: e.target.value || undefined })}
+            onChange={(e) =>
+              setConfig((c) => ({ ...(c ?? {}), ollamaModel: e.target.value || undefined }))
+            }
+            onBlur={(e) => void patch({ ollamaModel: e.target.value.trim() || undefined })}
             className="bg-gray-800 text-gray-200 rounded px-2 py-1"
           />
           <input
@@ -497,7 +508,10 @@ export const SettingsPanel: React.FC = () => {
             placeholder="OLLAMA_EMBED_MODEL"
             value={cfg.ollamaEmbedModel ?? ""}
             disabled={busy}
-            onChange={(e) => void patch({ ollamaEmbedModel: e.target.value || undefined })}
+            onChange={(e) =>
+              setConfig((c) => ({ ...(c ?? {}), ollamaEmbedModel: e.target.value || undefined }))
+            }
+            onBlur={(e) => void patch({ ollamaEmbedModel: e.target.value.trim() || undefined })}
             className="bg-gray-800 text-gray-200 rounded px-2 py-1"
           />
         </label>
