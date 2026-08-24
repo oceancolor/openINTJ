@@ -4,6 +4,14 @@
 版本号沿用 [SemVer](https://semver.org/lang/zh-CN/) 与
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 
+## [0.3.1] — 2026-08-24
+
+应用图标改为字面产品名 openINTJ（去掉擅自生成的几何图形）。安装包版本 `0.3.1`。
+
+### Changed
+
+- `ts/apps/desktop/resources/icon.png` 由 `scripts/generate-icon.ps1` 绘制产品名；窗口标题栏显示 `v0.3.1`。
+
 ## [0.3.0] — 2026-08-24
 
 桌面端首个正式安装包版本（tag `v0.3.0`，相对预发布 `v0.3.0-alpha.0`）。
@@ -18,7 +26,7 @@ GitHub 尚未配置代码签名 secrets 时，CI 产出未签名 Win/mac/Linux �
   会话级字段不触发重装；Ollama URL 在失焦时写入。
 - **真实搜索 gated harness**：`RUN_SEARCH_LIVE=1` 跑 Tavily/Brave 真请求（不进 normal CI）。
 - **Linux CI 打包**：`release.yml` 矩阵增加 ubuntu AppImage。
-- **品牌图标**：`ts/apps/desktop/resources/icon.png`（1024²），electron-builder 派生 ico/icns。
+- **应用图标**：`ts/apps/desktop/resources/icon.png`（1024×1024 像素；该版曾带擅自生成的几何图形，已在 0.3.1 换成产品名）。
 - **未签名可发布的 Release CI**：缺 `WIN_CSC_*` / `MAC_CSC_*` / Apple 公证 secrets 时跳过签名与公证。
 
 ### Changed

@@ -1,9 +1,8 @@
 # 打包发布 & 自动更新（#6）
 
-> 状态：**品牌图标已入库**；Release CI 在缺证书时产出未签名 Win/mac/Linux 包
+> 状态：**应用图标为产品名 openINTJ**（`resources/icon.png`，1024×1024 像素，供 electron-builder 派生 ico/icns）；Release CI 在缺证书时产出未签名 Win/mac/Linux 包
 > （不再把空 `CSC_LINK` 当成文件路径）。**真正代码签名 / Apple 公证仍需仓库 secrets。**
-> 桌面版本 `0.3.0`；**未签名 GitHub Release `v0.3.0` 已于 2026-08-24 从
-> `rfc-005-007-implementation` 发出**（Win NSIS / macOS DMG x64+arm64 / Linux AppImage）。
+> 桌面版本 `0.3.1`；未签名 GitHub Release `v0.3.1` 使用产品名 openINTJ 作为应用图标。
 
 桌面端（`ts/apps/desktop`）用 **electron-builder** 出安装包、**electron-updater** 从 GitHub Release 拉更新。
 
@@ -46,8 +45,8 @@ pnpm workspace 包由 electron-vite 打进主进程 bundle，并在 desktop 中�
 2. 版本号：`ts/apps/desktop/package.json` 的 `version` 决定安装包/`latest.yml` 版本号，需与 tag 对齐。
 3. 打 tag 并推：
    ```bash
-   git tag v0.3.0
-   git push origin v0.3.0
+   git tag v0.3.1
+   git push origin v0.3.1
    ```
 4. `release.yml` 触发：windows / macos / ubuntu 各自 `electron-builder --publish always`，用内置
    `GITHUB_TOKEN` 上传安装包 + `latest.yml` / `latest-mac.yml` / `latest-linux.yml`。
@@ -88,5 +87,5 @@ Windows 也可另行接入 Azure Trusted Signing，不走 `CSC_LINK`。
 - **`origin/main` 与实现分支无共同历史**：GitHub 默认 `main` 目前是 2026-04 的 Python 上传，
   不能开 PR。`v0.3.0` 未签名包已从 `rfc-005-007-implementation` 的 tag 发出。
   是否把实现分支设为默认、或重建 `main`，需仓库管理员决定。
-- **品牌图标已解决**：`ts/apps/desktop/resources/icon.png`（1024²）。
+- **应用图标**：`ts/apps/desktop/resources/icon.png` 为产品名 openINTJ（1024×1024 像素），由 `scripts/generate-icon.ps1` 绘制。
 - **Linux CI**：`release.yml` 矩阵含 ubuntu AppImage。

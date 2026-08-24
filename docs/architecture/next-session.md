@@ -1,7 +1,7 @@
 # 下一次工作交接备忘
 
 > 本文件用于工作中断 / 多日离开后快速恢复上下文。
-> 上次更新：2026-08-24（v0.3.0 发布准备：品牌图标、未签名可发布 CI）。
+> 上次更新：2026-08-24（v0.3.1：应用图标改为产品名 openINTJ）。
 
 ---
 
@@ -16,7 +16,7 @@
 3. ~~**真实搜索验收入口**~~：✅ 2026-08-24。`RUN_SEARCH_LIVE=1` gated harness 已加；
    仍需本机配置 Tavily/Brave key 后实跑，才能把 T3 事实质量从 fail-closed 推进到真 provider 基线。
 4. ~~**Linux CI 打包**~~：✅ 2026-08-24。`release.yml` 增加 ubuntu AppImage。
-5. **签名正式发布**：未签名 `v0.3.0` 已于 2026-08-24 发布（Win/macOS/Linux 均绿）。
+5. **签名正式发布**：未签名 `v0.3.0` / `v0.3.1` 已从本分支发出。`v0.3.1` 图标为产品名 openINTJ。
    **真正签名仍阻塞于仓库 secrets**。GitHub `origin/main` 与本仓库历史无交集（仅 Python 上传），
    因此 tag 打在 `rfc-005-007-implementation` 上，未能开 PR 合入 main。
 6. **后续独立 RFC**（不混入本轮）：动态 LLM 拆图、默认多 Agent、streaming / 更完整 OpenAI-compatible
