@@ -1,5 +1,7 @@
 # OpenINTJ — TS Monorepo (v3)
 
+> 代码仓库：<https://github.com/oceancolor/openINTJ>
+>
 > 这是 OpenINTJ v3 的 TypeScript 重写仓。Python 实现冻结在 tag `v2.0-python-reference`，详见 [../docs/architecture/python-reference.md](../docs/architecture/python-reference.md)。
 
 ## 仓库结构

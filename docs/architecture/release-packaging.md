@@ -84,8 +84,8 @@ Windows 也可另行接入 Azure Trusted Signing，不走 `CSC_LINK`。
 ## 六、已知手动缺口
 
 - **代码签名证书**：仍需人工把上表 secrets 配进 `oceancolor/openINTJ`。
-- **`origin/main` 与实现分支无共同历史**：GitHub 默认 `main` 目前是 2026-04 的 Python 上传，
-  不能开 PR。`v0.3.0` 未签名包已从 `rfc-005-007-implementation` 的 tag 发出。
-  是否把实现分支设为默认、或重建 `main`，需仓库管理员决定。
+- **代码仓**：只使用 GitHub `https://github.com/oceancolor/openINTJ`；已去掉 `git.woa.com` 远程。
+  旧 GitHub `main`（2026-04 Python 上传、与实现历史无关）归档为 `archive-python-upload`，
+  当前 `main` 为 TypeScript 实现。
 - **应用图标**：`ts/apps/desktop/resources/icon.png` 为产品名 openINTJ（1024×1024 像素），由 `scripts/generate-icon.ps1` 绘制。
 - **Linux CI**：`release.yml` 矩阵含 ubuntu AppImage。
