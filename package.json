@@ -1,0 +1,42 @@
+{
+  "name": "openintj",
+  "version": "0.1.0",
+  "private": true,
+  "description": "openINTJ Agent Console — 目标治理 + 安全执行的桌面 AI Agent 工作台",
+  "main": "out/main/index.js",
+  "author": "openINTJ",
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "node scripts/run.mjs dev",
+    "build": "node scripts/run.mjs build",
+    "start": "node scripts/run.mjs start",
+    "smoke": "node scripts/run.mjs smoke",
+    "preview": "electron-vite preview",
+    "vscodium:fetch": "node scripts/vscodium/fetch.mjs",
+    "vscodium:check": "node scripts/vscodium/fetch.mjs --check",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "better-sqlite3": "^11.10.0",
+    "node-pty": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11"
+  }
+}

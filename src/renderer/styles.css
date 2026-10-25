@@ -1,0 +1,1100 @@
+/* openINTJ Agent Console — 视觉系统
+ * 承接 openINTJ 设计资产：深空紫黑底 + 三色极光辉光 + 玻璃卡片 + 胶囊按钮
+ * 底色 #030014 ／ 青蓝 #4dd0ff ／ 紫蓝 #8b6cff ／ 青绿 #3fe0b0
+ */
+
+:root {
+  --bg: #030014;
+  --bg-raise: rgba(255, 255, 255, 0.03);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --text: rgba(255, 255, 255, 0.92);
+  --text-dim: rgba(255, 255, 255, 0.56);
+  --text-faint: rgba(255, 255, 255, 0.34);
+  --cyan: #4dd0ff;
+  --violet: #8b6cff;
+  --mint: #3fe0b0;
+  --danger: #ff6b8a;
+  --radius-pill: 99px;
+  --radius-card: 18px;
+  font-family: 'Inter Tight', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'Microsoft YaHei', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+  /* 三色极光氛围光 */
+  background-image:
+    radial-gradient(900px 520px at 12% -8%, rgba(77, 208, 255, 0.13), transparent 62%),
+    radial-gradient(760px 480px at 88% 4%, rgba(139, 108, 255, 0.12), transparent 60%),
+    radial-gradient(700px 500px at 50% 108%, rgba(63, 224, 176, 0.08), transparent 62%);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 18px 22px 22px;
+  gap: 16px;
+}
+
+/* ---------- 顶栏 ---------- */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 0 0 auto;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.brand-name {
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: 0.3px;
+}
+
+.brand-sub {
+  font-size: 12px;
+  color: var(--text-faint);
+  letter-spacing: 0.4px;
+}
+
+.topbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ---------- 玻璃卡片 ---------- */
+.card {
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  backdrop-filter: blur(60px);
+  -webkit-backdrop-filter: blur(60px);
+  padding: 16px 18px;
+}
+
+.card-title {
+  font-size: 12px;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: 0 0 12px;
+  font-weight: 600;
+}
+
+/* ---------- 胶囊 ---------- */
+.pill {
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-strong);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  padding: 7px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  font-family: inherit;
+}
+
+.pill:hover:not(:disabled) {
+  border-color: rgba(77, 208, 255, 0.55);
+  box-shadow: 0 0 0 1px rgba(77, 208, 255, 0.18), 0 0 22px -6px rgba(77, 208, 255, 0.55);
+}
+
+.pill:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.pill.active {
+  border-color: rgba(77, 208, 255, 0.7);
+  background: rgba(77, 208, 255, 0.12);
+  box-shadow: 0 0 24px -8px rgba(77, 208, 255, 0.8);
+}
+
+.pill.primary {
+  background: linear-gradient(135deg, rgba(77, 208, 255, 0.22), rgba(139, 108, 255, 0.22));
+  border-color: rgba(139, 108, 255, 0.5);
+}
+
+/* ---------- 状态点 ---------- */
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 7px;
+  vertical-align: middle;
+}
+
+.dot.online {
+  background: var(--mint);
+  box-shadow: 0 0 10px 1px rgba(63, 224, 176, 0.85);
+}
+
+.dot.offline {
+  background: var(--text-faint);
+}
+
+.dot.error {
+  background: var(--danger);
+  box-shadow: 0 0 10px 1px rgba(255, 107, 138, 0.85);
+}
+
+/* ---------- 网格 ---------- */
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  flex: 0 0 auto;
+}
+
+.metric-label {
+  font-size: 11px;
+  color: var(--text-faint);
+  letter-spacing: 0.6px;
+  margin-bottom: 6px;
+}
+
+.metric-value {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.mono {
+  font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+}
+
+/* ---------- 告警条（C1 必显，不可关闭） ---------- */
+.notice {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border: 1px solid rgba(255, 107, 138, 0.34);
+  background: rgba(255, 107, 138, 0.07);
+  border-radius: 12px;
+  padding: 11px 14px;
+  font-size: 12.5px;
+  line-height: 1.62;
+  color: rgba(255, 255, 255, 0.8);
+  flex: 0 0 auto;
+}
+
+.notice strong {
+  color: var(--danger);
+}
+
+/* ---------- 事件流 ---------- */
+.stream {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.stream-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.85;
+}
+
+.stream-row {
+  display: flex;
+  gap: 12px;
+  padding: 5px 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+}
+
+.stream-seq {
+  color: var(--text-faint);
+  min-width: 38px;
+  text-align: right;
+}
+
+.stream-type {
+  color: var(--cyan);
+  min-width: 190px;
+}
+
+.stream-payload {
+  color: var(--text-dim);
+  flex: 1 1 auto;
+  word-break: break-all;
+}
+
+.empty {
+  color: var(--text-faint);
+  font-size: 12.5px;
+  padding: 16px 2px;
+}
+
+/* ---------- 输入区 ---------- */
+.composer {
+  display: flex;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.composer input {
+  flex: 1 1 auto;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  padding: 11px 18px;
+  color: var(--text);
+  font-size: 13.5px;
+  font-family: inherit;
+  outline: none;
+  transition: all 0.18s ease;
+}
+
+.composer input:focus {
+  border-color: rgba(77, 208, 255, 0.6);
+  box-shadow: 0 0 0 1px rgba(77, 208, 255, 0.16), 0 0 26px -10px rgba(77, 208, 255, 0.9);
+}
+
+.composer input::placeholder {
+  color: var(--text-faint);
+}
+
+/* ---------- 档位 ---------- */
+.tier-row {
+  display: flex;
+  gap: 8px;
+}
+
+.hint {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  margin-top: 9px;
+  line-height: 1.6;
+}
+
+.hint.warn {
+  color: rgba(255, 167, 89, 0.9);
+}
+
+/* ---------- 待审批徽标 ---------- */
+.badge-pending {
+  color: rgba(255, 167, 89, 0.95);
+  border: 1px solid rgba(255, 167, 89, 0.42);
+  background: rgba(255, 167, 89, 0.1);
+  border-radius: var(--radius-pill);
+  padding: 2px 10px;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+}
+
+/* ---------- 审批卡片（D4） ---------- */
+.approvals {
+  flex: 0 0 auto;
+  border-color: rgba(255, 167, 89, 0.24);
+  box-shadow: 0 0 40px -22px rgba(255, 167, 89, 0.7);
+}
+
+.approvals .card-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: rgba(255, 167, 89, 0.9);
+}
+
+.approval {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.approval:first-of-type {
+  border-top: none;
+}
+
+.approval-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.approval-cmd {
+  display: block;
+  font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+  font-size: 12.5px;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.approval-meta {
+  color: var(--text-faint);
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+.approval-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* 风险徽标 —— 颜色只是辅助，文字必须能独立读懂 */
+.risk-badge {
+  flex: 0 0 auto;
+  min-width: 116px;
+  text-align: center;
+  border-radius: var(--radius-pill);
+  padding: 6px 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  border: 1px solid var(--border-strong);
+}
+
+.risk-badge.calm {
+  color: var(--mint);
+  border-color: rgba(63, 224, 176, 0.45);
+  background: rgba(63, 224, 176, 0.1);
+}
+
+.risk-badge.warn {
+  color: rgba(255, 208, 120, 0.95);
+  border-color: rgba(255, 208, 120, 0.42);
+  background: rgba(255, 208, 120, 0.1);
+}
+
+.risk-badge.alert {
+  color: rgba(255, 167, 89, 0.98);
+  border-color: rgba(255, 167, 89, 0.5);
+  background: rgba(255, 167, 89, 0.12);
+}
+
+.risk-badge.danger {
+  color: var(--danger);
+  border-color: rgba(255, 107, 138, 0.55);
+  background: rgba(255, 107, 138, 0.13);
+  box-shadow: 0 0 22px -12px rgba(255, 107, 138, 0.9);
+}
+
+/* 批量审批 */
+.batch {
+  border: 1px dashed rgba(255, 167, 89, 0.35);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+
+.batch-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.pill.small {
+  padding: 4px 12px;
+  font-size: 11.5px;
+}
+
+.pill.ghost {
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.pill.danger {
+  border-color: rgba(255, 107, 138, 0.55);
+  color: var(--danger);
+  background: rgba(255, 107, 138, 0.08);
+}
+
+.pill.danger:hover:not(:disabled) {
+  border-color: rgba(255, 107, 138, 0.8);
+  box-shadow: 0 0 0 1px rgba(255, 107, 138, 0.2), 0 0 22px -8px rgba(255, 107, 138, 0.7);
+}
+
+/* 观察类事件与动作类在视觉上分开 */
+.stream-type.obs {
+  color: var(--mint);
+}
+
+/* 第二行输入（手动发起工具调用） */
+.composer.sub input {
+  font-size: 12.5px;
+}
+
+/* 调用结果 */
+.result {
+  flex: 0 0 auto;
+  font-size: 12.5px;
+  padding: 9px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.result.ok {
+  color: var(--mint);
+  border-color: rgba(63, 224, 176, 0.35);
+  background: rgba(63, 224, 176, 0.07);
+}
+
+.result.warn {
+  color: rgba(255, 167, 89, 0.95);
+  border-color: rgba(255, 167, 89, 0.35);
+  background: rgba(255, 167, 89, 0.07);
+}
+
+.result.error {
+  color: var(--danger);
+  border-color: rgba(255, 107, 138, 0.35);
+  background: rgba(255, 107, 138, 0.07);
+}
+
+/* ---------- 目标契约（IC-07 硬闸门） ---------- */
+.contract {
+  flex: 0 0 auto;
+  border-color: rgba(139, 108, 255, 0.26);
+}
+
+.contract .card-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: rgba(139, 108, 255, 0.95);
+}
+
+.state-chip {
+  border-radius: var(--radius-pill);
+  padding: 2px 10px;
+  font-size: 10.5px;
+  letter-spacing: 0.5px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+}
+
+.state-chip.pending {
+  color: rgba(255, 167, 89, 0.95);
+  border-color: rgba(255, 167, 89, 0.45);
+  background: rgba(255, 167, 89, 0.1);
+}
+
+.state-chip.done {
+  color: var(--mint);
+  border-color: rgba(63, 224, 176, 0.45);
+  background: rgba(63, 224, 176, 0.1);
+}
+
+.contract-obj {
+  font-size: 14.5px;
+  line-height: 1.6;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.contract-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.contract-section {
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.contract-section-title {
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  color: var(--text-faint);
+  margin-bottom: 7px;
+}
+
+.contract-section-title.ok {
+  color: var(--mint);
+}
+
+.contract-section-title.warn {
+  color: rgba(255, 167, 89, 0.95);
+}
+
+.contract-section-title.danger {
+  color: var(--danger);
+}
+
+.contract-section ul {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.contract-section li {
+  margin-bottom: 3px;
+}
+
+.contract-empty {
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.contract-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  align-items: center;
+}
+
+.contract-done {
+  color: var(--mint);
+  font-size: 11.5px;
+}
+
+/* ---- 执行结果（Agent 循环产出） ---- */
+
+.delivery-list {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.delivery-item {
+  border-left: 2px solid var(--line);
+  padding: 4px 0 4px 10px;
+}
+
+.delivery.max-steps .delivery-item,
+.delivery.failed .delivery-item {
+  border-left-color: var(--danger);
+}
+
+.delivery-criterion {
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.delivery-evidence {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  margin-top: 2px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.warn-text {
+  color: var(--danger);
+}
+
+/* ---- 页签（控制台 / 设置与凭据） ---- */
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 0 2px;
+}
+
+.tab {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 5px 12px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.tab:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.tab.active {
+  color: var(--cyan);
+  border-color: rgba(80, 220, 255, 0.32);
+  background: rgba(80, 220, 255, 0.08);
+}
+
+.tabs-note {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  font-family: var(--mono, ui-monospace, monospace);
+}
+
+/* 隐藏但不卸载：切回控制台时事件流、审批队列都还在 */
+.page.hidden {
+  display: none;
+}
+
+/* ---- 设置与凭据中心 ---- */
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.field > label {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
+}
+
+.field input {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12.5px;
+  padding: 8px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  outline: none;
+}
+
+.field input:focus {
+  border-color: rgba(80, 220, 255, 0.42);
+  background: rgba(80, 220, 255, 0.05);
+}
+
+.field input::placeholder {
+  color: var(--text-faint);
+}
+
+.notice.danger {
+  border-color: rgba(255, 107, 138, 0.42);
+  background: rgba(255, 107, 138, 0.09);
+}
+
+/* ---- MCP（D6） ---- */
+
+.state-chip.danger {
+  color: rgba(255, 107, 138, 0.95);
+  border-color: rgba(255, 107, 138, 0.45);
+  background: rgba(255, 107, 138, 0.1);
+}
+
+.card-title .pill {
+  margin-left: auto;
+}
+
+.mcp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 12px;
+}
+
+.mcp-row {
+  display: grid;
+  grid-template-columns: minmax(90px, auto) auto 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 8px);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.mcp-row .mcp-name {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.mcp-row .mcp-meta {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.mcp-row .mcp-error {
+  grid-column: 1 / -1;
+  font-size: 11.5px;
+  color: rgba(255, 107, 138, 0.9);
+  word-break: break-all;
+}
+
+/* ------------------------------------------------------------------ *
+ * 内嵌终端（US-15）
+ *
+ * 结构：状态条 / 输出区（xterm 挂载点）/ 命令输入行 / 说明
+ * 高度用 calc 而不是 flex：.page 不是 flex 容器，改成 flex 会牵动整个控制台布局，
+ * 为了一个终端面板动全局布局不划算。
+ * ------------------------------------------------------------------ */
+
+.term-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: calc(100vh - 200px);
+  min-height: 320px;
+}
+
+.term-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 10px);
+  background: var(--bg-raise);
+}
+
+.term-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  box-shadow: 0 0 8px currentColor;
+}
+
+.term-dot[data-state='on'] {
+  background: var(--mint);
+  color: var(--mint);
+}
+
+.term-dot[data-state='off'] {
+  background: var(--danger);
+  color: var(--danger);
+}
+
+.term-status-text {
+  flex: 1;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.term-status-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* xterm 的挂载点：背景由 xterm 自己画，这里只给边框和内边距 */
+.term-out {
+  flex: 1;
+  min-height: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 10px);
+  background: #08030f;
+  overflow: hidden;
+}
+
+.term-out .xterm {
+  height: 100%;
+}
+
+/* 去掉 xterm 默认的 viewport 边距，否则右侧常驻一条滚动条槽 */
+.term-out .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+.term-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm, 10px);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.term-prompt {
+  color: var(--mint);
+  font-size: 13px;
+}
+
+.term-input {
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.term-input::placeholder {
+  color: var(--text-faint);
+}
+
+.term-input:disabled {
+  color: var(--text-faint);
+}
+
+.term-hint {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+/* 终端内联审批条 —— 卡片必须出现在用户正在看的那个面板里 */
+.term-approval {
+  border: 1px solid rgba(255, 212, 121, 0.35);
+  border-radius: var(--radius-sm, 10px);
+  background: rgba(255, 212, 121, 0.07);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.term-approval-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.term-approval-cmd {
+  font-size: 12px;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.term-approval-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.term-approval-note {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* 终端面板自己的提示条 —— 为什么不写进 pty 区域，见 TerminalPanel 里 note() 的注释 */
+.term-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm, 10px);
+  font-size: 11.5px;
+  line-height: 1.5;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.term-notice span {
+  flex: 1;
+}
+
+.term-notice.warn {
+  border-color: rgba(255, 212, 121, 0.4);
+  background: rgba(255, 212, 121, 0.08);
+  color: rgba(255, 226, 168, 0.95);
+}
+
+.term-notice.danger {
+  border-color: rgba(255, 107, 138, 0.42);
+  background: rgba(255, 107, 138, 0.09);
+  color: rgba(255, 170, 188, 0.96);
+}
+
+.term-notice.ok {
+  border-color: rgba(63, 224, 176, 0.36);
+  background: rgba(63, 224, 176, 0.08);
+  color: rgba(160, 245, 218, 0.95);
+}
+
+.term-notice-x {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.term-notice-x:hover {
+  opacity: 1;
+}
+
+/* ------------------------------------------------------------------ *
+ * 内嵌 IDE（F27 / D5）
+ *
+ * 结构：状态条 / 占位区（真正的工作台由主进程盖在这一块上面）/ 说明
+ *
+ * 占位区的背景刻意做成**近黑**而不是我们常见的深空紫：工作台是浅色主题
+ * 的第三方界面，加载完成前露出的那一瞬如果是一块紫底，视觉上会闪一下。
+ * ------------------------------------------------------------------ */
+
+.ide-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: calc(100vh - 200px);
+  min-height: 320px;
+}
+
+.ide-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 10px);
+  background: var(--bg-raise);
+}
+
+.ide-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  box-shadow: 0 0 8px currentColor;
+}
+
+.ide-dot[data-state='on'] {
+  background: var(--mint);
+  color: var(--mint);
+}
+
+.ide-dot[data-state='idle'] {
+  background: var(--yellow, #ffd479);
+  color: var(--yellow, #ffd479);
+}
+
+.ide-dot[data-state='err'] {
+  background: var(--danger);
+  color: var(--danger);
+}
+
+.ide-dot[data-state='off'] {
+  background: var(--text-faint);
+  color: var(--text-faint);
+}
+
+.ide-status-text {
+  flex: 1;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ide-version {
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.ide-status-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* 工作台的「洞」。渲染层不在这里画任何东西 —— 画了也会被上层 view 盖住 */
+.ide-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 10px);
+  background: #0a0a0f;
+  overflow: hidden;
+}
+
+.ide-placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  justify-content: center;
+  height: 100%;
+  padding: 24px 28px;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--text-dim);
+}
+
+.ide-placeholder p {
+  margin: 0;
+}
+
+.ide-placeholder code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  font-size: 11.5px;
+}
+
+.ide-placeholder-dim {
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+
+.ide-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 107, 129, 0.36);
+  border-radius: var(--radius-sm, 10px);
+  background: rgba(255, 107, 129, 0.08);
+  color: rgba(255, 179, 190, 0.95);
+  font-size: 11.5px;
+  line-height: 1.6;
+  word-break: break-all;
+}
+
+.ide-hint {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+.ide-hint code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+}

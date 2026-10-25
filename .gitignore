@@ -1,27 +1,45 @@
-# Python v2.0 参考实现产生的字节码 / 缓存（仓库根的 .py 模块仅作语义参考）
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.egg-info/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.venv/
-venv/
+# 依赖
+node_modules/
+out/
+dist/
+release/
 
-# OS / Editor
+# 构建缓存
+.vite/
+*.tsbuildinfo
+
+# 环境与凭据 —— 绝不入库
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.keystore
+credentials.json
+
+# 运行时产物
+*.log
+logs/
+.tmp/
+
+# 编辑器
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# 系统
 .DS_Store
 Thumbs.db
 
-# Playwright run artifacts (apps/desktop/e2e；Phase 3.7+)
-**/test-results/
-**/playwright-report/
-playwright/.cache/
+# 工作区内部数据
+# output/ 保留 —— 那里是 G0~G6 的架构文档，是权威来源
+# memory/ 忽略 —— 那是逐日工作笔记，属于内部记录，不该进公开仓库
+.workbuddy/memory/
 
-# 环境变量本地覆盖（HUNYUAN_API_KEY 等敏感信息，绝对不能上仓库）
-.env
-.env.local
-.env.*.local
+# 探针截图（每次冒烟都会新生成一张，属于瞬时产物）
+.snapshots/
 
+# 内嵌 IDE 服务端（reh-web，约 94MB，npm run vscodium:fetch 按需拉取，不入库）
+vendor/
+.cache/
