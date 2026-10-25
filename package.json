@@ -14,6 +14,7 @@
     "preview": "electron-vite preview",
     "vscodium:fetch": "node scripts/vscodium/fetch.mjs",
     "vscodium:check": "node scripts/vscodium/fetch.mjs --check",
+    "git:scan": "node scripts/git/pre-push-scan.mjs",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web"
