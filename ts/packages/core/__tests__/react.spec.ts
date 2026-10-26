@@ -129,6 +129,12 @@ describe("__test__.parseLlmThought", () => {
     expect(r.parseError).toContain("混入");
   });
 
+  it("rejects empty model output instead of implicit final", () => {
+    const r = parseLlmThought("   ");
+    expect(r.isFinal).toBe(false);
+    expect(r.parseError).toContain("空内容");
+  });
+
   it("treats free text without markers as implicit final", () => {
     const r = parseLlmThought("just a thought without structure");
     expect(r.isFinal).toBe(true);
@@ -254,6 +260,56 @@ describe("ReactStateMachine.run", () => {
     });
     expect(out.status).toBe("duplicate_loop");
     expect(stop).toHaveBeenCalledWith("duplicateToolCall");
+  });
+
+  it("failFast does not stop on command allowlist denials", async () => {
+    const extraTools: ToolDescriptor[] = [
+      ...tools,
+      {
+        name: "execute_command",
+        description: "cmd",
+        inputSchema: { command: "string" },
+        outputSchema: {},
+        permissions: ["system.execute"],
+        timeoutS: 30,
+        idempotent: false,
+        errorSemantics: "fail_fast",
+      },
+      {
+        name: "write_file",
+        description: "write",
+        inputSchema: { path: "string", content: "string" },
+        outputSchema: {},
+        permissions: ["filesystem.write"],
+        timeoutS: 30,
+        idempotent: false,
+        errorSemantics: "fail_fast",
+      },
+    ];
+    const hooks = new HookBus({ logger: silentLogger });
+    const sm = new ReactStateMachine({
+      config: { ...baseConfig, maxIterations: 5 },
+      hooks,
+      llm: makeLlm([
+        `Thought: check python\nAction: execute_command\nAction-Input: {"command":"python"}`,
+        `Thought: write svg\nAction: write_file\nAction-Input: {"path":"cover.svg","content":"<svg/>"}`,
+        `Thought: done\nFINAL: 已写入 cover.svg`,
+      ]),
+      toolRunner: makeToolRunner({
+        execute_command: () => {
+          throw new Error("命令 'python' 不在白名单内（allowedCommands=[]）");
+        },
+        write_file: () => ({ path: "cover.svg", bytesWritten: 6 }),
+      }),
+    });
+    const out = await sm.run({
+      messages: [{ role: "user", content: "生成封面图" }],
+      availableTools: extraTools,
+      taoIteration: 1,
+      systemPrompt: "",
+    });
+    expect(out.status).toBe("ok");
+    expect(out.finalAnswer).toContain("cover.svg");
   });
 
   it("failFast stops on tool error", async () => {

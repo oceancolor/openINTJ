@@ -1,7 +1,7 @@
 import { type FSWatcher, watch } from "node:fs";
 import { createToolCallGate } from "@openintj/plane-governance";
 import { withRootSpan } from "@openintj/telemetry-otel";
-import { type IpcMain, type WebContents, ipcMain } from "electron";
+import { type IpcMain, type WebContents, ipcMain, shell } from "electron";
 import {
   AGENT_RUNTIME_CONFIG_KEYS,
   AppConfigPatchSchema,
@@ -16,15 +16,29 @@ import {
   SkillProposalDecisionSchema,
   WorkbenchCreateSchema,
   WorkbenchUpdateSchema,
+  WorkspaceBytesRequestSchema,
   WorkspaceReadRequestSchema,
+  WorkspaceRevealRequestSchema,
   WorkspaceWriteRequestSchema,
   isAgentRuntimeConfigPatch,
 } from "../shared/ipc-protocol.js";
+import {
+  artifactsFromAnswer,
+  extractWorkspaceArtifactPaths,
+  preferredPreviewPath,
+  requestsArtifactPreview,
+} from "../shared/workspace-view.js";
 import type { DesktopAgent } from "./agent.js";
+import { requestsFileArtifact, resolveMissingArtifact } from "./artifact-fallback.js";
 import type { ConfigService } from "./config-store.js";
 import type { CredentialStore } from "./credential-store.js";
 import type { ModelRegistry } from "./model-registry.js";
 import type { WorkbenchStore } from "./workbench-store.js";
+import {
+  listWorkspaceEntries,
+  readWorkspaceBytes,
+  resolveWorkspaceItem,
+} from "./workspace-fs.js";
 
 const DORMANT_NOT_ENABLED = {
   error: "dormant_not_enabled",
@@ -49,7 +63,10 @@ export interface IpcDeps {
   pickDirectory?: () => Promise<string | null>;
   /** 应用配置服务；不传 → config.* channel 走内存空配置、不持久化。 */
   config?: ConfigService;
-  /** Gracefully close state and relaunch the Electron process. */
+  /**
+   * Restart entry: unpackaged electron-vite keeps the window (reload agent +
+   * renderer); packaged builds close state and relaunch the process.
+   */
   restart?: () => Promise<void>;
   /**
    * Reassemble the Desktop agent from the latest saved config without quitting.
@@ -62,17 +79,17 @@ export interface IpcDeps {
   credentialEnv?: Partial<Record<"hunyuan" | "kimi" | "minimax" | "glm", boolean>>;
   modelRegistry?: ModelRegistry;
   workbench?: WorkbenchStore;
+  /**
+   * Open a workspace path in the OS file manager.
+   * Tests inject a stub; production uses Electron `shell`.
+   */
+  revealItem?: (absPath: string, kind: "file" | "dir") => Promise<{ ok: boolean; error?: string }>;
 }
 
 const workspaceError = (e: unknown): { error: "workspace_error"; message: string } => ({
   error: "workspace_error",
   message: e instanceof Error ? e.message : String(e),
 });
-
-const requestsFileArtifact = (query: string): boolean =>
-  /(?:创建|生成|写入|保存|输出|落盘|create|generate|write|save).{0,40}(?:文件|文档|代码|脚本|file|document|script|[A-Za-z0-9_.-]+\.[A-Za-z0-9]+)/iu.test(
-    query,
-  );
 
 const hasSuccessfulFileWrite = (trajectory: readonly unknown[]): boolean =>
   trajectory.some((entry) => {
@@ -83,13 +100,6 @@ const hasSuccessfulFileWrite = (trajectory: readonly unknown[]): boolean =>
       | undefined;
     return result?.toolName === "write_file" && result.success === true;
   });
-
-const fallbackArtifactPath = (query: string, taskId: string): string => {
-  const explicit = query.match(
-    /(?:^|[\s"'`（(])([A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_.-]+)*\.[A-Za-z0-9]{1,12})(?=$|[\s"'`，。）、)])/u,
-  )?.[1];
-  return explicit?.replaceAll("\\", "/") ?? `artifacts/${taskId}/result.md`;
-};
 
 /** 注册所有 IPC channel handler，并把 hook 事件转发为 webContents.send。 */
 export const registerIpcHandlers = (
@@ -172,6 +182,11 @@ export const registerIpcHandlers = (
       rootPath: parsed.data.rootPath,
     });
   });
+  api.handle(IPC.WORKBENCH_WORKSPACE_CLOSE, async (_evt, raw: unknown) => {
+    const parsed = WorkbenchUpdateSchema.safeParse(raw);
+    if (!parsed.success || !deps.workbench) return { error: "invalid_request" };
+    return deps.workbench.closeWorkspace(parsed.data.id);
+  });
   api.handle(IPC.WORKBENCH_TASK_CREATE, async (_evt, raw: unknown) => {
     const parsed = WorkbenchCreateSchema.safeParse(raw);
     if (!parsed.success || !parsed.data.parentId || !parsed.data.title || !deps.workbench) {
@@ -250,6 +265,41 @@ export const registerIpcHandlers = (
           messageKind: "message",
         });
       }
+      if (requestsArtifactPreview(parsed.data.query)) {
+        const historyPaths = (priorMessages ?? []).flatMap((entry) =>
+          extractWorkspaceArtifactPaths(entry.content),
+        );
+        let listedPaths: string[] = [];
+        try {
+          listedPaths = (await listWorkspaceEntries(agent.workspace.config.root))
+            .filter((entry) => entry.type === "file")
+            .map((entry) => entry.path);
+        } catch {
+          listedPaths = [];
+        }
+        const path = preferredPreviewPath([...historyPaths, ...listedPaths]);
+        const finalAnswer = path
+          ? `已在预览区打开：\`${path}\``
+          : "工作区里还没有可预览的产物。请先生成图片或文件。";
+        const artifacts = path ? artifactsFromAnswer(`\`${path}\``) : [];
+        if (selected) {
+          deps.workbench?.appendMessage({
+            conversationId: selected.conversation.id,
+            role: "assistant",
+            content: finalAnswer,
+            status: "completed",
+            messageKind: "answer",
+          });
+        }
+        return {
+          finalAnswer,
+          iterations: 0,
+          status: "completed",
+          traceId: "preview",
+          context: agent.status().context,
+          ...(artifacts.length > 0 ? { artifacts } : {}),
+        };
+      }
       const result = await withRootSpan(
         "openintj.ipc.chat",
         () =>
@@ -274,14 +324,20 @@ export const registerIpcHandlers = (
         selected &&
         result.inputStructure?.action !== "clarify" &&
         requestsFileArtifact(parsed.data.query) &&
-        !hasSuccessfulFileWrite(result.trajectory)
+        !hasSuccessfulFileWrite(result.trajectory) &&
+        !result.metrics?.imageGenerated &&
+        !result.metrics?.imageGenerationFallback
       ) {
-        const artifactPath = fallbackArtifactPath(parsed.data.query, selected.task.id);
+        const artifact = resolveMissingArtifact(
+          parsed.data.query,
+          selected.task.id,
+          result.finalAnswer,
+        );
         await agent.workspace.tools.writeFile({
-          path: artifactPath,
-          content: result.finalAnswer,
+          path: artifact.path,
+          content: artifact.content,
         });
-        finalAnswer = `${result.finalAnswer}\n\n已写入工作区：\`${artifactPath}\``;
+        finalAnswer = `${result.finalAnswer}\n\n已写入工作区：\`${artifact.path}\``;
       }
       if (selected) {
         deps.workbench?.appendMessage({
@@ -296,13 +352,17 @@ export const registerIpcHandlers = (
         });
       }
       const modelStatus = selectedLlm?.getStatus();
+      const context = agent.status().context;
+      const artifacts = artifactsFromAnswer(finalAnswer);
       return {
         finalAnswer,
         iterations: result.iterations,
         status: result.status,
         traceId: result.traceId,
+        context,
         ...(result.inputStructure ? { inputStructure: result.inputStructure } : {}),
         ...(modelStatus ? { provider: modelStatus.provider, model: modelStatus.model } : {}),
+        ...(artifacts.length > 0 ? { artifacts } : {}),
       };
     } catch (error) {
       if (persistedConversationId) {
@@ -421,6 +481,47 @@ export const registerIpcHandlers = (
         await deps.reloadAgent();
       }
       return { canceled: false, root };
+    } catch (e) {
+      return workspaceError(e);
+    }
+  });
+
+  api.handle(IPC.WORKSPACE_LIST, async () => {
+    try {
+      const root = agent.workspace.config.root;
+      return { root, entries: await listWorkspaceEntries(root) };
+    } catch (e) {
+      return workspaceError(e);
+    }
+  });
+
+  api.handle(IPC.WORKSPACE_READ_BYTES, async (_evt, raw: unknown) => {
+    const parsed = WorkspaceBytesRequestSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    try {
+      await workspaceGate({ tool: "read_file", params: { path: parsed.data.path } });
+      return await readWorkspaceBytes(agent.workspace.config.root, parsed.data.path);
+    } catch (e) {
+      return workspaceError(e);
+    }
+  });
+
+  api.handle(IPC.WORKSPACE_REVEAL, async (_evt, raw: unknown) => {
+    const parsed = WorkspaceRevealRequestSchema.safeParse(raw ?? {});
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    try {
+      const item = await resolveWorkspaceItem(agent.workspace.config.root, parsed.data.path);
+      const reveal =
+        deps.revealItem ??
+        (async (absPath, kind) => {
+          if (kind === "dir") {
+            const error = await shell.openPath(absPath);
+            return error ? { ok: false, error } : { ok: true };
+          }
+          shell.showItemInFolder(absPath);
+          return { ok: true };
+        });
+      return await reveal(item.abs, item.kind);
     } catch (e) {
       return workspaceError(e);
     }
@@ -606,6 +707,27 @@ export const registerIpcHandlers = (
     return { total: skills.length, skills };
   });
 
+  api.handle(IPC.SKILLS_CATALOG, async () => {
+    const listed = agent.skillContext?.list() ?? [];
+    const skills = listed.map((s) => ({
+      id: s.id,
+      name: s.name,
+      description: s.description,
+      source: s.source,
+      version: s.version,
+      tools: s.tools,
+      triggers: s.triggers,
+      taskTypes: s.taskTypes,
+      origin: s.source.startsWith("learned:") ? ("learned" as const) : ("authored" as const),
+    }));
+    return {
+      enabled: Boolean(agent.skillContext),
+      learning: Boolean(agent.skillLearning),
+      total: skills.length,
+      skills,
+    };
+  });
+
   // 把核心 hooks 推送给 renderer
   if (webContents) {
     const send = (channel: string, payload: unknown): void => {
@@ -641,6 +763,16 @@ export const registerIpcHandlers = (
       ),
     );
     offs.push(agent.hooks.on("policy.afterCheck", (ctx) => send(IPC.EVT_AUDIT, ctx.payload)));
+    offs.push(
+      agent.hooks.on("event.SKILL_SELECTED", (ctx) =>
+        send(IPC.EVT_SKILL, { kind: "selected", ...ctx.payload }),
+      ),
+    );
+    offs.push(
+      agent.hooks.on("event.SKILL_PROPOSED", (ctx) =>
+        send(IPC.EVT_SKILL, { kind: "proposed", ...ctx.payload }),
+      ),
+    );
 
     // 工作区文件变更推送（onWorkspaceChange）。目录不可监听时静默跳过。
     let wsWatcher: FSWatcher | undefined;
@@ -668,6 +800,7 @@ export const registerIpcHandlers = (
       api.removeHandler(IPC.MODEL_TEST);
       api.removeHandler(IPC.WORKBENCH_BOOTSTRAP);
       api.removeHandler(IPC.WORKBENCH_WORKSPACE_CREATE);
+      api.removeHandler(IPC.WORKBENCH_WORKSPACE_CLOSE);
       api.removeHandler(IPC.WORKBENCH_TASK_CREATE);
       api.removeHandler(IPC.WORKBENCH_TASK_UPDATE);
       api.removeHandler(IPC.WORKBENCH_CONVERSATION_CREATE);
@@ -680,6 +813,9 @@ export const registerIpcHandlers = (
       api.removeHandler(IPC.WORKSPACE_READ);
       api.removeHandler(IPC.WORKSPACE_WRITE);
       api.removeHandler(IPC.WORKSPACE_PICK_DIR);
+      api.removeHandler(IPC.WORKSPACE_LIST);
+      api.removeHandler(IPC.WORKSPACE_READ_BYTES);
+      api.removeHandler(IPC.WORKSPACE_REVEAL);
       api.removeHandler(IPC.CONFIG_GET);
       api.removeHandler(IPC.CONFIG_UPDATE);
       api.removeHandler(IPC.DORMANT_MINE);
@@ -688,6 +824,13 @@ export const registerIpcHandlers = (
       api.removeHandler(IPC.DORMANT_REJECT);
       api.removeHandler(IPC.DORMANT_REVOKE);
       api.removeHandler(IPC.DORMANT_PERSONA);
+      api.removeHandler(IPC.SKILLS_DISTILL);
+      api.removeHandler(IPC.SKILLS_LIST);
+      api.removeHandler(IPC.SKILLS_APPROVE);
+      api.removeHandler(IPC.SKILLS_REJECT);
+      api.removeHandler(IPC.SKILLS_REVOKE);
+      api.removeHandler(IPC.SKILLS_ACTIVE);
+      api.removeHandler(IPC.SKILLS_CATALOG);
       for (const o of offs) o();
     },
   };

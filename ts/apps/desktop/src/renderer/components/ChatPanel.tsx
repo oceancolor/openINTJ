@@ -1,5 +1,6 @@
 import React from "react";
-import type { InputStructure, ModelProfile } from "../../shared/ipc-protocol.js";
+import type { ContextUsage, InputStructure, ModelProfile } from "../../shared/ipc-protocol.js";
+import { splitWorkspacePathMarkup } from "../../shared/workspace-view.js";
 
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
@@ -58,6 +59,66 @@ const UnderstandingCard: React.FC<{ value: InputStructure }> = ({ value }) => {
   );
 };
 
+const estimateTokens = (text: string): number => Math.max(0, Math.floor(text.length / 4));
+
+const ContextUsageRing: React.FC<{ used: number; max: number }> = ({ used, max }) => {
+  const ratio = Math.min(1, used / Math.max(1, max));
+  const radius = 11;
+  const circumference = 2 * Math.PI * radius;
+  const dash = `${(ratio * circumference).toFixed(2)} ${circumference.toFixed(2)}`;
+  const tone = ratio >= 0.9 ? "#f87171" : ratio >= 0.7 ? "#fbbf24" : "#22d3ee";
+  const usedLabel = used >= 1000 ? `${(used / 1000).toFixed(1)}k` : String(used);
+  const maxLabel = max >= 1000 ? `${Math.round(max / 1000)}k` : String(max);
+  return (
+    <div
+      className="flex items-center gap-1.5"
+      data-testid="context-usage-ring"
+      aria-label={`上下文用量 ${used} / ${max}`}
+      title={`上下文 ${usedLabel} / ${maxLabel} tokens`}
+    >
+      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+        <circle cx="14" cy="14" r={radius} fill="none" stroke="#313244" strokeWidth="3" />
+        <circle
+          cx="14"
+          cy="14"
+          r={radius}
+          fill="none"
+          stroke={tone}
+          strokeWidth="3"
+          strokeLinecap="round"
+          strokeDasharray={dash}
+          transform="rotate(-90 14 14)"
+        />
+      </svg>
+      <span className="text-[10px] leading-tight text-gray-500 tabular-nums">
+        {Math.round(ratio * 100)}%
+      </span>
+    </div>
+  );
+};
+
+const MessageBody: React.FC<{
+  content: string;
+  onOpenPath?: ((path: string) => void) | undefined;
+}> = ({ content, onOpenPath }) => (
+  <>
+    {splitWorkspacePathMarkup(content).map((part, index) =>
+      part.type === "path" && onOpenPath ? (
+        <button
+          key={`${part.value}-${index}`}
+          type="button"
+          className="underline text-cyan-300 hover:text-cyan-200 break-all"
+          onClick={() => onOpenPath(part.value)}
+        >
+          {part.value}
+        </button>
+      ) : (
+        <React.Fragment key={index}>{part.value}</React.Fragment>
+      ),
+    )}
+  </>
+);
+
 export const ChatPanel: React.FC<{
   messages: ChatMessage[];
   onSend: (text: string) => void;
@@ -65,7 +126,18 @@ export const ChatPanel: React.FC<{
   profiles?: ModelProfile[] | undefined;
   modelProfileId?: string | undefined;
   onModelChange?: ((profileId: string) => void) | undefined;
-}> = ({ messages, onSend, pending, profiles = [], modelProfileId, onModelChange }) => {
+  context?: ContextUsage | undefined;
+  onOpenWorkspacePath?: ((path: string) => void) | undefined;
+}> = ({
+  messages,
+  onSend,
+  pending,
+  profiles = [],
+  modelProfileId,
+  onModelChange,
+  context,
+  onOpenWorkspacePath,
+}) => {
   const [input, setInput] = React.useState("");
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
@@ -80,28 +152,35 @@ export const ChatPanel: React.FC<{
     setInput("");
   };
 
+  const localUsed = messages.reduce((sum, message) => sum + estimateTokens(message.content), 0);
+  const used = Math.max(localUsed + estimateTokens(input), context?.used ?? 0);
+  const max = context?.max ?? 128_000;
+
   return (
     <div className="flex flex-col h-full min-h-0 min-w-0 bg-[#1e1e2e]">
-      <div className="shrink-0 h-10 px-3 border-b border-gray-800 flex items-center justify-between">
+      <div className="shrink-0 h-10 px-3 border-b border-gray-800 flex items-center justify-between gap-2">
         <span className="text-xs text-gray-500">当前对话</span>
-        <select
-          aria-label="对话模型"
-          value={modelProfileId ?? ""}
-          disabled={pending}
-          onChange={(event) => onModelChange?.(event.target.value)}
-          className="bg-gray-800 text-gray-200 rounded px-2 py-1 text-xs"
-        >
-          {profiles.map((profile) => (
-            <option key={profile.id} value={profile.id} disabled={!profile.hasCredential}>
-              {profile.name}
-              {profile.hasCredential ? "" : "（需密钥）"}
-            </option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          <ContextUsageRing used={used} max={max} />
+          <select
+            aria-label="对话模型"
+            value={modelProfileId ?? ""}
+            disabled={pending}
+            onChange={(event) => onModelChange?.(event.target.value)}
+            className="bg-gray-800 text-gray-200 rounded px-2 py-1 text-xs"
+          >
+            {profiles.map((profile) => (
+              <option key={profile.id} value={profile.id} disabled={!profile.hasCredential}>
+                {profile.name}
+                {profile.hasCredential ? "" : "（需密钥）"}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 ? (
-          <div className="text-gray-500 text-sm text-center mt-12">👋 输入消息开始与 Hy3 对话</div>
+          <div className="text-gray-500 text-sm text-center mt-12">👋 输入消息开始与 Hy4 Preview 对话</div>
         ) : (
           messages.map((m, i) => (
             <div
@@ -116,7 +195,9 @@ export const ChatPanel: React.FC<{
               }`}
             >
               {m.inputStructure && <UnderstandingCard value={m.inputStructure} />}
-              {m.messageKind !== "clarification" && m.content}
+              {m.messageKind !== "clarification" && (
+                <MessageBody content={m.content} onOpenPath={onOpenWorkspacePath} />
+              )}
             </div>
           ))
         )}

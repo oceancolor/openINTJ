@@ -135,7 +135,7 @@ export class PersistentMemoryStore extends MemoryStore {
 
   override addShortTerm(content: string, opts: AddOptions = {}): MemoryFragment {
     const f = super.addShortTerm(content, opts);
-    this.scheduleWrite(f);
+    if (f.embedding.length > 0) this.scheduleWrite(f);
     return f;
   }
 
@@ -155,6 +155,9 @@ export class PersistentMemoryStore extends MemoryStore {
     content: string,
     opts: AddOptions = {},
   ): Promise<MemoryFragment> {
+    if (!content.trim() && opts.embedding === undefined) {
+      return super.addShortTermAsync(content, opts);
+    }
     const f = await super.addShortTermAsync(content, opts);
     await this.persist(f);
     return f;
@@ -213,6 +216,7 @@ export class PersistentMemoryStore extends MemoryStore {
     await this.awaitPendingWrites();
     await this.vectorStore.close();
     await this.metadataStore.close();
+    this.isInitialized = false;
   }
 
   private scheduleWrite(f: MemoryFragment): void {
@@ -220,8 +224,18 @@ export class PersistentMemoryStore extends MemoryStore {
   }
 
   private async persist(f: MemoryFragment): Promise<void> {
-    await this.vectorStore.upsert([fragmentToVectorRow(f)]);
-    await this.metadataStore.putFragmentMeta([fragmentToMeta(f)]);
+    const row = fragmentToVectorRow(f);
+    const meta = fragmentToMeta(f);
+    try {
+      await this.vectorStore.upsert([row]);
+      await this.metadataStore.putFragmentMeta([meta]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/not initialized/i.test(message)) throw error;
+      await this.vectorStore.init();
+      await this.vectorStore.upsert([row]);
+      await this.metadataStore.putFragmentMeta([meta]);
+    }
   }
 
   /** 用 fragmentId 显式重新指派 memoryType（短期 → 长期 promotion 时用）。 */

@@ -12,8 +12,19 @@ export const OllamaEmbedderConfigSchema = z.object({
 export type OllamaEmbedderConfig = z.infer<typeof OllamaEmbedderConfigSchema>;
 
 interface OllamaEmbedResponse {
-  embedding: number[];
+  embedding?: number[];
+  embeddings?: number[][];
 }
+
+const isNumberArray = (value: unknown): value is number[] =>
+  Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === "number");
+
+/** Ollama `/api/embeddings` 用 `embedding`；0.40+ `/api/embed` 用 `embeddings: number[][]`。 */
+const extractEmbedding = (json: OllamaEmbedResponse): number[] => {
+  if (isNumberArray(json.embedding)) return json.embedding;
+  const first = json.embeddings?.[0];
+  return isNumberArray(first) ? first : [];
+};
 
 /**
  * OllamaEmbedder —— 通过 Ollama /api/embeddings 端点生成嵌入。
@@ -40,6 +51,9 @@ export class OllamaEmbedder implements EmbeddingProvider {
   }
 
   async embed(text: string): Promise<number[]> {
+    if (!text.trim()) {
+      throw new Error(`OllamaEmbedder: empty prompt (model=${this.config.model})`);
+    }
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.config.timeoutMs);
     try {
@@ -57,17 +71,18 @@ export class OllamaEmbedder implements EmbeddingProvider {
         throw new Error(`OllamaEmbedder ${res.status} ${res.statusText}: ${txt.slice(0, 200)}`);
       }
       const json = (await res.json()) as OllamaEmbedResponse;
-      if (!Array.isArray(json.embedding) || json.embedding.length === 0) {
+      const embedding = extractEmbedding(json);
+      if (embedding.length === 0) {
         throw new Error(`OllamaEmbedder: invalid embedding payload (model=${this.config.model})`);
       }
       if (this._dimension === 0) {
-        this._dimension = json.embedding.length;
-      } else if (this._dimension !== json.embedding.length) {
+        this._dimension = embedding.length;
+      } else if (this._dimension !== embedding.length) {
         throw new Error(
-          `OllamaEmbedder dimension mismatch: expected ${this._dimension} got ${json.embedding.length}`,
+          `OllamaEmbedder dimension mismatch: expected ${this._dimension} got ${embedding.length}`,
         );
       }
-      return json.embedding;
+      return embedding;
     } finally {
       clearTimeout(timer);
     }

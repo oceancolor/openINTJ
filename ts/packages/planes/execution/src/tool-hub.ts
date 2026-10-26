@@ -307,7 +307,8 @@ export class ToolHub {
     this.register(
       ToolDescriptorSchema.parse({
         name: "write_file",
-        description: "写入文件内容",
+        description:
+          "写入工作区文件。Markdown、代码、SVG 封面/海报都用这个工具落盘；不要调用 python/PIL 生成图片。",
         inputSchema: { path: "string", content: "string" },
         permissions: ["filesystem.write"],
         idempotent: false,
@@ -318,7 +319,8 @@ export class ToolHub {
     this.register(
       ToolDescriptorSchema.parse({
         name: "execute_command",
-        description: "执行系统命令",
+        description:
+          "仅执行白名单内的系统命令。未启用或白名单为空时不要调用；生成文件请用 write_file。",
         inputSchema: { command: "string" },
         permissions: ["system.execute"],
         idempotent: false,

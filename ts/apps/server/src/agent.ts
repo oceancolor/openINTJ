@@ -22,6 +22,7 @@ import {
   detectTaskType,
   getShaderForTask,
   inputClarificationFromPreflight,
+  inputClarificationFromQuestions,
   inputClarificationResult,
   resolveInputStructuringConfig,
   structureUserInput,
@@ -39,7 +40,7 @@ import {
   resolveModelRuntime,
   validateEmbeddingFingerprintForDataDir,
 } from "@openintj/model-runtime";
-import { ControlPlane } from "@openintj/plane-control";
+import { ControlPlane, resolvePlanAdviceForRun } from "@openintj/plane-control";
 import {
   Executor,
   ToolHub,
@@ -68,6 +69,7 @@ import {
   resolveProductBehaviorEnabled,
   resolveSearchEvidenceStatus,
   resolveSelfConsistency,
+  isCommandExecutionAvailable,
   resolveWorkspaceConfig,
   selectConsistentAnswer,
 } from "@openintj/shared";
@@ -513,6 +515,9 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
     executeCommand: wsTools.executeCommand,
     search: searchHandler,
   });
+  if (!isCommandExecutionAvailable(wsConfig)) {
+    toolHub.unregister("execute_command");
+  }
   const execution = new Executor({ toolHub, hooks, registerBuiltins: false });
 
   const react = new ReactStateMachine({
@@ -717,6 +722,21 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
           : undefined;
       const route = cls ? decideRoute(cls) : undefined;
       const routedTaskType = cls?.label ?? detectTaskType(executionQuery);
+      let structured = inputStructure;
+      let workQuery = executionQuery;
+      if (!preflight && structured?.action !== "clarify") {
+        const decision = resolvePlanAdviceForRun(control, {
+          query,
+          executionQuery: workQuery,
+          taskType: routedTaskType,
+          ...(structured?.structure ? { structure: structured.structure } : {}),
+        });
+        if (decision.kind === "clarify") {
+          structured = inputClarificationFromQuestions(query, decision.questions, "plan-unknowns");
+        } else if (decision.kind === "proceed") {
+          workQuery = decision.executionQuery;
+        }
+      }
       const taoOpts = (traceId?: string, signal: AbortSignal | undefined = runOpts.signal) => ({
         taskType: routedTaskType,
         ...(route?.single || (!cls && routedTaskType === TaskType.QUICK_RESPONSE)
@@ -730,8 +750,8 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
       });
       // 先跑（contextProvider 会检索此前已落盘的记忆），再记录本轮 → 避免检索命中当前输入本身。
       let result: InputStructuredTaoResult;
-      if (inputStructure?.action === "clarify") {
-        result = inputClarificationResult(inputStructure);
+      if (structured?.action === "clarify") {
+        result = inputClarificationResult(structured);
       } else if (preflight) {
         const taskType = detectTaskType(query);
         result = {
@@ -759,18 +779,18 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
           Boolean(selfConsistency),
         );
         if (orchestrationMode === "taskpool" && taskPool && cls) {
-          const { plan } = control.processInput(executionQuery, cls.label);
+          const { plan } = control.processInput(workQuery, cls.label);
           const graph = planGraphToTaskGraph(plan);
           const poolResult = await taskPool.submitRun(graph, async (node, ctx) => {
             const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
             return runTao(stepQuery, taoOpts(ctx.traceId, ctx.signal));
           });
-          result = synthesizeTaskPoolAnswer(poolResult, executionQuery);
+          result = synthesizeTaskPoolAnswer(poolResult, workQuery);
         } else if (orchestrationMode === "self-consistency" && selfConsistency) {
           // 方向一/二：并行多采样 + 投票。forkJoin 会发 forkjoin.* 事件 → OTel span/metric。
           const { fulfilled } = await forkJoin(
             Array.from({ length: selfConsistency.samples }, (_, i) => i),
-            (i) => runTao(executionQuery, taoOpts(`${randomUUID()}-sc${i}`)),
+            (i) => runTao(workQuery, taoOpts(`${randomUUID()}-sc${i}`)),
             {
               hooks,
               group: "self-consistency",
@@ -782,9 +802,10 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
           );
           result = selectConsistentAnswer(fulfilled, selfConsistency.strategy) ?? fulfilled[0]!;
         } else {
-          result = await runTao(executionQuery, taoOpts());
+          result = await runTao(workQuery, taoOpts());
         }
       }
+      if (workQuery !== executionQuery) result.metrics.planAdvice = 1;
       if (inputStructure?.action === "proceed") {
         result.inputStructure = inputStructure;
         result.totalTokensSpent += inputStructure.tokensSpent;
@@ -793,7 +814,7 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
         if (inputStructure.mode === "structured") result.metrics.inputStructured = 1;
         if (inputStructure.mode === "fallback") result.metrics.inputStructuringFallback = 1;
       }
-      if (productBehaviorEnabled && inputStructure?.action !== "clarify") {
+      if (productBehaviorEnabled && structured?.action !== "clarify") {
         const enforced = await enforceProductBehaviorAnswer({
           query,
           draft: result.finalAnswer,

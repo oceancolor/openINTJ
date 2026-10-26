@@ -60,6 +60,9 @@ interface ParsedThought {
 
 const parseLlmThought = (text: string): ParsedThought => {
   const trimmed = text.trim();
+  if (!trimmed) {
+    return { thought: "", isFinal: false, parseError: "模型返回空内容" };
+  }
   // 1) 先看是否有 FINAL
   const finalMatch = trimmed.match(/FINAL\s*:\s*([\s\S]+)$/im);
   const thoughtMatch = trimmed.match(/Thought\s*:\s*([\s\S]+?)(?=\n\s*(?:Action|FINAL)\s*:|$)/i);
@@ -67,6 +70,9 @@ const parseLlmThought = (text: string): ParsedThought => {
 
   if (finalMatch) {
     const finalAnswer = finalMatch[1]!.trim();
+    if (!finalAnswer) {
+      return { thought, isFinal: false, parseError: "模型返回空内容" };
+    }
     if (/(?:^|\n)\s*(?:Thought|Action|Action-Input|FINAL)\s*:/i.test(finalAnswer)) {
       return {
         thought,
@@ -148,6 +154,13 @@ const buildSystemPrompt = (baseSystemPrompt: string, tools: ToolDescriptor[]): s
 };
 
 const stopConditionKey = (cond: ReactStopCondition): string => cond.kind;
+
+/** 策略拒绝、工具不存在：继续 ReAct，让模型换工具。真正的执行崩溃仍 failFast。 */
+export const isRecoverableToolError = (error: string | undefined): boolean =>
+  Boolean(
+    error &&
+      /未启用|白名单|工具未注册|unknown tool|not in (the )?allowlist/i.test(error),
+  );
 
 const checkDuplicate = (trajectory: TrajectoryEntry[], threshold: number): boolean => {
   const actions: Array<{ tool: string; key: string }> = [];
@@ -376,8 +389,13 @@ export class ReactStateMachine {
 
       // ============================================================
       // failFast 检查
+      // 白名单/未启用/未注册是可恢复观察：模型应改用其它工具（例如 write_file 写 SVG）。
       // ============================================================
-      if (!toolResult.success && this.hasStop("failFast")) {
+      if (
+        !toolResult.success &&
+        this.hasStop("failFast") &&
+        !isRecoverableToolError(toolResult.error)
+      ) {
         status = "fail_fast";
         failedTool = {
           tool: toolResult.toolName,
@@ -461,6 +479,13 @@ export class ReactStateMachine {
     opts.signal?.throwIfAborted();
     const parsed = parseLlmThought(llmText);
     const answer = (parsed.finalAnswer ?? parsed.thought).trim();
+    if (!answer) {
+      throw new AgentError({
+        code: ErrorCode.INTERNAL_ERROR,
+        message: "模型返回空内容",
+        retriable: true,
+      });
+    }
 
     await this._hooks.emit(
       "react.afterThought",
@@ -512,7 +537,12 @@ export class ReactStateMachine {
 }
 
 // 导出 helper 供测试使用（不在 public API 中保证稳定性）
-export const __test__ = { parseLlmThought, buildSystemPrompt, checkDuplicate };
+export const __test__ = {
+  parseLlmThought,
+  buildSystemPrompt,
+  checkDuplicate,
+  isRecoverableToolError,
+};
 
 // 占位错误码引用（避免未使用警告）
 void AgentError;

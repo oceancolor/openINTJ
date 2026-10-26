@@ -8,6 +8,7 @@ import {
   IPC,
   MemoryQueryRequestSchema,
   SkillActiveResponseSchema,
+  SkillCatalogResponseSchema,
   SkillDecisionResponseSchema,
   SkillDistillResponseSchema,
   SkillListResponseSchema,
@@ -24,6 +25,10 @@ vi.mock("electron", () => ({
   ipcRenderer: {},
   app: {},
   BrowserWindow: class {},
+  shell: {
+    openPath: vi.fn(async () => ""),
+    showItemInFolder: vi.fn(),
+  },
 }));
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -265,6 +270,61 @@ describe("IPC handler registration", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it("CHAT materializes an SVG cover when the model skips write_file", async () => {
+    const handlers: Handlers = new Map();
+    const root = mkdtempSync(join(tmpdir(), "openintj-cover-"));
+    const workbench = createWorkbenchStore({
+      dbPath: ":memory:",
+      defaultWorkspaceRoot: root,
+    });
+    const conversation = workbench.bootstrap().conversations[0]!;
+    const selectedClient = {
+      chat: vi.fn(async () => "FINAL: 先检查 Python 与 PIL。"),
+      visionChat: vi.fn(async () => "vision"),
+      getStatus: () => ({
+        provider: "hunyuan",
+        model: "hy4-preview",
+        available: true,
+        mode: "live" as const,
+        status: "connected",
+        visionSupported: false,
+      }),
+    };
+    const agent = await assembleDesktopAgent({
+      llmProvider: "mock",
+      workspaceDir: root,
+    });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers), {
+      workbench,
+      modelRegistry: {
+        list: () => [],
+        resolve: vi.fn(async () => selectedClient),
+        test: vi.fn(async () => ({ ok: true, provider: "hunyuan", model: "hy4-preview" })),
+        clear: vi.fn(),
+      },
+    });
+
+    const result = (await handlers.get(IPC.CHAT)?.(
+      {},
+      {
+        query: "请生成一张以「大厂病」为主题的评论文章封面图",
+        conversationId: conversation.id,
+        modelProfileId: "hunyuan-hy4-preview",
+      },
+    )) as { finalAnswer: string };
+
+    const svgPath = join(root, "artifacts", conversation.taskId, "cover.svg");
+    expect(readFileSync(svgPath, "utf8")).toContain("大厂病");
+    expect(result.finalAnswer).toMatch(/已写入工作区：`artifacts\/.+\/cover\.svg`/);
+    expect((result as { artifacts?: Array<{ path: string; kind: string }> }).artifacts?.[0]).toMatchObject({
+      kind: "image",
+    });
+    expect(selectedClient.chat).not.toHaveBeenCalled();
+    await agent.close();
+    workbench.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("STATUS returns 4-plane snapshot", async () => {
     const handlers = new Map<string, (e: unknown, p?: unknown) => unknown>();
     const fakeIpc = {
@@ -494,6 +554,13 @@ describe("IPC handler registration", () => {
       expect(parsed.data.retrievalMode).toBe("hybrid");
       // mock 装配 memory 模式
       expect(parsed.data.persistence?.mode ?? "memory").toBe("memory");
+      expect(parsed.data.skills).toEqual({
+        enabled: false,
+        learning: false,
+        catalogSize: 0,
+        pendingProposals: 0,
+        activeSkills: 0,
+      });
     }
   });
 
@@ -783,6 +850,40 @@ describe("IPC handler registration", () => {
     expect(picked.root).toBe("C:/picked/dir");
   });
 
+  it("WORKSPACE_LIST / READ_BYTES / REVEAL stay inside the sandbox", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ointj-ws-list-"));
+    const handlers: Handlers = new Map();
+    const revealItem = vi.fn(async () => ({ ok: true }));
+    const agent = await assembleDesktopAgent({ llmProvider: "mock", workspaceDir: root });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers), { revealItem });
+    await handlers.get(IPC.WORKSPACE_WRITE)?.({}, { path: "artifacts/t/cover.png", content: "PNG" });
+
+    const listed = (await handlers.get(IPC.WORKSPACE_LIST)?.({}, undefined)) as {
+      entries?: Array<{ path: string }>;
+      error?: string;
+    };
+    expect(listed.entries?.map((entry) => entry.path)).toContain("artifacts/t/cover.png");
+
+    const bytes = (await handlers.get(IPC.WORKSPACE_READ_BYTES)?.(
+      {},
+      { path: "artifacts/t/cover.png" },
+    )) as { mimeType?: string; base64?: string };
+    expect(bytes.mimeType).toBe("image/png");
+    expect(Buffer.from(bytes.base64 ?? "", "base64").toString()).toBe("PNG");
+
+    const revealed = (await handlers.get(IPC.WORKSPACE_REVEAL)?.({}, {})) as { ok?: boolean };
+    expect(revealed.ok).toBe(true);
+    expect(revealItem).toHaveBeenCalledOnce();
+
+    const escaped = (await handlers.get(IPC.WORKSPACE_READ_BYTES)?.(
+      {},
+      { path: "../secret.png" },
+    )) as { error?: string };
+    expect(escaped.error).toBe("workspace_error");
+    await agent.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
   // ---------- 应用配置面 ----------
 
   it("CONFIG_GET / CONFIG_UPDATE 经注入的 ConfigService 往返并落盘", async () => {
@@ -940,6 +1041,15 @@ describe("IPC handler registration", () => {
       const r = (await handlers.get(ch)?.({}, { proposalId: "x" })) as { error?: string };
       expect(r.error).toBe("skills_learning_not_enabled");
     }
+    const catalog = SkillCatalogResponseSchema.safeParse(
+      await handlers.get(IPC.SKILLS_CATALOG)?.({}, undefined),
+    );
+    expect(catalog.success).toBe(true);
+    if (catalog.success) {
+      expect(catalog.data.enabled).toBe(false);
+      expect(catalog.data.total).toBe(0);
+    }
+    await agent.close();
   });
 
   it("注册了所有 skill channel", async () => {
@@ -957,6 +1067,7 @@ describe("IPC handler registration", () => {
     expect(channels).toContain(IPC.SKILLS_REJECT);
     expect(channels).toContain(IPC.SKILLS_REVOKE);
     expect(channels).toContain(IPC.SKILLS_ACTIVE);
+    expect(channels).toContain(IPC.SKILLS_CATALOG);
     reg.unregister();
     await agent.close();
   });
@@ -1014,9 +1125,40 @@ describe("IPC handler registration", () => {
     expect(statusParsed.success).toBe(true);
     if (statusParsed.success) {
       expect(statusParsed.data.skills?.enabled).toBe(true);
+      expect(statusParsed.data.skills?.learning).toBe(true);
+      expect(statusParsed.data.skills?.catalogSize).toBeGreaterThan(0);
       expect(statusParsed.data.skills?.activeSkills).toBeGreaterThan(0);
     }
 
+    await agent.close();
+  });
+
+  it("SKILLS_CATALOG lists authored packs when skills are on and learning is off", async () => {
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock", enableSkills: true });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
+
+    const catalogParsed = SkillCatalogResponseSchema.safeParse(
+      await handlers.get(IPC.SKILLS_CATALOG)?.({}, undefined),
+    );
+    expect(catalogParsed.success).toBe(true);
+    if (catalogParsed.success) {
+      expect(catalogParsed.data.enabled).toBe(true);
+      expect(catalogParsed.data.learning).toBe(false);
+      expect(catalogParsed.data.total).toBeGreaterThan(0);
+      expect(catalogParsed.data.skills.some((s) => s.id === "planning")).toBe(true);
+      expect(catalogParsed.data.skills.every((s) => s.origin === "authored")).toBe(true);
+    }
+
+    const statusParsed = StatusResponseSchema.safeParse(
+      await handlers.get(IPC.STATUS)?.({}, undefined),
+    );
+    expect(statusParsed.success).toBe(true);
+    if (statusParsed.success) {
+      expect(statusParsed.data.skills?.enabled).toBe(true);
+      expect(statusParsed.data.skills?.learning).toBe(false);
+      expect(statusParsed.data.skills?.catalogSize).toBeGreaterThan(0);
+    }
     await agent.close();
   });
 
@@ -1045,6 +1187,9 @@ describe("IPC handler registration", () => {
     expect(channels).toContain(IPC.WORKSPACE_WRITE);
     expect(channels).toContain(IPC.WORKSPACE_INFO);
     expect(channels).toContain(IPC.WORKSPACE_PICK_DIR);
+    expect(channels).toContain(IPC.WORKSPACE_LIST);
+    expect(channels).toContain(IPC.WORKSPACE_READ_BYTES);
+    expect(channels).toContain(IPC.WORKSPACE_REVEAL);
     expect(channels).toContain(IPC.CONFIG_GET);
     expect(channels).toContain(IPC.CONFIG_UPDATE);
     reg.unregister();

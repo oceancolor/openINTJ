@@ -121,6 +121,45 @@ describe("PersistentMemoryStore", () => {
     expect(await s.vectorStore.count()).toBe(0); // in-memory store cleared
   });
 
+  it("re-inits after close when persist sees a closed vector store", async () => {
+    const inner = new InMemoryVectorStore();
+    let ready = false;
+    const vectorStore = {
+      name: "fake-lance",
+      get dimension() {
+        return inner.dimension;
+      },
+      init: async () => {
+        ready = true;
+        await inner.init();
+      },
+      upsert: async (rows: Parameters<InMemoryVectorStore["upsert"]>[0]) => {
+        if (!ready) throw new Error("LanceDBVectorStore not initialized");
+        await inner.upsert(rows);
+      },
+      delete: inner.delete.bind(inner),
+      search: inner.search.bind(inner),
+      scanAll: inner.scanAll.bind(inner),
+      count: inner.count.bind(inner),
+      close: async () => {
+        ready = false;
+        await inner.close();
+      },
+    };
+    const s = new PersistentMemoryStore({
+      vectorStore,
+      metadataStore: new InMemoryMetadataStore(),
+      embedder: new SimpleEmbedder(8),
+      storeConfig: { embeddingDim: 8, maxShortTerm: 3 },
+    });
+    await s.init();
+    await s.close();
+    await s.init();
+    const f = await s.addShortTermAsync("after close");
+    expect(f.content).toBe("after close");
+    expect(await inner.count()).toBe(1);
+  });
+
   it("metadata is preserved through round-trip", async () => {
     const vec = new InMemoryVectorStore();
     const meta = new InMemoryMetadataStore();

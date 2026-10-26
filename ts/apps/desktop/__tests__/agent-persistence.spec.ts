@@ -61,6 +61,8 @@ describe("desktop agent (memory mode default)", () => {
     const a = await assembleDesktopAgent({ llmProvider: "mock" });
     const s = a.status();
     expect(s.persistence.mode).toBe("memory");
+    expect(s.context.max).toBeGreaterThan(0);
+    expect(s.context.ratio).toBeGreaterThanOrEqual(0);
     await a.close();
   });
 

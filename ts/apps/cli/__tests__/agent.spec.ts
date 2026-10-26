@@ -173,10 +173,10 @@ describe("assembleAgent E2E (mock LLM)", () => {
     const blocked = await agent.execution.toolHub.call("read_file", { path: "../../escape.txt" });
     expect(blocked.success).toBe(false);
     expect(blocked.error).toMatch(/越界/);
-    // 命令默认禁用
+    // 命令默认禁用且不出现在工具列表里
     const cmd = await agent.execution.toolHub.call("execute_command", { command: "echo hi" });
     expect(cmd.success).toBe(false);
-    expect(cmd.error).toMatch(/未启用/);
+    expect(cmd.error).toMatch(/未注册|未启用/);
   });
 
   it("治理接进工具执行：黑名单工具被拒 + 审计记 blocked（RFC-004 §8）", async () => {
@@ -221,6 +221,18 @@ describe("assembleAgent E2E (mock LLM)", () => {
     expect(joinPayload?.fulfilled).toBe(3);
   });
 
+  it("injects the next planning goal when the first hop is already known", async () => {
+    const agent = assembleAgent({
+      llmProvider: "mock",
+      maxTaoIterations: 1,
+      inputStructuring: "off",
+    });
+    const result = await agent.run("规划 TypeScript CLI 三阶段迁移方案，并列出每阶段交付物");
+    expect(result.metrics.planAdvice).toBe(1);
+    expect(result.inputStructure?.action).not.toBe("clarify");
+    expect(result.status).toBe("completed");
+  });
+
   it("TaskPool is inert when disabled and orchestrates eligible planning when enabled", async () => {
     const query = "帮我规划一个 TypeScript CLI 迁移方案";
     const disabled = assembleAgent({
@@ -259,12 +271,18 @@ describe("assembleAgent E2E (mock LLM)", () => {
     expect(starts).toBeGreaterThanOrEqual(3);
   });
 
-  it("registers 4 builtin tools via toolHub", () => {
+  it("registers workspace tools and hides execute_command until allowlisted", () => {
     const agent = assembleAgent({ llmProvider: "mock" });
     const names = agent.execution.toolHub.list().map((t) => t.name);
-    expect(names).toEqual(
-      expect.arrayContaining(["read_file", "write_file", "execute_command", "search"]),
-    );
+    expect(names).toEqual(expect.arrayContaining(["read_file", "write_file", "search"]));
+    expect(names).not.toContain("execute_command");
+
+    const enabled = assembleAgent({
+      llmProvider: "mock",
+      enableCommands: true,
+      allowedCommands: ["node"],
+    });
+    expect(enabled.execution.toolHub.list().map((t) => t.name)).toContain("execute_command");
   });
 
   it("governance + memory + execution wired into hooks", async () => {

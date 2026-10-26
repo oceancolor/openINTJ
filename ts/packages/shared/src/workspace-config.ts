@@ -35,3 +35,8 @@ export const resolveWorkspaceConfig = (
     opts.allowedCommands ?? parseCommandList(process.env["OPENINTJ_ALLOWED_COMMANDS"]);
   return { root, enableCommands, allowedCommands };
 };
+
+/** 命令工具只有「显式启用 + 非空白名单」才对模型可见；空名单等于永远失败。 */
+export const isCommandExecutionAvailable = (
+  config: Pick<ResolvedWorkspaceConfig, "enableCommands" | "allowedCommands">,
+): boolean => config.enableCommands && config.allowedCommands.length > 0;

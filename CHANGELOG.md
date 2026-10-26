@@ -4,6 +4,56 @@
 版本号沿用 [SemVer](https://semver.org/lang/zh-CN/) 与
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 
+## [Unreleased]
+
+### Fixed
+
+- **封面/生图不再误走 Hy4 对话**：分类器只分任务类型，不会把请求切到生图模型。封面图、海报、配图
+  现在在进入 Hy4 ReAct 之前识别，改调 TokenHub `hy-image-v3`；未开通或失败则落盘 SVG，不再空耗 180s。
+  TokenHub 402（未开通后付费）会把控制台开通链接写进回复，不再误报「当前对话模型不是生图模型」。
+- **「预览刚才生图的产物」误报 LanceDB / 白块预览**：「预览/展示」不再当生图任务；对话答案不再被
+  `LanceDBVectorStore not initialized` 覆盖。记忆层 close 后自动重连。预览优先打开同目录 PNG，
+  SVG 里的相对 `href` 会跟随真实像素图，不再显示空白方块。
+- **混元 Hy4 60 秒超时**：思考模型生成封面等长推理会超过默认 60s。Hy4/T1 单次请求至少等 180s。
+- **空命令白名单不再中断封面/文件任务**：未启用或白名单为空时不再向模型暴露 `execute_command`；
+  白名单拒绝视为可恢复观察，ReAct 继续改用 `write_file`。封面/海报/图片请求会落盘 SVG。
+- **混元 Hy4 空 content**：思考模型把 token 花在 `reasoning_content` 上时，ReAct 的
+  `maxTokens=1024` 会让 `choices[0].message.content` 为空。Hy4/T1 现在至少申请 8192，截断时再升到
+  16384 重试一次；仍无最终文本才报错。
+- **桌面开发态重启白屏**：`pnpm desktop:dev` 下标题栏「重启」不再 `app.relaunch()`（会丢掉
+  Vite 渲染服务，窗口停在 about:blank）。改为热重装 agent 并刷新当前窗口；Vite URL 加载失败时回退
+  `out/renderer/index.html`。打包版仍走进程级 relaunch。
+- **空答案不再打崩 Ollama 嵌入**：混元返回空 content 视为可重试失败；ReAct 不再把空输出当成
+  FINAL；空白短期记忆跳过写入。避免 `OllamaEmbedder: invalid embedding payload`。
+
+### Changed
+
+- 桌面默认对话模型改为腾讯混元 **Hy4 Preview**（`hy4-preview`）；Hy3 仍可在模型列表中选择。
+  配置 `modelDefaultsVersion` 升到 2。混元 API 密钥可在 Hy3 / Hy4 配置档之间复用。
+
+### Added
+
+- **关闭工作区 / 同时只开一个**：侧栏可关闭当前工作区（归档，不删磁盘文件）。打开新目录会先关掉当前工作区；同一路径再打开会恢复原来的任务和对话。
+- **桌面 Monaco 编辑器**：聊天下方常驻编辑器（目录树 + 标签 + Monaco）。加载工作区后即可点文件查看
+  / 编辑文本（含 SVG）；Ctrl/Cmd+S 保存走 `WORKSPACE_WRITE` 沙箱，与 Agent `write_file` 同源。
+  栅格图仍用只读预览。
+- **工作区预览与目录**：桌面右侧「工作区」页可浏览沙箱文件树，对话里的产物路径可点开；
+  图片/文本在聊天下方预览，左侧「打开工作区目录」调用系统文件管理器。Explorer / Preview
+  组件经 `WorkspaceClient` 注入，后续 IDE 壳可原样复用。
+  「预览刚才的图」不再误走生图；优先打开 `cover.png` 而不是模型生成的 `*_preview.svg` 白块。
+  记忆层 LanceDB 未就绪时自动重连，且不再把 `LanceDBVectorStore not initialized` 当成对话答案。
+- **规划顾问（已知/未知 + 路径评估）**：`@openintj/plane-control` 在 RFC-007 模板 DAG
+  之上标注 goal/target/environment/deliverable 槽位；n≤16 用 Dijkstra 在完成子集格上求
+  最短日程，更大图用模拟退火交叉校验。下一跳本身被未知槽位堵住时，经 RFC-008
+  `clarify`（`plan-unknowns`）追问 1–3 问；否则把【规划】下一轮目标与【已知】【未知】
+  注入执行查询。不改 Planner 模板。CLI / server / desktop `run()` 仅对
+  `planning` / `analysis` 生效；优先做当前已知可执行步骤（未知且旁路已有已知 ready 时
+  代价 +500）。指标 `metrics.planAdvice`。
+- **桌面技能面板**：右侧「技能」页可开关技能系统 / 自学习（设置页同步，自学习隐含开技能）、
+  浏览已装能力包目录、蒸馏/审批/撤销学习提案，状态栏显示包数与待审数。新增
+  `skills.catalog` IPC 与 `event.SKILL_SELECTED` 推送。
+- **对话上下文用量环**：聊天标题栏显示当前上下文占用环形比例（对话估算 + 引擎 budget）。
+
 ## [0.3.1] — 2026-08-24
 
 应用图标改为字面产品名 openINTJ（去掉擅自生成的几何图形）。安装包版本 `0.3.1`。

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const HUNYUAN_DEFAULT_BASE_URL = "https://tokenhub.tencentmaas.com/v1";
-export const HUNYUAN_DEFAULT_MODEL = "hy3";
+export const HUNYUAN_DEFAULT_MODEL = "hy4-preview";
 export const HUNYUAN_DEPRECATED_BASE_URL = "https://api.hunyuan.cloud.tencent.com/v1";
 export const HUNYUAN_DEPRECATED_MODELS = new Set(["hunyuan-turbos-latest", "hy3-preview"]);
 
@@ -10,10 +10,11 @@ export const HunyuanConfigSchema = z.object({
   baseUrl: z.string().url().default(HUNYUAN_DEFAULT_BASE_URL),
   model: z.string().default(HUNYUAN_DEFAULT_MODEL),
   visionModel: z.string().default("hunyuan-vision"),
-  maxTokens: z.number().int().positive().default(2048),
+  /** 单次补全上限。Hy4 思考会占用 reasoning tokens，过小会只返回空 content。 */
+  maxTokens: z.number().int().positive().default(8192),
   temperature: z.number().min(0).max(2).default(0.7),
   topP: z.number().min(0).max(1).default(0.9),
-  /** 单次请求超时（毫秒）。 */
+  /** 单次请求超时（毫秒）。Hy4 思考会再抬到至少 180s。 */
   timeoutMs: z.number().int().positive().default(60_000),
   /**
    * 联网搜索（功能增强）总开关，对应混元 OpenAI 兼容端点的 `enable_enhancement`。
@@ -69,7 +70,7 @@ export const loadHunyuanConfigFromEnv = (
       baseUrl: env["HUNYUAN_BASE_URL"] ?? HUNYUAN_DEFAULT_BASE_URL,
       model: env["HUNYUAN_MODEL"] ?? HUNYUAN_DEFAULT_MODEL,
       visionModel: env["HUNYUAN_VISION_MODEL"] ?? "hunyuan-vision",
-      maxTokens: env["HUNYUAN_MAX_TOKENS"] ? Number.parseInt(env["HUNYUAN_MAX_TOKENS"], 10) : 2048,
+      maxTokens: env["HUNYUAN_MAX_TOKENS"] ? Number.parseInt(env["HUNYUAN_MAX_TOKENS"], 10) : 8192,
       temperature: env["HUNYUAN_TEMPERATURE"] ? Number.parseFloat(env["HUNYUAN_TEMPERATURE"]) : 0.7,
       topP: env["HUNYUAN_TOP_P"] ? Number.parseFloat(env["HUNYUAN_TOP_P"]) : 0.9,
       timeoutMs: env["HUNYUAN_TIMEOUT_MS"]

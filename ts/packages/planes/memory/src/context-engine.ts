@@ -167,6 +167,18 @@ export class ContextEngine {
   get budget(): ContextBudget {
     return this.pipeline.budgetTracker.snapshot;
   }
+
+  /** 上下文窗口占用：对话 + 记忆 + 系统提示，不含 reserved。 */
+  usage(): { used: number; max: number; ratio: number } {
+    const snap = this.budget;
+    const used =
+      snap.systemPromptTokens + snap.conversationTokens + snap.memoryTokens + snap.toolTokens;
+    return {
+      used,
+      max: snap.maxTokens,
+      ratio: this.pipeline.budgetTracker.usageRatio,
+    };
+  }
 }
 
 void (null as unknown as ContextWindowSnapshot);

@@ -25,6 +25,7 @@ import {
   type ModelCredentialSet,
   type ModelProfile,
   type SkillActiveResponse,
+  type SkillCatalogResponse,
   type SkillDecisionResponse,
   type SkillDistillResponse,
   type SkillLearningError,
@@ -36,11 +37,16 @@ import {
   type WorkbenchMessage,
   type WorkbenchTask,
   type WorkbenchWorkspace,
+  type WorkspaceBytesRequest,
+  type WorkspaceBytesResponse,
   type WorkspaceError,
   type WorkspaceInfo,
+  type WorkspaceListResponse,
   type WorkspacePickResponse,
   type WorkspaceReadRequest,
   type WorkspaceReadResponse,
+  type WorkspaceRevealRequest,
+  type WorkspaceRevealResponse,
   type WorkspaceWriteRequest,
   type WorkspaceWriteResponse,
 } from "../shared/ipc-protocol.js";
@@ -51,7 +57,8 @@ const onEvent = (
     | typeof IPC.EVT_REACT
     | typeof IPC.EVT_AUDIT
     | typeof IPC.EVT_UPDATE
-    | typeof IPC.EVT_WORKSPACE,
+    | typeof IPC.EVT_WORKSPACE
+    | typeof IPC.EVT_SKILL,
   cb: (payload: unknown) => void,
 ): (() => void) => {
   const listener = (_evt: unknown, payload: unknown): void => cb(payload);
@@ -134,6 +141,13 @@ const api = {
   skillsActive(): Promise<SkillActiveResponse | SkillLearningError> {
     return ipcRenderer.invoke(IPC.SKILLS_ACTIVE);
   },
+  /** 已装技能目录（作者包 + 已批准学习技能）。技能系统关闭时 total=0。 */
+  skillsCatalog(): Promise<SkillCatalogResponse> {
+    return ipcRenderer.invoke(IPC.SKILLS_CATALOG);
+  },
+  onSkillEvent(cb: (payload: unknown) => void): () => void {
+    return onEvent(IPC.EVT_SKILL, cb);
+  },
   onTaoEvent(cb: (payload: unknown) => void): () => void {
     return onEvent(IPC.EVT_TAO, cb);
   },
@@ -172,6 +186,20 @@ const api = {
   /** 弹出系统目录选择对话框，选定新的工作区根。 */
   workspacePickDir(): Promise<WorkspacePickResponse> {
     return ipcRenderer.invoke(IPC.WORKSPACE_PICK_DIR);
+  },
+  /** 列出工作区文件树（沙箱内、有深度/数量上限）。 */
+  workspaceList(): Promise<WorkspaceListResponse | WorkspaceError> {
+    return ipcRenderer.invoke(IPC.WORKSPACE_LIST);
+  },
+  /** 读取工作区二进制文件（预览图片用 base64）。 */
+  workspaceReadBytes(
+    req: WorkspaceBytesRequest,
+  ): Promise<WorkspaceBytesResponse | WorkspaceError> {
+    return ipcRenderer.invoke(IPC.WORKSPACE_READ_BYTES, req);
+  },
+  /** 在系统文件管理器中打开工作区根或定位某个文件。 */
+  workspaceReveal(req?: WorkspaceRevealRequest): Promise<WorkspaceRevealResponse | WorkspaceError> {
+    return ipcRenderer.invoke(IPC.WORKSPACE_REVEAL, req ?? {});
   },
   /** 订阅工作区文件变更事件（fs.watch）。 */
   onWorkspaceEvent(cb: (payload: unknown) => void): () => void {
@@ -218,6 +246,9 @@ const api = {
     rootPath: string;
   }): Promise<WorkbenchWorkspace> {
     return ipcRenderer.invoke(IPC.WORKBENCH_WORKSPACE_CREATE, req);
+  },
+  closeWorkbenchWorkspace(req: { id: string }): Promise<WorkbenchWorkspace> {
+    return ipcRenderer.invoke(IPC.WORKBENCH_WORKSPACE_CLOSE, req);
   },
   createWorkbenchTask(req: {
     parentId: string;

@@ -27,6 +27,7 @@ import {
   detectTaskType,
   getShaderForTask,
   inputClarificationFromPreflight,
+  inputClarificationFromQuestions,
   inputClarificationResult,
   resolveInputStructuringConfig,
   structureUserInput,
@@ -41,7 +42,7 @@ import {
   resolveLlmClientSync,
   resolveModelRuntime,
 } from "@openintj/model-runtime";
-import { ControlPlane } from "@openintj/plane-control";
+import { ControlPlane, resolvePlanAdviceForRun } from "@openintj/plane-control";
 import {
   Executor,
   ToolHub,
@@ -63,6 +64,7 @@ import {
   resolveProductBehaviorEnabled,
   resolveSearchEvidenceStatus,
   resolveSelfConsistency,
+  isCommandExecutionAvailable,
   resolveWorkspaceConfig,
   selectConsistentAnswer,
 } from "@openintj/shared";
@@ -209,7 +211,8 @@ const buildAgentCore = (
 
   const toolHub = new ToolHub({ hooks, gate: createToolCallGate(governance) });
   const handlers = opts.toolHandlers ?? {};
-  const wsTools = createWorkspaceTools(resolveWorkspaceConfig(opts, process.cwd()));
+  const wsConfig = resolveWorkspaceConfig(opts, process.cwd());
+  const wsTools = createWorkspaceTools(wsConfig);
   const defaultSearch = (params: Record<string, unknown>) => ({
     note: "[mock search]",
     query: params["query"],
@@ -227,6 +230,9 @@ const buildAgentCore = (
     executeCommand: handlers.executeCommand ?? wsTools.executeCommand,
     search: handlers.search ?? defaultSearchHandler,
   });
+  if (!handlers.executeCommand && !isCommandExecutionAvailable(wsConfig)) {
+    toolHub.unregister("execute_command");
+  }
   const execution = new Executor({ toolHub, hooks, registerBuiltins: false });
 
   const react = new ReactStateMachine({
@@ -434,6 +440,21 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
       route = decideRoute(cls);
     }
     const routedTaskType = cls?.label ?? detectTaskType(executionQuery);
+    let structured = inputStructure;
+    let workQuery = executionQuery;
+    if (!preflight && structured?.action !== "clarify") {
+      const decision = resolvePlanAdviceForRun(core.control, {
+        query,
+        executionQuery: workQuery,
+        taskType: routedTaskType,
+        ...(structured?.structure ? { structure: structured.structure } : {}),
+      });
+      if (decision.kind === "clarify") {
+        structured = inputClarificationFromQuestions(query, decision.questions, "plan-unknowns");
+      } else if (decision.kind === "proceed") {
+        workQuery = decision.executionQuery;
+      }
+    }
     const taoOpts = (traceId?: string, signal: AbortSignal | undefined = runOpts.signal) => ({
       taskType: routedTaskType,
       ...(route?.single || (!cls && routedTaskType === TaskType.QUICK_RESPONSE)
@@ -446,8 +467,8 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
       ...(runOpts.llm ? { llm: runOpts.llm } : {}),
     });
     let result: InputStructuredTaoResult;
-    if (inputStructure?.action === "clarify") {
-      result = inputClarificationResult(inputStructure);
+    if (structured?.action === "clarify") {
+      result = inputClarificationResult(structured);
     } else if (preflight) {
       const taskType = detectTaskType(query);
       result = {
@@ -477,17 +498,17 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
       // Explicit TaskPool wins for eligible complex tasks; self-consistency remains
       // the fallback for all other tasks.
       if (orchestrationMode === "taskpool" && core.taskPool && cls) {
-        const { plan } = core.control.processInput(executionQuery, cls.label);
+        const { plan } = core.control.processInput(workQuery, cls.label);
         const graph = planGraphToTaskGraph(plan);
         const poolResult = await core.taskPool.submitRun(graph, async (node, ctx) => {
           const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
           return core.runTao(stepQuery, taoOpts(ctx.traceId, ctx.signal));
         });
-        result = synthesizeTaskPoolAnswer(poolResult, executionQuery);
+        result = synthesizeTaskPoolAnswer(poolResult, workQuery);
       } else if (orchestrationMode === "self-consistency" && core.selfConsistency) {
         const { fulfilled } = await forkJoin(
           Array.from({ length: core.selfConsistency.samples }, (_, i) => i),
-          (i) => core.runTao(executionQuery, taoOpts(`${randomUUID()}-sc${i}`)),
+          (i) => core.runTao(workQuery, taoOpts(`${randomUUID()}-sc${i}`)),
           {
             hooks: core.hooks,
             group: "self-consistency",
@@ -499,9 +520,10 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
         );
         result = selectConsistentAnswer(fulfilled, core.selfConsistency.strategy) ?? fulfilled[0]!;
       } else {
-        result = await core.runTao(executionQuery, taoOpts());
+        result = await core.runTao(workQuery, taoOpts());
       }
     }
+    if (workQuery !== executionQuery) result.metrics.planAdvice = 1;
     if (inputStructure?.action === "proceed") {
       result.inputStructure = inputStructure;
       result.totalTokensSpent += inputStructure.tokensSpent;
@@ -510,7 +532,7 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => (
       if (inputStructure.mode === "structured") result.metrics.inputStructured = 1;
       if (inputStructure.mode === "fallback") result.metrics.inputStructuringFallback = 1;
     }
-    if (core.productBehaviorEnabled && inputStructure?.action !== "clarify") {
+    if (core.productBehaviorEnabled && structured?.action !== "clarify") {
       const enforced = await enforceProductBehaviorAnswer({
         query,
         draft: result.finalAnswer,

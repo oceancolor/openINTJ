@@ -53,6 +53,27 @@ describe("OllamaEmbedder", () => {
     await expect(e.embed("x")).rejects.toThrow(/dimension mismatch/);
   });
 
+  it("rejects empty prompts without calling the API", async () => {
+    const e = new OllamaEmbedder({ dimension: 768 });
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await expect(e.embed("   ")).rejects.toThrow(/empty prompt/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("accepts /api/embed embeddings[] payload", async () => {
+    const e = new OllamaEmbedder({ model: "nomic-embed-text" });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      mockFetch({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({ embeddings: [new Array(768).fill(0.1)] }),
+      }),
+    );
+    const v = await e.embed("hello");
+    expect(v).toHaveLength(768);
+  });
+
   it("throws on non-200 response", async () => {
     const e = new OllamaEmbedder();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(

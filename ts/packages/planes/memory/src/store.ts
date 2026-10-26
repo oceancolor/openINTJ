@@ -32,6 +32,22 @@ export interface AddOptions {
   summaries?: Record<number, string>;
 }
 
+const blankFragment = (
+  content: string,
+  opts: AddOptions,
+  importance: number,
+  memoryType: MemoryType,
+): MemoryFragment =>
+  MemoryFragmentSchema.parse({
+    content,
+    embedding: opts.embedding ? [...opts.embedding] : [],
+    importance: opts.importance ?? importance,
+    taskTags: opts.taskTags ? [...opts.taskTags] : [],
+    metadata: opts.metadata ?? {},
+    summaries: opts.summaries ?? {},
+    memoryType,
+  });
+
 export interface MemoryStoreOpts {
   /** 嵌入提供方；不提供则用 SimpleEmbedder(config.embeddingDim)。 */
   embedder?: EmbeddingProvider;
@@ -81,6 +97,9 @@ export class MemoryStore {
   // ---------- 同步 API（要求 embedder 同步或 opts.embedding 提供） ----------
 
   addShortTerm(content: string, opts: AddOptions = {}): MemoryFragment {
+    if (!content.trim() && opts.embedding === undefined) {
+      return blankFragment(content, opts, 0.5, "short_term");
+    }
     const fragment = this.makeFragmentSync(content, opts, 0.5, "short_term");
     this.pushShortTerm(fragment);
     this.emitWrite(fragment, "add");
@@ -104,6 +123,9 @@ export class MemoryStore {
   // ---------- 异步 API（任何 embedder 都可用） ----------
 
   async addShortTermAsync(content: string, opts: AddOptions = {}): Promise<MemoryFragment> {
+    if (!content.trim() && opts.embedding === undefined) {
+      return blankFragment(content, opts, 0.5, "short_term");
+    }
     const fragment = await this.makeFragmentAsync(content, opts, 0.5, "short_term");
     this.pushShortTerm(fragment);
     this.emitWrite(fragment, "add");

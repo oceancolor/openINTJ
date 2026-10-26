@@ -153,7 +153,7 @@ export const summarizeLlmEnv = (
   const hunyuan = {
     hasKey: Boolean(env["HUNYUAN_API_KEY"]?.trim()),
     baseUrl: env["HUNYUAN_BASE_URL"] ?? "https://tokenhub.tencentmaas.com/v1",
-    model: env["HUNYUAN_MODEL"] ?? "hy3",
+    model: env["HUNYUAN_MODEL"] ?? "hy4-preview",
     search: isTruthy(env["HUNYUAN_ENABLE_SEARCH"]) || isTruthy(env["HUNYUAN_FORCE_SEARCH"]),
   };
   const ollama = {

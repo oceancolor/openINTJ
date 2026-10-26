@@ -23,7 +23,7 @@
 
 ### 计划来源
 
-仅 **ControlPlane 模板 DAG**（`Planner` + `GoalParser`），经 `planGraphToTaskGraph()` 适配。不允许 LLM 动态生成 DAG（后续 RFC）。
+仅 **ControlPlane 模板 DAG**（`Planner` + `GoalParser`），经 `planGraphToTaskGraph()` 适配。不允许 LLM 动态生成 DAG（后续 RFC）。规划顾问（已知/未知槽位、Dijkstra / 模拟退火日程、下一轮目标）只分析既有模板图，不改写步骤集合。
 
 ### 并行边界
 

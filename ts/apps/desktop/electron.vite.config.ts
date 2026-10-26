@@ -53,5 +53,13 @@ export default defineConfig({
         "@": resolve(__dirname, "src/renderer"),
       },
     },
+    optimizeDeps: {
+      include: ["monaco-editor"],
+    },
+    server: {
+      fs: {
+        allow: [resolve(__dirname)],
+      },
+    },
   },
 });

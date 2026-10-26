@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import type {
   WorkbenchConversation,
   WorkbenchMessage,
@@ -34,6 +34,7 @@ interface WorkspaceRow {
   data_dir: string | null;
   created_at: number;
   updated_at: number;
+  closed_at: number | null;
 }
 interface TaskRow {
   id: string;
@@ -115,6 +116,7 @@ export interface WorkbenchStore {
     conversations: WorkbenchConversation[];
   };
   createWorkspace(input: { name: string; rootPath: string; dataDir?: string }): WorkbenchWorkspace;
+  closeWorkspace(id: string): WorkbenchWorkspace;
   createTask(input: { workspaceId: string; title: string }): WorkbenchTask;
   updateTask(
     id: string,
@@ -162,7 +164,8 @@ export const createWorkbenchStore = (opts: {
   db.exec(`
     CREATE TABLE IF NOT EXISTS workspaces (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, root_path TEXT NOT NULL,
-      data_dir TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      data_dir TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+      closed_at INTEGER
     );
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id),
@@ -184,7 +187,7 @@ export const createWorkbenchStore = (opts: {
     );
     CREATE INDEX IF NOT EXISTS idx_messages_conversation
       ON messages(conversation_id, created_at ASC);
-    PRAGMA user_version = 2;
+    PRAGMA user_version = 3;
   `);
   const messageColumns = new Set(
     (
@@ -199,7 +202,17 @@ export const createWorkbenchStore = (opts: {
   if (!messageColumns.has("input_structure_json")) {
     db.exec("ALTER TABLE messages ADD COLUMN input_structure_json TEXT");
   }
-  db.pragma("user_version = 2");
+  const workspaceColumns = new Set(
+    (
+      db.prepare("PRAGMA table_info(workspaces)").all() as Array<{
+        name: string;
+      }>
+    ).map((column) => column.name),
+  );
+  if (!workspaceColumns.has("closed_at")) {
+    db.exec("ALTER TABLE workspaces ADD COLUMN closed_at INTEGER");
+  }
+  db.pragma("user_version = 3");
   db.prepare("UPDATE conversations SET model_profile_id=? WHERE model_profile_id='auto'").run(
     DEFAULT_DESKTOP_MODEL_PROFILE_ID,
   );
@@ -250,33 +263,109 @@ export const createWorkbenchStore = (opts: {
     return conversation(row);
   };
 
+  const closeOthers = (keepId?: string): void => {
+    const timestamp = now();
+    if (keepId) {
+      db.prepare(
+        "UPDATE workspaces SET closed_at=?, updated_at=? WHERE closed_at IS NULL AND id != ?",
+      ).run(timestamp, timestamp, keepId);
+      return;
+    }
+    db.prepare("UPDATE workspaces SET closed_at=?, updated_at=? WHERE closed_at IS NULL").run(
+      timestamp,
+      timestamp,
+    );
+  };
+
+  const ensureSingleOpen = (): void => {
+    const open = db
+      .prepare("SELECT id FROM workspaces WHERE closed_at IS NULL ORDER BY updated_at DESC")
+      .all() as Array<{ id: string }>;
+    if (open.length <= 1) return;
+    closeOthers(open[0]?.id);
+  };
+
+  const listOpenSnapshot = (): {
+    workspaces: WorkbenchWorkspace[];
+    tasks: WorkbenchTask[];
+    conversations: WorkbenchConversation[];
+  } => {
+    ensureSingleOpen();
+    const workspaces = (
+      db
+        .prepare("SELECT * FROM workspaces WHERE closed_at IS NULL ORDER BY updated_at DESC")
+        .all() as WorkspaceRow[]
+    ).map(workspace);
+    const openIds = workspaces.map((item) => item.id);
+    if (openIds.length === 0) {
+      return { workspaces: [], tasks: [], conversations: [] };
+    }
+    const placeholders = openIds.map(() => "?").join(",");
+    const tasks = (
+      db
+        .prepare(
+          `SELECT * FROM tasks WHERE workspace_id IN (${placeholders}) ORDER BY updated_at DESC`,
+        )
+        .all(...openIds) as TaskRow[]
+    ).map(task);
+    const conversations = (
+      db
+        .prepare(
+          `SELECT c.* FROM conversations c
+           JOIN tasks t ON t.id = c.task_id
+           WHERE t.workspace_id IN (${placeholders})
+           ORDER BY c.updated_at DESC`,
+        )
+        .all(...openIds) as ConversationRow[]
+    ).map(conversation);
+    return { workspaces, tasks, conversations };
+  };
+
   return {
     bootstrap() {
-      return {
-        workspaces: (
-          db.prepare("SELECT * FROM workspaces ORDER BY updated_at DESC").all() as WorkspaceRow[]
-        ).map(workspace),
-        tasks: (db.prepare("SELECT * FROM tasks ORDER BY updated_at DESC").all() as TaskRow[]).map(
-          task,
-        ),
-        conversations: (
-          db
-            .prepare("SELECT * FROM conversations ORDER BY updated_at DESC")
-            .all() as ConversationRow[]
-        ).map(conversation),
-      };
+      return db.transaction(() => listOpenSnapshot())();
     },
     createWorkspace(input) {
-      mkdirSync(input.rootPath, { recursive: true });
+      const rootPath = resolve(input.rootPath);
+      mkdirSync(rootPath, { recursive: true });
+      const apply = db.transaction(() => {
+        const timestamp = now();
+        const existing = db
+          .prepare(
+            "SELECT * FROM workspaces WHERE root_path IN (?, ?) ORDER BY updated_at DESC LIMIT 1",
+          )
+          .get(rootPath, input.rootPath) as WorkspaceRow | undefined;
+        closeOthers(existing?.id);
+        if (existing) {
+          db.prepare(
+            "UPDATE workspaces SET name=?, root_path=?, data_dir=COALESCE(?, data_dir), closed_at=NULL, updated_at=? WHERE id=?",
+          ).run(input.name, rootPath, input.dataDir ?? null, timestamp, existing.id);
+          return getWorkspace(existing.id);
+        }
+        const workspaceId = id();
+        db.prepare(
+          "INSERT INTO workspaces(id,name,root_path,data_dir,created_at,updated_at,closed_at) VALUES(?,?,?,?,?,?,NULL)",
+        ).run(workspaceId, input.name, rootPath, input.dataDir ?? null, timestamp, timestamp);
+        return getWorkspace(workspaceId);
+      });
+      return apply();
+    },
+    closeWorkspace(workspaceId) {
+      getWorkspace(workspaceId);
       const timestamp = now();
-      const workspaceId = id();
-      db.prepare(
-        "INSERT INTO workspaces(id,name,root_path,data_dir,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-      ).run(workspaceId, input.name, input.rootPath, input.dataDir ?? null, timestamp, timestamp);
+      db.prepare("UPDATE workspaces SET closed_at=?, updated_at=? WHERE id=?").run(
+        timestamp,
+        timestamp,
+        workspaceId,
+      );
       return getWorkspace(workspaceId);
     },
     createTask(input) {
-      getWorkspace(input.workspaceId);
+      const row = db.prepare("SELECT * FROM workspaces WHERE id=?").get(input.workspaceId) as
+        | WorkspaceRow
+        | undefined;
+      if (!row) throw new Error(`workspace not found: ${input.workspaceId}`);
+      if (row.closed_at != null) throw new Error(`workspace is closed: ${input.workspaceId}`);
       const timestamp = now();
       const taskId = id();
       db.prepare(

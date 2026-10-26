@@ -75,6 +75,25 @@ export const StatusBar: React.FC<{ status: StatusSnapshot | undefined }> = ({ st
           </span>
         </span>
       ) : null}
+      {status.skills ? (
+        <span className={status.skills.enabled ? "text-gray-400" : "text-gray-600"}>
+          技能:{" "}
+          <span
+            className={
+              status.skills.pendingProposals > 0
+                ? "text-yellow-300"
+                : status.skills.enabled
+                  ? "text-gray-300"
+                  : "text-gray-600"
+            }
+          >
+            {status.skills.enabled
+              ? `${status.skills.catalogSize} 包${status.skills.learning ? " · 自学习" : ""}`
+              : "off"}
+            {status.skills.pendingProposals > 0 ? ` / ${status.skills.pendingProposals} 待审` : ""}
+          </span>
+        </span>
+      ) : null}
       <span className="ml-auto">工具: {status.tools.join(", ")}</span>
     </div>
   );

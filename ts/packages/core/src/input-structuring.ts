@@ -362,14 +362,21 @@ export const inputClarificationResult = (
 export const inputClarificationFromPreflight = (
   input: string,
   question: string,
+): Extract<InputStructureResult, { action: "clarify" }> =>
+  inputClarificationFromQuestions(input, [question], "material-clarification");
+
+export const inputClarificationFromQuestions = (
+  input: string,
+  questions: string[],
+  reason: string,
 ): Extract<InputStructureResult, { action: "clarify" }> => ({
   action: "clarify",
   mode: "clarification",
   executionInput: "",
   structure: fallbackStructure(input),
   ambiguityScore: 1,
-  questions: [question],
+  questions: questions.slice(0, 3),
   tokensSpent: 0,
   durationMs: 0,
-  reason: "material-clarification",
+  reason,
 });

@@ -12,40 +12,59 @@ export const TaskSidebar: React.FC<{
   activeWorkspaceId?: string | undefined;
   activeTaskId?: string | undefined;
   activeConversationId?: string | undefined;
-  onSelectWorkspace: (id: string) => void;
   onCreateWorkspace: () => void;
+  onCloseWorkspace: () => void;
   onSelectTask: (id: string) => void;
   onSelectConversation: (id: string) => void;
   onCreateTask: () => void;
   onCreateConversation: () => void;
   onRenameTask: (task: WorkbenchTask) => void;
   onArchiveTask: (task: WorkbenchTask) => void;
-}> = (props) => (
+  onOpenWorkspaceDir?: (() => void) | undefined;
+}> = (props) => {
+  const current = props.workspaces.find((workspace) => workspace.id === props.activeWorkspaceId);
+  return (
   <aside className="h-full min-h-0 bg-[#11111b] border-r border-gray-800 flex flex-col text-xs">
     <div className="shrink-0 p-3 border-b border-gray-800">
       <div className="flex justify-between text-gray-400 mb-1">
         <span>工作区</span>
-        <button type="button" onClick={props.onCreateWorkspace} className="hover:text-gray-200">
-          + 添加
+      </div>
+      <div className="truncate text-gray-200 mb-2" title={current?.rootPath}>
+        {current?.name ?? "未打开工作区"}
+      </div>
+      <div className="flex gap-1">
+        <button
+          type="button"
+          className="flex-1 px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-200"
+          onClick={props.onCreateWorkspace}
+        >
+          打开工作区
+        </button>
+        <button
+          type="button"
+          className="flex-1 px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-200 disabled:opacity-40"
+          disabled={!props.activeWorkspaceId}
+          onClick={props.onCloseWorkspace}
+        >
+          关闭工作区
         </button>
       </div>
-      <select
-        className="w-full bg-gray-800 text-gray-200 rounded px-2 py-1"
-        value={props.activeWorkspaceId ?? ""}
-        onChange={(event) => props.onSelectWorkspace(event.target.value)}
-      >
-        {props.workspaces.map((workspace) => (
-          <option key={workspace.id} value={workspace.id}>
-            {workspace.name}
-          </option>
-        ))}
-      </select>
+      {props.onOpenWorkspaceDir && props.activeWorkspaceId ? (
+        <button
+          type="button"
+          className="mt-2 w-full px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-200"
+          onClick={props.onOpenWorkspaceDir}
+        >
+          打开工作区目录
+        </button>
+      ) : null}
     </div>
     <div className="shrink-0 p-2 flex items-center justify-between">
       <span className="text-gray-400">任务</span>
       <button
         type="button"
-        className="px-2 py-0.5 rounded bg-purple-800 hover:bg-purple-700"
+        className="px-2 py-0.5 rounded bg-purple-800 hover:bg-purple-700 disabled:opacity-40"
+        disabled={!props.activeWorkspaceId}
         onClick={props.onCreateTask}
       >
         + 任务
@@ -117,4 +136,5 @@ export const TaskSidebar: React.FC<{
         ))}
     </div>
   </aside>
-);
+  );
+};

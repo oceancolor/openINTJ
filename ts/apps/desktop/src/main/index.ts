@@ -15,6 +15,7 @@ import { BrowserWindow, app, dialog, safeStorage } from "electron";
 import {
   type AppConfig,
   DEFAULT_DESKTOP_MODEL_PROFILE_ID,
+  MODEL_DEFAULTS_VERSION,
   type ModelProvider,
 } from "../shared/ipc-protocol.js";
 import { type DesktopAgent, assembleDesktopAgent } from "./agent.js";
@@ -22,6 +23,11 @@ import { type ConfigService, createConfigService } from "./config-store.js";
 import { createCredentialStore } from "./credential-store.js";
 import { type IpcDeps, type IpcRegistration, registerIpcHandlers } from "./ipc-handlers.js";
 import { createModelRegistry } from "./model-registry.js";
+import {
+  keepDevWindowOnRestart,
+  resolveRendererLoad,
+  shouldFallbackToRendererFile,
+} from "./renderer-boot.js";
 import { type AutoUpdaterHandle, initAutoUpdater } from "./updater.js";
 import { type WorkbenchStore, createWorkbenchStore } from "./workbench-store.js";
 
@@ -102,7 +108,37 @@ const resolveDesktopPaths = (savedConfig: AppConfig): { dataDir: string; workspa
   return { dataDir, workspaceDir };
 };
 
-const assembleFromSavedConfig = async (savedConfig: AppConfig): Promise<DesktopAgent> => {
+const isOllamaEmbedUnavailable = (error: unknown): boolean => {
+  if (!error || typeof error !== "object") return false;
+  const code = "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
+  const provider =
+    "provider" in error ? String((error as { provider?: unknown }).provider ?? "") : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    provider === "ollama" &&
+    (code === "MODEL_PROVIDER_UNAVAILABLE" ||
+      code === "MODEL_NOT_INSTALLED" ||
+      /Embed provider 'ollama'/i.test(message))
+  );
+};
+
+const isEmbeddingFingerprintBlock = (error: unknown): boolean => {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code?: unknown }).code ?? "")
+      : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    code === "EMBEDDING_FINGERPRINT_MISSING" ||
+    code === "EMBEDDING_FINGERPRINT_MISMATCH" ||
+    /EMBEDDING_FINGERPRINT_/i.test(message)
+  );
+};
+
+const assembleFromSavedConfig = async (
+  savedConfig: AppConfig,
+  extras: { persistMemory?: boolean } = {},
+): Promise<DesktopAgent> => {
   applySavedLlmEnv(savedConfig);
   const { dataDir, workspaceDir } = resolveDesktopPaths(savedConfig);
   const llmProvider =
@@ -120,6 +156,7 @@ const assembleFromSavedConfig = async (savedConfig: AppConfig): Promise<DesktopA
     ...(embedProvider ? { embedProvider } : {}),
     dataDir,
     workspaceDir,
+    ...(extras.persistMemory ? { persistenceMode: "memory" } : {}),
     ...(savedConfig.retrievalMode ? { retrievalMode: savedConfig.retrievalMode } : {}),
     ...(savedConfig.enableCommands !== undefined
       ? { enableCommands: savedConfig.enableCommands }
@@ -147,6 +184,61 @@ const assembleFromSavedConfig = async (savedConfig: AppConfig): Promise<DesktopA
   });
 };
 
+/** 本机 Ollama 未开时不要让窗口起不来。不改磁盘配置；指纹冲突则本轮改内存库。 */
+const assembleFromSavedConfigWithFallback = async (
+  savedConfig: AppConfig,
+): Promise<DesktopAgent> => {
+  const withAutoEmbed = (persistMemory: boolean): Promise<DesktopAgent> => {
+    delete process.env["EMBED_PROVIDER"];
+    delete process.env["EMBEDDING_PROVIDER"];
+    return assembleFromSavedConfig(
+      { ...savedConfig, embedProvider: "auto" },
+      persistMemory ? { persistMemory: true } : {},
+    );
+  };
+  try {
+    return await assembleFromSavedConfig(savedConfig);
+  } catch (error) {
+    if (isOllamaEmbedUnavailable(error)) {
+      console.warn(
+        "[OpenINTJ desktop] Ollama embedding unavailable; falling back to auto/simple. Start Ollama or switch Embed in Settings.",
+      );
+      try {
+        return await withAutoEmbed(false);
+      } catch (inner) {
+        if (!isEmbeddingFingerprintBlock(inner)) throw inner;
+        console.warn(
+          "[OpenINTJ desktop] disk memory store fingerprint blocks simple embed; opening with in-memory store.",
+        );
+        return withAutoEmbed(true);
+      }
+    }
+    if (isEmbeddingFingerprintBlock(error)) {
+      console.warn(
+        "[OpenINTJ desktop] embedding fingerprint blocked persistence; opening with in-memory store.",
+      );
+      return withAutoEmbed(true);
+    }
+    throw error;
+  }
+};
+
+const rendererFile = (): string => path.join(__dirname, "../renderer/index.html");
+
+const loadRenderer = (win: BrowserWindow): void => {
+  const target = resolveRendererLoad({
+    rendererUrl: process.env["ELECTRON_RENDERER_URL"],
+    rendererFile: rendererFile(),
+  });
+  if (target.kind === "url") {
+    console.log(`[OpenINTJ desktop] loading renderer ${target.url}`);
+    void win.loadURL(target.url);
+    return;
+  }
+  console.log(`[OpenINTJ desktop] loading renderer file ${target.file}`);
+  void win.loadFile(target.file);
+};
+
 const createWindow = (): BrowserWindow => {
   const iconPath = path.join(__dirname, "../../resources/icon.png");
   const win = new BrowserWindow({
@@ -154,6 +246,8 @@ const createWindow = (): BrowserWindow => {
     height: 900,
     minWidth: 900,
     minHeight: 600,
+    title: "OpenINTJ",
+    backgroundColor: "#1e1e2e",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     show: false,
     ...(existsSync(iconPath) ? { icon: iconPath } : {}),
@@ -167,12 +261,25 @@ const createWindow = (): BrowserWindow => {
   });
 
   win.once("ready-to-show", () => win.show());
-
-  if (process.env["ELECTRON_RENDERER_URL"]) {
-    void win.loadURL(process.env["ELECTRON_RENDERER_URL"]);
-  } else {
-    void win.loadFile(path.join(__dirname, "../renderer/index.html"));
-  }
+  win.webContents.on(
+    "did-fail-load",
+    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      console.error(
+        `[OpenINTJ desktop] renderer failed to load (${errorCode}): ${errorDescription} url=${validatedURL}`,
+      );
+      if (
+        shouldFallbackToRendererFile({
+          isMainFrame,
+          errorCode,
+          failedUrl: validatedURL,
+        }) &&
+        existsSync(rendererFile())
+      ) {
+        console.warn("[OpenINTJ desktop] falling back to built renderer/index.html");
+        void win.loadFile(rendererFile());
+      }
+    },
+  );
 
   return win;
 };
@@ -188,19 +295,21 @@ void app
     );
     const modelRegistry = createModelRegistry({ config, credentials });
     let savedConfig = config.get();
-    if (savedConfig.modelDefaultsVersion !== 1) {
+    const needsDefaultBump = savedConfig.modelDefaultsVersion !== MODEL_DEFAULTS_VERSION;
+    if (needsDefaultBump) {
       savedConfig = config.update({
         activeModelProfileId: DEFAULT_DESKTOP_MODEL_PROFILE_ID,
         llmProvider: "hunyuan",
-        modelDefaultsVersion: 1,
+        modelDefaultsVersion: MODEL_DEFAULTS_VERSION,
       });
     }
     if (!process.env["HUNYUAN_API_KEY"]) {
       try {
-        const storedKey = credentials.get(DEFAULT_DESKTOP_MODEL_PROFILE_ID);
+        const storedKey =
+          credentials.get(DEFAULT_DESKTOP_MODEL_PROFILE_ID) ?? credentials.get("hunyuan-hy3");
         if (storedKey) process.env["HUNYUAN_API_KEY"] = storedKey;
       } catch (error) {
-        console.warn("[OpenINTJ desktop] 无法读取安全存储中的 Hy3 凭据", error);
+        console.warn("[OpenINTJ desktop] 无法读取安全存储中的混元凭据", error);
       }
     }
 
@@ -213,6 +322,15 @@ void app
       defaultWorkspaceRoot: workspaceDir,
       ...(process.env["OPENINTJ_DESKTOP_NO_PERSIST"] === "1" ? {} : { defaultDataDir: dataDir }),
     });
+    if (needsDefaultBump) {
+      for (const conversation of workbench.bootstrap().conversations) {
+        if (conversation.modelProfileId === "hunyuan-hy3") {
+          workbench.updateConversation(conversation.id, {
+            modelProfileId: DEFAULT_DESKTOP_MODEL_PROFILE_ID,
+          });
+        }
+      }
+    }
     const llmProvider =
       (process.env["LLM_PROVIDER"] as ModelProvider | undefined) ??
       savedConfig.llmProvider ??
@@ -222,9 +340,9 @@ void app
       process.env["HUNYUAN_MODEL"] === "hunyuan-turbos-latest"
     ) {
       console.warn(
-        `[OpenINTJ desktop] 已将旧 Hunyuan 模型 '${process.env["HUNYUAN_MODEL"]}' 迁移为 'hy3'`,
+        `[OpenINTJ desktop] 已将旧 Hunyuan 模型 '${process.env["HUNYUAN_MODEL"]}' 迁移为 'hy4-preview'`,
       );
-      process.env["HUNYUAN_MODEL"] = "hy3";
+      process.env["HUNYUAN_MODEL"] = "hy4-preview";
     }
     const envSummary = summarizeLlmEnv();
     console.log(`[OpenINTJ desktop] llm: ${envSummary.summary}`);
@@ -235,7 +353,7 @@ void app
       );
     }
 
-    agent = await assembleFromSavedConfig(savedConfig);
+    agent = await assembleFromSavedConfigWithFallback(savedConfig);
     console.log(
       `[OpenINTJ desktop] persistence=${agent.persistenceInfo.mode} dataDir=${agent.persistenceInfo.dataDir ?? "<in-memory>"}`,
     );
@@ -252,22 +370,12 @@ void app
       config?.update({ workspaceDir: picked });
       return picked;
     };
-    const restart = async (): Promise<void> => {
-      ipcRegistration?.unregister();
-      await closeApplicationState();
-      app.relaunch();
-      app.quit();
-    };
     const reloadAgent = async (): Promise<void> => {
       if (!config) throw new Error("config_unavailable");
-      const next = await assembleFromSavedConfig(config.get());
       ipcRegistration?.unregister();
       const previous = agent;
-      agent = next;
+      agent = undefined;
       agentClosePromise = undefined;
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        ipcRegistration = registerIpcHandlers(agent, mainWindow.webContents, undefined, ipcDeps);
-      }
       if (previous) {
         try {
           await previous.close();
@@ -275,9 +383,33 @@ void app
           console.warn("[OpenINTJ desktop] previous agent close failed during reload", error);
         }
       }
+      const next = await assembleFromSavedConfigWithFallback(config.get());
+      agent = next;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        ipcRegistration = registerIpcHandlers(agent, mainWindow.webContents, undefined, ipcDeps);
+      }
       console.log(
         `[OpenINTJ desktop] agent reloaded persistence=${agent.persistenceInfo.mode} dataDir=${agent.persistenceInfo.dataDir ?? "<in-memory>"}`,
       );
+    };
+    const restart = async (): Promise<void> => {
+      if (
+        keepDevWindowOnRestart({
+          isPackaged: app.isPackaged,
+          rendererUrl: process.env["ELECTRON_RENDERER_URL"],
+        })
+      ) {
+        // electron-vite 把 Vite URL 注进当前进程。relaunch 会丢掉开发服务器，窗口变白屏。
+        await reloadAgent();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.reloadIgnoringCache();
+        }
+        return;
+      }
+      ipcRegistration?.unregister();
+      await closeApplicationState();
+      app.relaunch();
+      app.quit();
     };
     const ipcDeps: IpcDeps = {
       pickDirectory,
@@ -295,6 +427,7 @@ void app
       ...(config ? { config } : {}),
     };
     ipcRegistration = registerIpcHandlers(agent, mainWindow.webContents, undefined, ipcDeps);
+    loadRenderer(mainWindow);
 
     // #6 自动更新：仅打包后真正生效；dev/测试为 no-op。
     updater = initAutoUpdater({ getWebContents: () => mainWindow?.webContents });
@@ -306,6 +439,7 @@ void app
           ipcRegistration?.unregister();
           ipcRegistration = registerIpcHandlers(agent, mainWindow.webContents, undefined, ipcDeps);
         }
+        loadRenderer(mainWindow);
       }
     });
   })

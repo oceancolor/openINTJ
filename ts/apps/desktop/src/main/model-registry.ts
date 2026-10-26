@@ -56,7 +56,11 @@ export const createModelRegistry = (opts: {
     const env = { ...baseEnv };
     const names = ENV_BY_PROVIDER[profile.provider];
     if (names) {
-      const credential = opts.credentials.get(profile.id);
+      const credential =
+        opts.credentials.get(profile.id) ??
+        (profile.provider === "hunyuan"
+          ? (opts.credentials.get("hunyuan-hy4-preview") ?? opts.credentials.get("hunyuan-hy3"))
+          : undefined);
       if (credential && names.key) env[names.key] = credential;
       if (profile.baseUrl) env[names.baseUrl] = profile.baseUrl;
       if (profile.model && profile.model !== "auto") env[names.model] = profile.model;

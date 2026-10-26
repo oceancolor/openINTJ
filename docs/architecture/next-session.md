@@ -1,7 +1,22 @@
 # 下一次工作交接备忘
 
 > 本文件用于工作中断 / 多日离开后快速恢复上下文。
-> 上次更新：2026-10-22（代码仓只保留 GitHub：https://github.com/oceancolor/openINTJ ，已去掉 git.woa.com 远程）。
+> 上次更新：2026-10-25（规划顾问：已知/未知标注、Dijkstra/SA 路径、下一轮目标；代码仓 GitHub：https://github.com/oceancolor/openINTJ）。
+
+---
+
+## 🎯 当前工作队列（2026-10-25 更新）
+
+1. ~~**规划顾问**~~：✅ 2026-10-25。`knowledge.ts` / `path-search.ts` / `plan-advisor.ts`
+   标注可知与不可知槽位；Dijkstra（n≤16 子集格）与模拟退火评估拓扑日程；下一跳被堵则
+   RFC-008 `plan-unknowns` 追问，否则注入【规划】下一轮目标。三端 `run()` 已接线。
+   **不改 Planner 模板**（Python parity）。Product Behavior「部署到生产。」仍由 preflight
+   先于顾问处理。
+2. **签名正式发布**：未签名 `v0.3.0` / `v0.3.1` 已发出。真正签名仍阻塞于仓库 secrets。
+3. **后续独立 RFC**（不混入本轮）：动态 LLM 拆图、默认多 Agent、streaming /
+   更完整 OpenAI-compatible provider、embedding migration。
+
+2026-10-25 未做 / 需人工：把 Win/mac 签名 secrets 配进 GitHub；`RUN_SEARCH_LIVE=1` 真机跑批。
 
 ---
 
@@ -201,6 +216,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 - **CI / 本地统一用 turbo `--concurrency=1`**：跨 OS 一致策略，规避 tsc V8 OOM 与 esbuild 抢占
 - **不要**直接编辑 `packages/*/dist/*` —— 改 `src` 后必须 `pnpm exec turbo run build` 才能让消费方测试看到
 - **不要**碰 Python 仓库根目录代码（已冻结为 `v2.0-python-reference`，仅作语义参考）
+- **不要**用规划顾问改写 Planner 模板 DAG（RFC-007：分析既有图，不 LLM 拆图；Phase 3.6 parity 仍锁 GoalParser/Planner）
 - **LanceDB 关键陷阱**（这一轮踩的坑）：
   - 必须用 `apache-arrow` 显式声明 `FixedSizeList<Float32, N>` schema，**不能**靠 seed-row 推断（旧版 fallback 已保留）
   - SQL `where` 子句中 camelCase 字段必须 **双引号包裹**（`"fragmentId" = '...'`）

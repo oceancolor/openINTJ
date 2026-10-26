@@ -8,6 +8,15 @@ import {
   type ToolHandler,
 } from "@openintj/core";
 import {
+  extractAssistantText,
+  extractReasoningText,
+  HUNYUAN_REASONING_MAX_TOKEN_RETRY,
+  isTruncatedReasoning,
+  resolveHunyuanMaxTokens,
+  resolveHunyuanTimeoutMs,
+} from "./extract.js";
+import { generateHunyuanImage, type HunyuanImageResult } from "./image.js";
+import {
   type HunyuanConfig,
   HunyuanConfigSchema,
   loadHunyuanConfigFromEnv,
@@ -38,11 +47,16 @@ export interface HunyuanSearchResult {
 }
 
 interface OpenAIChatResponse {
-  choices: Array<{
-    message: { role: string; content: string };
+  choices?: Array<{
+    message?: { role?: string; content?: unknown; reasoning_content?: string | null };
     finish_reason?: string;
   }>;
-  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    completion_tokens_details?: { reasoning_tokens?: number };
+  };
   /** 混元扩展：开启 search_info 且命中搜索时返回的来源列表。 */
   search_info?: { search_results?: HunyuanSearchSource[] };
 }
@@ -56,6 +70,22 @@ const isAuthError = (status: number, body: unknown): boolean => {
   const err = (body as OpenAIErrorEnvelope | undefined)?.error;
   const code = err?.code ?? "";
   return /unauthor|invalid_api_key|forbidden/i.test(code);
+};
+
+const missingContentMessage = (opts: {
+  model: string;
+  finishReason: string | undefined;
+  reasoningChars: number;
+}): string => {
+  const truncated =
+    opts.finishReason === "length" || opts.finishReason === "max_tokens";
+  if (opts.reasoningChars > 0 && truncated) {
+    return `Hunyuan ${opts.model} 思考过程占满了输出额度（finish_reason=${opts.finishReason}），未返回最终 content`;
+  }
+  if (opts.reasoningChars > 0) {
+    return `Hunyuan ${opts.model} 只返回了 reasoning_content，没有最终 content（finish_reason=${opts.finishReason ?? "unknown"}）`;
+  }
+  return "Hunyuan response is missing choices[0].message.content";
 };
 
 export class HunyuanClient implements LlmClient {
@@ -99,6 +129,20 @@ export class HunyuanClient implements LlmClient {
     this.lastSearchSources = [];
     const answer = await this.request(messages, opts, this.config.model, "force");
     return { query, answer, sources: [...this.lastSearchSources], mode: "live" };
+  }
+
+  async generateImage(
+    prompt: string,
+    opts: { size?: string; signal?: AbortSignal } = {},
+  ): Promise<HunyuanImageResult> {
+    this.assertAvailable();
+    return generateHunyuanImage({
+      apiKey: this.config.apiKey,
+      baseUrl: this.config.baseUrl,
+      prompt,
+      ...(opts.size ? { size: opts.size } : {}),
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
   }
 
   async visionChat(
@@ -161,12 +205,20 @@ export class HunyuanClient implements LlmClient {
     const searchEnabled = forced || this.config.enableEnhancement || this.config.forceSearch;
     const forceSearch = forced || this.config.forceSearch;
     const wantSearchInfo = forced || (searchEnabled && this.config.searchInfo);
-    const body = {
-      model: opts.model ?? model,
+    const modelName = opts.model ?? model;
+    const maxTokens = resolveHunyuanMaxTokens({
+      model: modelName,
+      requested: opts.maxTokens ?? this.config.maxTokens,
+    });
+    const timeoutMs = resolveHunyuanTimeoutMs({
+      model: modelName,
+      requested: this.config.timeoutMs,
+    });
+    const bodyBase = {
+      model: modelName,
       messages: this.toOpenAIMessages(messages),
       temperature: opts.temperature ?? this.config.temperature,
       top_p: opts.topP ?? this.config.topP,
-      max_tokens: opts.maxTokens ?? this.config.maxTokens,
       stream: false,
       ...(searchEnabled ? { enable_enhancement: true } : {}),
       ...(forceSearch ? { force_search_enhancement: true } : {}),
@@ -174,77 +226,119 @@ export class HunyuanClient implements LlmClient {
       ...(wantSearchInfo && this.config.citation ? { citation: true } : {}),
     };
 
-    const controller = new AbortController();
     let timedOut = false;
-    const abortFromCaller = (): void => controller.abort(opts.signal?.reason);
-    if (opts.signal?.aborted) abortFromCaller();
-    else opts.signal?.addEventListener("abort", abortFromCaller, { once: true });
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, this.config.timeoutMs);
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.config.apiKey}`,
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      const text = await res.text();
-      let parsed: OpenAIChatResponse | OpenAIErrorEnvelope | null = null;
+    const postOnce = async (tokenBudget: number): Promise<{
+      content: string;
+      reasoning: string;
+      finishReason: string | undefined;
+      data: OpenAIChatResponse;
+    }> => {
+      const controller = new AbortController();
+      const abortFromCaller = (): void => controller.abort(opts.signal?.reason);
+      if (opts.signal?.aborted) abortFromCaller();
+      else opts.signal?.addEventListener("abort", abortFromCaller, { once: true });
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort(new Error(`timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
       try {
-        parsed = JSON.parse(text);
-      } catch {
-        parsed = null;
-      }
-      if (!res.ok) {
-        this.connected = false;
-        const err = (parsed as OpenAIErrorEnvelope | undefined)?.error;
-        this.lastError = err?.message ?? text.slice(0, 200);
-        this.lastErrorCode = err?.code ?? `HTTP_${res.status}`;
-        this.lastErrorType = err?.type ?? "http_error";
-        if (isAuthError(res.status, parsed)) {
-          this.authFailed = true;
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.config.apiKey}`,
+          },
+          body: JSON.stringify({ ...bodyBase, max_tokens: tokenBudget }),
+          signal: controller.signal,
+        });
+        const text = await res.text();
+        let parsed: OpenAIChatResponse | OpenAIErrorEnvelope | null = null;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          parsed = null;
+        }
+        if (!res.ok) {
+          this.connected = false;
+          const err = (parsed as OpenAIErrorEnvelope | undefined)?.error;
+          this.lastError = err?.message ?? text.slice(0, 200);
+          this.lastErrorCode = err?.code ?? `HTTP_${res.status}`;
+          this.lastErrorType = err?.type ?? "http_error";
+          if (isAuthError(res.status, parsed)) {
+            this.authFailed = true;
+            throw new AgentError({
+              code: ErrorCode.CONFIG_MISSING,
+              message: `Hunyuan 鉴权失败: ${this.lastError}`,
+              retriable: false,
+              details: {
+                provider: "hunyuan",
+                status: res.status,
+                errorCode: this.lastErrorCode,
+              },
+            });
+          }
           throw new AgentError({
-            code: ErrorCode.CONFIG_MISSING,
-            message: `Hunyuan 鉴权失败: ${this.lastError}`,
-            retriable: false,
-            details: {
-              provider: "hunyuan",
-              status: res.status,
-              errorCode: this.lastErrorCode,
-            },
+            code: ErrorCode.INTERNAL_ERROR,
+            message: `Hunyuan 调用失败 (${res.status}): ${this.lastError}`,
+            retriable: res.status >= 500 || res.status === 429,
           });
         }
-        throw new AgentError({
-          code: ErrorCode.INTERNAL_ERROR,
-          message: `Hunyuan 调用失败 (${res.status}): ${this.lastError}`,
-          retriable: res.status >= 500,
-        });
+        const data = (parsed ?? {}) as OpenAIChatResponse;
+        const message = data.choices?.[0]?.message;
+        return {
+          content: extractAssistantText(message),
+          reasoning: extractReasoningText(message),
+          finishReason: data.choices?.[0]?.finish_reason,
+          data,
+        };
+      } finally {
+        clearTimeout(timer);
+        opts.signal?.removeEventListener("abort", abortFromCaller);
       }
-      const data = parsed as OpenAIChatResponse;
-      const content = data?.choices?.[0]?.message?.content;
-      if (typeof content !== "string") {
+    };
+
+    try {
+      let result = await postOnce(maxTokens);
+      if (
+        isTruncatedReasoning({
+          content: result.content,
+          finishReason: result.finishReason,
+          reasoningContent: result.reasoning,
+        }) &&
+        maxTokens < HUNYUAN_REASONING_MAX_TOKEN_RETRY
+      ) {
+        console.warn(
+          `[hunyuan] ${modelName} truncated after reasoning (finish_reason=${result.finishReason}); retrying with max_tokens=${HUNYUAN_REASONING_MAX_TOKEN_RETRY}`,
+        );
+        result = await postOnce(HUNYUAN_REASONING_MAX_TOKEN_RETRY);
+      }
+      if (!result.content.trim()) {
         this.connected = false;
-        this.lastError = "Hunyuan response is missing choices[0].message.content";
         this.lastErrorCode = "INVALID_RESPONSE";
         this.lastErrorType = "invalid_response";
+        this.lastError = missingContentMessage({
+          model: modelName,
+          finishReason: result.finishReason,
+          reasoningChars: result.reasoning.length,
+        });
         throw new AgentError({
           code: ErrorCode.INTERNAL_ERROR,
           message: this.lastError,
           retriable: true,
-          details: { provider: "hunyuan" },
+          details: {
+            provider: "hunyuan",
+            model: modelName,
+            finishReason: result.finishReason,
+            hasReasoning: result.reasoning.length > 0,
+          },
         });
       }
-      this.lastSearchSources = data.search_info?.search_results ?? [];
+      this.lastSearchSources = result.data.search_info?.search_results ?? [];
       this.connected = true;
       this.lastError = "";
       this.lastErrorCode = "";
       this.lastErrorType = "";
-      return content;
+      return result.content;
     } catch (err) {
       if (err instanceof AgentError) throw err;
       if (opts.signal?.aborted) {
@@ -268,9 +362,6 @@ export class HunyuanClient implements LlmClient {
         retriable: true,
         cause: err,
       });
-    } finally {
-      clearTimeout(timer);
-      opts.signal?.removeEventListener("abort", abortFromCaller);
     }
   }
 

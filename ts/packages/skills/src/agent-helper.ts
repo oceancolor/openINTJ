@@ -7,11 +7,13 @@ import {
   renderSkillPrompt,
   skillToolAllowlist,
 } from "./selector.js";
-import type { SkillSource } from "./types.js";
+import type { Skill, SkillSource } from "./types.js";
 
 export interface SkillContext {
   /** 可用技能数量（>0 才值得注入）。 */
   readonly size: number;
+  /** 当前注册表快照（作者包 + 已批准学习技能），供 UI 目录。 */
+  list(): Skill[];
   /**
    * 为一次 query 选择并渲染技能块（空串 = 未命中）。
    * 按 (taskType, query) 记忆化，避免同一轮多次 ReAct 迭代重复 embed。
@@ -85,6 +87,9 @@ export async function assembleSkillContext(
   return {
     get size(): number {
       return registry.size;
+    },
+    list(): Skill[] {
+      return registry.list();
     },
     async reload(): Promise<void> {
       await registry.load();

@@ -75,8 +75,11 @@ user query
        ├─ clarify → 返回任务理解卡，不进入 classifier/Tao
        └─ proceed → executionInput
   → classifier / decideRoute
+  → plan advisor（仅 planning/analysis：已知/未知槽位 + Dijkstra/SA 下一跳）
+       ├─ 下一跳被未知堵住 → clarify（reason=plan-unknowns，1–3 问）
+       └─ 否则注入【规划】下一轮目标后进入执行
   → Tao / TaskPool / self-consistency
-  → enforceProductBehaviorAnswer（仍用 originalInput）
+  → enforceProductBehaviorAnswer（仍用 originalInput；clarify 轮跳过）
   → memory 记录 originalInput
 ```
 

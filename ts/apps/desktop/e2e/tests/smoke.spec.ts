@@ -14,7 +14,8 @@ test.describe("desktop smoke (mock provider, no persist)", () => {
   test("boots and renders header", async ({ page }) => {
     await expect(page.locator("header").first()).toContainText("OpenINTJ");
     await expect(page.locator("header").first()).toContainText("v0.3.1");
-    await expect(page.getByLabel("对话模型")).toHaveValue("hunyuan-hy3");
+    await expect(page.getByLabel("对话模型")).toHaveValue("hunyuan-hy4-preview");
+    await expect(page.getByTestId("context-usage-ring")).toBeVisible();
   });
 
   test("keeps transcript and composer together left of dashboard", async ({ page }) => {
@@ -102,6 +103,24 @@ test.describe("desktop smoke (mock provider, no persist)", () => {
     await expect(trajectoryTab).toContainText(/\d+/, { timeout: 10_000 });
   });
 
+  test("workspace editor stays open with a file tree", async ({ page }) => {
+    const editor = page.getByTestId("workspace-editor");
+    await expect(editor).toBeVisible();
+    await expect(editor.getByTestId("workspace-explorer")).toBeVisible();
+    await expect(editor.getByText("从左侧目录树选择文件以查看或编辑。")).toBeVisible();
+    await expect(editor.getByRole("button", { name: "打开目录" })).toBeVisible();
+  });
+
+  test("workspace tab exposes explorer and open-directory action", async ({ page }) => {
+    await page.getByRole("button", { name: "工作区" }).click();
+    await expect(page.getByTestId("workspace-workbench")).toBeVisible();
+    await expect(page.getByRole("button", { name: "打开目录" }).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "打开工作区目录" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "打开工作区", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "关闭工作区" })).toBeVisible();
+    await expect(page.getByTestId("workspace-editor")).toBeVisible();
+  });
+
   test("dormant tab shows '未启用' when not enabled", async ({ page }) => {
     await page.getByRole("button", { name: /Dormant/ }).click();
     await expect(page.getByText(/Dormant 子系统未启用/)).toBeVisible({ timeout: 5_000 });
@@ -110,5 +129,13 @@ test.describe("desktop smoke (mock provider, no persist)", () => {
     // 切回推理轨迹仍然可用
     await page.getByRole("button", { name: /推理轨迹/ }).click();
     await expect(page.getByText(/Dormant 子系统未启用/)).not.toBeVisible();
+  });
+
+  test("skills tab exposes enable controls when not enabled", async ({ page }) => {
+    await page.getByRole("button", { name: /^技能/ }).click();
+    const panel = page.getByTestId("skill-panel");
+    await expect(panel.getByText(/技能系统未启用/)).toBeVisible({ timeout: 5_000 });
+    await expect(panel.getByRole("button", { name: "启用技能系统" })).toBeVisible();
+    await expect(panel.getByRole("button", { name: "开启自学习" })).toBeVisible();
   });
 });

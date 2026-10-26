@@ -22,6 +22,7 @@ import {
   detectTaskType,
   getShaderForTask,
   inputClarificationFromPreflight,
+  inputClarificationFromQuestions,
   inputClarificationResult,
   resolveInputStructuringConfig,
   structureUserInput,
@@ -40,7 +41,7 @@ import {
   resolveModelRuntime,
   validateEmbeddingFingerprintForDataDir,
 } from "@openintj/model-runtime";
-import { ControlPlane } from "@openintj/plane-control";
+import { ControlPlane, resolvePlanAdviceForRun } from "@openintj/plane-control";
 import {
   Executor,
   ToolHub,
@@ -71,6 +72,7 @@ import {
   resolveProductBehaviorEnabled,
   resolveSearchEvidenceStatus,
   resolveSelfConsistency,
+  isCommandExecutionAvailable,
   resolveWorkspaceConfig,
   selectConsistentAnswer,
 } from "@openintj/shared";
@@ -111,6 +113,11 @@ import {
   type AttachedOtel,
   attachOtelToHooks,
 } from "@openintj/telemetry-otel";
+import {
+  fulfillImageGenerationTask,
+  requestsImageGeneration,
+  taskIdFromContextTags,
+} from "./image-task.js";
 
 export type LlmProvider = LlmProviderId;
 
@@ -349,6 +356,8 @@ export interface DesktopAgent {
   classifier?: ReinforcingClassifier;
   /** 技能自学习运行时；仅 enableSkillLearning 时存在（供审批 IPC 使用）。 */
   skillLearning?: SkillLearningRuntime;
+  /** 技能注册表上下文；enableSkills 或自学习开启时存在（供目录 IPC）。 */
+  skillContext?: SkillContext;
   persistenceInfo: { mode: PersistenceMode; dataDir?: string };
   retrievalMode: "vector" | "hybrid";
   /** RFC-003 方向 3 蛰伏记忆学习；仅 opts.enableDormant=true 时存在。 */
@@ -391,11 +400,14 @@ export interface DesktopAgent {
       pendingProposals: number;
       persistence?: { adapter: string; dbPath?: string };
     };
-    skills?: {
-      enabled: true;
+    skills: {
+      enabled: boolean;
+      learning: boolean;
+      catalogSize: number;
       pendingProposals: number;
       activeSkills: number;
     };
+    context: { used: number; max: number; ratio: number };
   };
   close(): Promise<void>;
 }
@@ -491,6 +503,18 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
   });
 
   const memory = new MemoryPlane({ hooks });
+  const rememberTurn = async (
+    userText: string,
+    assistantText: string,
+    tags: readonly string[],
+  ): Promise<void> => {
+    try {
+      await memory.recordUserInputAsync(userText, tags);
+      await memory.recordAssistantOutputAsync(assistantText, tags);
+    } catch (error) {
+      console.warn("[OpenINTJ desktop] memory persist failed; continuing without it", error);
+    }
+  };
   Object.defineProperty(memory, "store", {
     value: persistentStore,
     writable: false,
@@ -545,6 +569,9 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     executeCommand: wsTools.executeCommand,
     search: searchHandler,
   });
+  if (!isCommandExecutionAvailable(wsConfig)) {
+    toolHub.unregister("execute_command");
+  }
   const execution = new Executor({ toolHub, hooks, registerBuiltins: false });
 
   const react = new ReactStateMachine({
@@ -563,6 +590,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       DEFAULT_AGENT_SYSTEM_PROMPT,
       `当前工作区根目录是 ${wsConfig.root}。`,
       "当用户要求创建、生成、保存或修改文件时，必须调用 write_file 将完整产物写入工作区；",
+      "生成封面、海报或图片时直接 write_file 写入 SVG，不要调用 python/PIL 或 execute_command。",
       "不得只在回答中展示代码或声称文件已创建。写入后在最终回答中明确列出相对路径。",
     ].join("\n");
   const personaEnabled = resolvePersonaInjection(opts);
@@ -716,6 +744,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     hybridIndex,
     ...(classifier ? { classifier } : {}),
     ...(skillLearning ? { skillLearning } : {}),
+    ...(skillContext ? { skillContext } : {}),
     persistenceInfo: persistence,
     retrievalMode,
     ...(dormant ? { dormant } : {}),
@@ -732,6 +761,46 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
         enabled: productBehaviorEnabled,
       });
       if (dormant) dormant.record(query, "user", { stage: "run.input" });
+      if (requestsImageGeneration(query)) {
+        const image = await fulfillImageGenerationTask({
+          query,
+          workspaceRoot: wsConfig.root,
+          taskId: taskIdFromContextTags(runOpts.contextTags),
+          llm: runOpts.llm ?? llm,
+          ...(runOpts.signal ? { signal: runOpts.signal } : {}),
+        });
+        const result: InputStructuredTaoResult = {
+          traceId: randomUUID(),
+          status: "completed",
+          finalAnswer: image.finalAnswer,
+          iterations: 0,
+          reactTotalSteps: 0,
+          totalTokensSpent: 0,
+          durationMs: 0,
+          trajectory: [
+            {
+              timestamp: Date.now() / 1000,
+              state: { type: "final", answer: image.finalAnswer },
+              durationMs: 0,
+            },
+          ],
+          taskType: TaskType.CODE_GENERATION,
+          shaderMode: getShaderForTask(TaskType.CODE_GENERATION),
+          metrics: image.fallback ? { imageGenerationFallback: 1 } : { imageGenerated: 1 },
+        };
+        await rememberTurn(query, result.finalAnswer, [...(runOpts.contextTags ?? [])]);
+        if (dormant)
+          dormant.record(result.finalAnswer, "agent", {
+            stage: "run.output",
+            iterations: 0,
+          });
+        try {
+          await persistentStore.awaitPendingWrites();
+        } catch (error) {
+          console.warn("[OpenINTJ desktop] memory flush failed; continuing without it", error);
+        }
+        return result;
+      }
       const scopedMemories =
         runOpts.contextTags && runOpts.contextTags.length > 0
           ? memory.store.all.filter((fragment) =>
@@ -768,6 +837,21 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       const routedTaskType = artifactRequest
         ? TaskType.CODE_GENERATION
         : (cls?.label ?? detectTaskType(executionQuery));
+      let structured = inputStructure;
+      let workQuery = executionQuery;
+      if (!preflight && structured?.action !== "clarify" && !artifactRequest) {
+        const decision = resolvePlanAdviceForRun(control, {
+          query,
+          executionQuery: workQuery,
+          taskType: routedTaskType,
+          ...(structured?.structure ? { structure: structured.structure } : {}),
+        });
+        if (decision.kind === "clarify") {
+          structured = inputClarificationFromQuestions(query, decision.questions, "plan-unknowns");
+        } else if (decision.kind === "proceed") {
+          workQuery = decision.executionQuery;
+        }
+      }
       const taoOpts = (traceId?: string, signal: AbortSignal | undefined = runOpts.signal) => ({
         taskType: routedTaskType,
         ...(route?.single || (!cls && routedTaskType === TaskType.QUICK_RESPONSE)
@@ -781,8 +865,8 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       });
       // 先跑（contextProvider 会检索此前已落盘的记忆），再记录本轮 → 避免检索命中当前输入本身。
       let result: InputStructuredTaoResult;
-      if (inputStructure?.action === "clarify") {
-        result = inputClarificationResult(inputStructure);
+      if (structured?.action === "clarify") {
+        result = inputClarificationResult(structured);
       } else if (preflight) {
         const taskType = detectTaskType(query);
         result = {
@@ -810,18 +894,18 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
           Boolean(selfConsistency),
         );
         if (orchestrationMode === "taskpool" && taskPool && cls) {
-          const { plan } = control.processInput(executionQuery, cls.label);
+          const { plan } = control.processInput(workQuery, cls.label);
           const graph = planGraphToTaskGraph(plan);
           const poolResult = await taskPool.submitRun(graph, async (node, ctx) => {
             const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
             return runTao(stepQuery, taoOpts(ctx.traceId, ctx.signal));
           });
-          result = synthesizeTaskPoolAnswer(poolResult, executionQuery);
+          result = synthesizeTaskPoolAnswer(poolResult, workQuery);
         } else if (orchestrationMode === "self-consistency" && selfConsistency) {
           // 方向一/二：并行多采样 + 投票。forkJoin 会发 forkjoin.* 事件 → OTel span/metric。
           const { fulfilled } = await forkJoin(
             Array.from({ length: selfConsistency.samples }, (_, i) => i),
-            (i) => runTao(executionQuery, taoOpts(`${randomUUID()}-sc${i}`)),
+            (i) => runTao(workQuery, taoOpts(`${randomUUID()}-sc${i}`)),
             {
               hooks,
               group: "self-consistency",
@@ -833,9 +917,10 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
           );
           result = selectConsistentAnswer(fulfilled, selfConsistency.strategy) ?? fulfilled[0]!;
         } else {
-          result = await runTao(executionQuery, taoOpts());
+          result = await runTao(workQuery, taoOpts());
         }
       }
+      if (workQuery !== executionQuery) result.metrics.planAdvice = 1;
       if (inputStructure?.action === "proceed") {
         result.inputStructure = inputStructure;
         result.totalTokensSpent += inputStructure.tokensSpent;
@@ -844,7 +929,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
         if (inputStructure.mode === "structured") result.metrics.inputStructured = 1;
         if (inputStructure.mode === "fallback") result.metrics.inputStructuringFallback = 1;
       }
-      if (productBehaviorEnabled && inputStructure?.action !== "clarify") {
+      if (productBehaviorEnabled && structured?.action !== "clarify") {
         const enforced = await enforceProductBehaviorAnswer({
           query,
           draft: result.finalAnswer,
@@ -866,8 +951,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       // 把 search 工具命中的联网来源追加到答案末尾 → 随记忆/dormant 一起入库。
       result.finalAnswer = appendSourcesFooter(result.finalAnswer, result.trajectory);
       const labelTags = [...(cls ? [cls.label] : []), ...(runOpts.contextTags ?? [])];
-      await memory.recordUserInputAsync(query, labelTags);
-      await memory.recordAssistantOutputAsync(result.finalAnswer, labelTags);
+      await rememberTurn(query, result.finalAnswer, labelTags);
       if (classifier && cls) {
         await classifier.reinforce(executionQuery, cls.label, {
           signal: outcomeSignal(result.status),
@@ -895,7 +979,11 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
           stage: "run.output",
           iterations: result.iterations,
         });
-      await persistentStore.awaitPendingWrites();
+      try {
+        await persistentStore.awaitPendingWrites();
+      } catch (error) {
+        console.warn("[OpenINTJ desktop] memory flush failed; continuing without it", error);
+      }
       return result;
     },
     status() {
@@ -933,15 +1021,14 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
               },
             }
           : {}),
-        ...(skillLearning
-          ? {
-              skills: {
-                enabled: true as const,
-                pendingProposals: skillLearning.listProposals("pending").length,
-                activeSkills: skillLearning.listApproved().length,
-              },
-            }
-          : {}),
+        skills: {
+          enabled: Boolean(skillContext),
+          learning: Boolean(skillLearning),
+          catalogSize: skillContext?.size ?? 0,
+          pendingProposals: skillLearning?.listProposals("pending").length ?? 0,
+          activeSkills: skillLearning?.listApproved().length ?? 0,
+        },
+        context: contextEngine.usage(),
       };
     },
     async close() {

@@ -135,6 +135,7 @@ export class LanceDBVectorStore implements VectorStore {
   }
 
   async init(): Promise<void> {
+    if (this.table) return;
     // 通过动态字符串规避 TS 静态解析（peer dep 可能未安装）
     const moduleName = "@lancedb/lancedb";
     const mod = (await import(moduleName).catch((e) => {
@@ -195,21 +196,27 @@ export class LanceDBVectorStore implements VectorStore {
     }
   }
 
-  async upsert(rows: readonly VectorRow[]): Promise<void> {
+  private async requireTable(): Promise<LanceTable> {
+    if (!this.table) await this.init();
     if (!this.table) throw new Error("LanceDBVectorStore not initialized");
+    return this.table;
+  }
+
+  async upsert(rows: readonly VectorRow[]): Promise<void> {
+    const table = await this.requireTable();
     if (rows.length === 0) return;
     const validated = rows.map((r) => VectorRowSchema.parse(r));
     // upsert = delete + insert（LanceDB v0.5+ 支持 mergeInsert，但用 d+i 兼容性更好）
     const ids = validated.map((r) => `'${r.fragmentId.replace(/'/g, "''")}'`).join(",");
-    await this.table.delete(`"fragmentId" IN (${ids})`);
-    await this.table.add([...validated]);
+    await table.delete(`"fragmentId" IN (${ids})`);
+    await table.add([...validated]);
   }
 
   async delete(fragmentIds: readonly string[]): Promise<number> {
-    if (!this.table) throw new Error("LanceDBVectorStore not initialized");
+    const table = await this.requireTable();
     if (fragmentIds.length === 0) return 0;
     const ids = fragmentIds.map((id) => `'${id.replace(/'/g, "''")}'`).join(",");
-    await this.table.delete(`"fragmentId" IN (${ids})`);
+    await table.delete(`"fragmentId" IN (${ids})`);
     return fragmentIds.length; // LanceDB delete 不返回 count，乐观估计
   }
 
@@ -217,7 +224,7 @@ export class LanceDBVectorStore implements VectorStore {
     queryEmbedding: readonly number[],
     opts: VectorSearchOpts,
   ): Promise<VectorSearchResult[]> {
-    if (!this.table) throw new Error("LanceDBVectorStore not initialized");
+    const table = await this.requireTable();
     const filters: string[] = [];
     if (opts.memoryTypes && opts.memoryTypes.length > 0) {
       const list = opts.memoryTypes.map((m) => `'${m}'`).join(",");
@@ -226,7 +233,7 @@ export class LanceDBVectorStore implements VectorStore {
     if (opts.minImportance !== undefined) {
       filters.push(`importance >= ${opts.minImportance}`);
     }
-    const q = this.table.search(queryEmbedding).limit(opts.topK);
+    const q = table.search(queryEmbedding).limit(opts.topK);
     let raw: unknown[];
     if (filters.length > 0) {
       raw = await q.where(filters.join(" AND ")).toArray();
@@ -297,18 +304,18 @@ export class LanceDBVectorStore implements VectorStore {
    */
   async ensureFtsIndex(): Promise<void> {
     if (this._supportsFts !== undefined) return;
-    if (!this.table) throw new Error("LanceDBVectorStore not initialized");
+    const table = await this.requireTable();
     const idxFactory = this.lanceModule?.Index;
     if (
       !idxFactory ||
       typeof idxFactory.fts !== "function" ||
-      typeof this.table.createIndex !== "function"
+      typeof table.createIndex !== "function"
     ) {
       this._supportsFts = false;
       return;
     }
     try {
-      await this.table.createIndex("content", { config: idxFactory.fts() });
+      await table.createIndex("content", { config: idxFactory.fts() });
       this._supportsFts = true;
     } catch (e) {
       const msg = (e as Error).message ?? "";
@@ -325,7 +332,7 @@ export class LanceDBVectorStore implements VectorStore {
   }
 
   async searchText(query: string, opts: VectorSearchOpts): Promise<VectorSearchResult[]> {
-    if (!this.table) throw new Error("LanceDBVectorStore not initialized");
+    const table = await this.requireTable();
     if (this._supportsFts === undefined) await this.ensureFtsIndex();
     if (this._supportsFts === false) return [];
     const filters: string[] = [];
@@ -337,7 +344,7 @@ export class LanceDBVectorStore implements VectorStore {
       filters.push(`importance >= ${opts.minImportance}`);
     }
     try {
-      const q = this.table.search(query, "fts").limit(opts.topK);
+      const q = table.search(query, "fts").limit(opts.topK);
       const raw =
         filters.length > 0 ? await q.where(filters.join(" AND ")).toArray() : await q.toArray();
       return this.toResults(raw, "fts", opts.taskTags);
@@ -352,7 +359,7 @@ export class LanceDBVectorStore implements VectorStore {
   }
 
   async scanAll(): Promise<VectorRow[]> {
-    if (!this.table) throw new Error("LanceDBVectorStore not initialized");
+    await this.requireTable();
     // 简化：用 search([0...], topK=count) 来全扫
     const total = await this.count();
     if (total === 0) return [];
@@ -362,8 +369,8 @@ export class LanceDBVectorStore implements VectorStore {
   }
 
   async count(): Promise<number> {
-    if (!this.table) throw new Error("LanceDBVectorStore not initialized");
-    return this.table.countRows();
+    const table = await this.requireTable();
+    return table.countRows();
   }
 
   async close(): Promise<void> {

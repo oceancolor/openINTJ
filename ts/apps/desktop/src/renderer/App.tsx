@@ -6,6 +6,11 @@ import type {
   WorkbenchWorkspace,
 } from "../shared/ipc-protocol.js";
 import { DEFAULT_DESKTOP_MODEL_PROFILE_ID } from "../shared/ipc-protocol.js";
+import {
+  artifactsFromAnswer,
+  extractWorkspaceArtifactPaths,
+  preferredPreviewPath,
+} from "../shared/workspace-view.js";
 import { type ChatMessage, ChatPanel } from "./components/ChatPanel.js";
 import { DormantPanel } from "./components/DormantPanel.js";
 import { MemoryPanel } from "./components/MemoryPanel.js";
@@ -15,9 +20,17 @@ import { StatusBar, type StatusSnapshot } from "./components/StatusBar.js";
 import { TaskSidebar } from "./components/TaskSidebar.js";
 import { type TrajectoryEntry, TrajectoryPanel } from "./components/TrajectoryPanel.js";
 import { UpdateBanner } from "./components/UpdateBanner.js";
+import {
+  EditorWorkbench,
+  WorkspaceWorkbench,
+  desktopWorkspaceClient,
+} from "./workspace/index.js";
 import "./types.js";
 
-type RightTab = "trajectory" | "memory" | "dormant" | "skills" | "settings";
+type RightTab = "workspace" | "trajectory" | "memory" | "dormant" | "skills" | "settings";
+
+const sameFsPath = (left: string, right: string): boolean =>
+  left.replace(/\\/g, "/").toLowerCase() === right.replace(/\\/g, "/").toLowerCase();
 
 export const App = (): JSX.Element => {
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
@@ -32,6 +45,10 @@ export const App = (): JSX.Element => {
   const [activeWorkspaceId, setActiveWorkspaceId] = React.useState<string>();
   const [activeTaskId, setActiveTaskId] = React.useState<string>();
   const [activeConversationId, setActiveConversationId] = React.useState<string>();
+  const [selectedWorkspacePath, setSelectedWorkspacePath] = React.useState<string>();
+  const [workspaceRoot, setWorkspaceRoot] = React.useState<string>();
+  const [workspaceRefresh, setWorkspaceRefresh] = React.useState(0);
+  const workspaceClient = React.useMemo(() => desktopWorkspaceClient(), []);
 
   const refreshWorkbench = React.useCallback(async (): Promise<void> => {
     const [snapshot, modelProfiles, config] = await Promise.all([
@@ -81,13 +98,24 @@ export const App = (): JSX.Element => {
         })),
       );
       setTrajectory([]);
+      const lastArtifact = preferredPreviewPath(
+        entries.flatMap((entry) => extractWorkspaceArtifactPaths(entry.content)),
+      );
+      if (lastArtifact) setSelectedWorkspacePath(lastArtifact);
     });
   }, [activeConversationId]);
+
+  React.useEffect(() => {
+    void window.openintj.workspaceInfo().then((info) => setWorkspaceRoot(info.root));
+  }, []);
 
   React.useEffect(() => {
     const api = window.openintj;
     if (!api) return;
     const offs: Array<() => void> = [];
+    offs.push(
+      api.onWorkspaceEvent(() => setWorkspaceRefresh((value) => value + 1)),
+    );
     offs.push(
       api.onTaoEvent((p) => {
         const payload = (p ?? {}) as Record<string, unknown> & {
@@ -164,6 +192,19 @@ export const App = (): JSX.Element => {
           ...(res.inputStructure ? { inputStructure: res.inputStructure } : {}),
         },
       ]);
+      if (res.context) {
+        setStatus((current) => (current ? { ...current, context: res.context } : current));
+      }
+      const artifactPath =
+        preferredPreviewPath([
+          ...(res.artifacts ?? []).map((item) => item.path),
+          ...extractWorkspaceArtifactPaths(res.finalAnswer),
+        ]) ?? artifactsFromAnswer(res.finalAnswer)[0]?.path;
+      if (artifactPath) {
+        setSelectedWorkspacePath(artifactPath);
+        setRightTab("workspace");
+        setWorkspaceRefresh((value) => value + 1);
+      }
     } catch (e) {
       setMessages((m) => [
         ...m,
@@ -192,30 +233,46 @@ export const App = (): JSX.Element => {
     void window.openintj.updateConfig({ activeConversationId: conversationId });
   };
 
-  const selectWorkspace = async (workspaceId: string): Promise<void> => {
-    const selected = workspaces.find((workspace) => workspace.id === workspaceId);
-    if (!selected) return;
-    const taskId = tasks.find(
-      (task) => task.workspaceId === workspaceId && task.status !== "archived",
+  const activateWorkspace = async (created: WorkbenchWorkspace): Promise<void> => {
+    const snapshot = await window.openintj.workbenchBootstrap();
+    let taskId = snapshot.tasks.find(
+      (task) => task.workspaceId === created.id && task.status !== "archived",
     )?.id;
-    const conversationId = conversations.find((item) => item.taskId === taskId)?.id;
-    setActiveWorkspaceId(workspaceId);
-    setActiveTaskId(taskId);
-    setActiveConversationId(conversationId);
+    let conversationId = snapshot.conversations.find((item) => item.taskId === taskId)?.id;
+    if (!taskId) {
+      const createdTask = await window.openintj.createWorkbenchTask({
+        parentId: created.id,
+        title: "Inbox",
+      });
+      const createdConversation = await window.openintj.createWorkbenchConversation({
+        parentId: createdTask.id,
+        title: "新对话",
+        modelProfileId: DEFAULT_DESKTOP_MODEL_PROFILE_ID,
+      });
+      taskId = createdTask.id;
+      conversationId = createdConversation.id;
+    }
     await window.openintj.updateConfig({
-      workspaceDir: selected.rootPath,
-      activeWorkspaceId: workspaceId,
+      workspaceDir: created.rootPath,
+      activeWorkspaceId: created.id,
       activeTaskId: taskId,
       activeConversationId: conversationId,
     });
-    if (window.confirm("切换工作区需要重装配 Agent。现在重启 OpenINTJ？")) {
-      await window.openintj.restartApp();
-    }
+    await refreshWorkbench();
+    setSelectedWorkspacePath(undefined);
   };
 
   const createWorkspace = async (): Promise<void> => {
+    if (activeWorkspaceId) {
+      const proceed = window.confirm(
+        "同时只能打开一个工作区。打开新目录会关闭当前工作区（任务和对话会保留，磁盘文件不会删除）。继续？",
+      );
+      if (!proceed) return;
+    }
     const picked = await window.openintj.workspacePickDir();
     if (picked.canceled || !picked.root) return;
+    const current = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
+    if (current && sameFsPath(current.rootPath, picked.root)) return;
     const suggested = picked.root.split(/[\\/]/).filter(Boolean).at(-1) ?? "工作区";
     const name = window.prompt("工作区名称", suggested)?.trim();
     if (!name) return;
@@ -223,30 +280,29 @@ export const App = (): JSX.Element => {
       name,
       rootPath: picked.root,
     });
-    const createdTask = await window.openintj.createWorkbenchTask({
-      parentId: created.id,
-      title: "Inbox",
-    });
-    const createdConversation = await window.openintj.createWorkbenchConversation({
-      parentId: createdTask.id,
-      title: "新对话",
-      modelProfileId: DEFAULT_DESKTOP_MODEL_PROFILE_ID,
-    });
-    setWorkspaces((current) => [created, ...current]);
-    setTasks((current) => [createdTask, ...current]);
-    setConversations((current) => [createdConversation, ...current]);
-    setActiveWorkspaceId(created.id);
-    setActiveTaskId(createdTask.id);
-    setActiveConversationId(createdConversation.id);
-    await window.openintj.updateConfig({
-      workspaceDir: created.rootPath,
-      activeWorkspaceId: created.id,
-      activeTaskId: createdTask.id,
-      activeConversationId: createdConversation.id,
-    });
-    if (window.confirm("新工作区已创建。现在重启并切换？")) {
+    if (!created.id) return;
+    await activateWorkspace(created);
+    if (window.confirm("工作区已切换。现在重启并加载该目录？")) {
       await window.openintj.restartApp();
     }
+  };
+
+  const closeWorkspace = async (): Promise<void> => {
+    if (!activeWorkspaceId) return;
+    const proceed = window.confirm(
+      "关闭当前工作区？任务和对话会保留，磁盘文件不会删除。再次打开同一目录可恢复。",
+    );
+    if (!proceed) return;
+    await window.openintj.closeWorkbenchWorkspace({ id: activeWorkspaceId });
+    setWorkspaces([]);
+    setTasks([]);
+    setConversations([]);
+    setActiveWorkspaceId(undefined);
+    setActiveTaskId(undefined);
+    setActiveConversationId(undefined);
+    setSelectedWorkspacePath(undefined);
+    setMessages([]);
+    await refreshWorkbench();
   };
 
   const createTask = async (): Promise<void> => {
@@ -315,6 +371,7 @@ export const App = (): JSX.Element => {
   const dormantEnabled = status?.dormant?.enabled === true;
   const dormantPending = status?.dormant?.pendingProposals ?? 0;
   const skillsEnabled = status?.skills?.enabled === true;
+  const learningEnabled = status?.skills?.learning === true;
   const skillsPending = status?.skills?.pendingProposals ?? 0;
 
   return (
@@ -342,8 +399,8 @@ export const App = (): JSX.Element => {
           activeWorkspaceId={activeWorkspaceId}
           activeTaskId={activeTaskId}
           activeConversationId={activeConversationId}
-          onSelectWorkspace={(id) => void selectWorkspace(id)}
           onCreateWorkspace={() => void createWorkspace()}
+          onCloseWorkspace={() => void closeWorkspace()}
           onSelectTask={selectTask}
           onSelectConversation={selectConversation}
           onCreateTask={() => void createTask()}
@@ -353,20 +410,51 @@ export const App = (): JSX.Element => {
             if (title) void updateTask(task, { title });
           }}
           onArchiveTask={(task) => void updateTask(task, { status: "archived" })}
+          onOpenWorkspaceDir={() => void workspaceClient.reveal()}
         />
-        <ChatPanel
-          messages={messages}
-          onSend={(t) => void handleSend(t)}
-          pending={pending}
-          profiles={profiles}
-          modelProfileId={
-            conversations.find((conversation) => conversation.id === activeConversationId)
-              ?.modelProfileId
-          }
-          onModelChange={(id) => void changeConversationModel(id)}
-        />
+        <div className="flex flex-col min-h-0 min-w-0">
+          <div className="flex-1 min-h-0">
+            <ChatPanel
+              messages={messages}
+              onSend={(t) => void handleSend(t)}
+              pending={pending}
+              profiles={profiles}
+              modelProfileId={
+                conversations.find((conversation) => conversation.id === activeConversationId)
+                  ?.modelProfileId
+              }
+              onModelChange={(id) => void changeConversationModel(id)}
+              context={status?.context}
+              onOpenWorkspacePath={(path) => {
+                setSelectedWorkspacePath(path);
+              }}
+            />
+          </div>
+          <div className="h-[46%] min-h-[260px] border-t border-gray-800">
+            <EditorWorkbench
+              key={activeWorkspaceId ?? "none"}
+              client={workspaceClient}
+              openPath={selectedWorkspacePath}
+              rootLabel={workspaceRoot}
+              refreshKey={workspaceRefresh}
+              workspaceOpen={Boolean(activeWorkspaceId)}
+              onActivePathChange={setSelectedWorkspacePath}
+            />
+          </div>
+        </div>
         <div className="flex flex-col h-full min-h-0 bg-[#11111b] border-l border-gray-800">
           <div className="shrink-0 flex items-center border-b border-gray-800 text-xs overflow-x-auto whitespace-nowrap">
+            <button
+              type="button"
+              onClick={() => setRightTab("workspace")}
+              className={
+                rightTab === "workspace"
+                  ? "shrink-0 px-3 py-2 text-gray-100 border-b-2 border-purple-500"
+                  : "shrink-0 px-3 py-2 text-gray-500 hover:text-gray-300"
+              }
+            >
+              工作区
+            </button>
             <button
               type="button"
               onClick={() => setRightTab("trajectory")}
@@ -418,7 +506,7 @@ export const App = (): JSX.Element => {
               }
             >
               技能
-              {skillsEnabled && skillsPending > 0 ? (
+              {learningEnabled && skillsPending > 0 ? (
                 <span className="ml-1.5 px-1.5 py-0.5 rounded text-[10px] bg-yellow-700 text-yellow-100">
                   {skillsPending}
                 </span>
@@ -437,14 +525,24 @@ export const App = (): JSX.Element => {
             </button>
           </div>
           <div className="flex-1 min-h-0">
-            {rightTab === "trajectory" ? (
+            {rightTab === "workspace" ? (
+              <WorkspaceWorkbench
+                client={workspaceClient}
+                rootLabel={workspaceRoot}
+                selectedPath={selectedWorkspacePath}
+                onSelectPath={(path) => setSelectedWorkspacePath(path)}
+                showPreview={false}
+                refreshKey={workspaceRefresh}
+                workspaceOpen={Boolean(activeWorkspaceId)}
+              />
+            ) : rightTab === "trajectory" ? (
               <TrajectoryPanel entries={trajectory} />
             ) : rightTab === "memory" ? (
               <MemoryPanel />
             ) : rightTab === "dormant" ? (
               <DormantPanel enabled={dormantEnabled} />
             ) : rightTab === "skills" ? (
-              <SkillPanel enabled={skillsEnabled} />
+              <SkillPanel skillsEnabled={skillsEnabled} learningEnabled={learningEnabled} />
             ) : (
               <SettingsPanel />
             )}

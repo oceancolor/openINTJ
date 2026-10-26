@@ -41,6 +41,19 @@ export const InputStructureSchema = z.object({
 });
 export type InputStructure = z.infer<typeof InputStructureSchema>;
 
+export const ContextUsageSchema = z.object({
+  used: z.number().int().nonnegative(),
+  max: z.number().int().positive(),
+  ratio: z.number().min(0).max(1),
+});
+export type ContextUsage = z.infer<typeof ContextUsageSchema>;
+
+export const WorkspaceArtifactSchema = z.object({
+  path: z.string().min(1),
+  kind: z.enum(["image", "text", "file"]),
+});
+export type WorkspaceArtifact = z.infer<typeof WorkspaceArtifactSchema>;
+
 export const ChatResponseSchema = z.object({
   finalAnswer: z.string(),
   iterations: z.number().int().nonnegative(),
@@ -49,6 +62,8 @@ export const ChatResponseSchema = z.object({
   provider: z.string().optional(),
   model: z.string().optional(),
   inputStructure: InputStructureSchema.optional(),
+  context: ContextUsageSchema.optional(),
+  artifacts: z.array(WorkspaceArtifactSchema).optional(),
 });
 export type ChatResponse = z.infer<typeof ChatResponseSchema>;
 
@@ -194,14 +209,17 @@ export const StatusResponseSchema = z.object({
         .optional(),
     })
     .optional(),
-  /** 技能自学习（Phase 2）：只有 enableSkillLearning 时存在。 */
+  /** 技能系统 / 自学习：始终返回，便于状态栏与技能面板开关。 */
   skills: z
     .object({
-      enabled: z.literal(true),
+      enabled: z.boolean(),
+      learning: z.boolean(),
+      catalogSize: z.number(),
       pendingProposals: z.number(),
       activeSkills: z.number(),
     })
     .optional(),
+  context: ContextUsageSchema.optional(),
 });
 export type StatusResponse = z.infer<typeof StatusResponseSchema>;
 
@@ -299,6 +317,28 @@ export const SkillActiveResponseSchema = z.object({
   skills: z.array(SkillActiveDtoSchema),
 });
 export type SkillActiveResponse = z.infer<typeof SkillActiveResponseSchema>;
+
+/** 已装技能目录（作者 SKILL.md + 已批准学习技能；不含正文）。 */
+export const SkillCatalogDtoSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  source: z.string(),
+  version: z.string(),
+  tools: z.array(z.string()),
+  triggers: z.array(z.string()),
+  taskTypes: z.array(z.string()),
+  origin: z.enum(["authored", "learned"]),
+});
+export type SkillCatalogDto = z.infer<typeof SkillCatalogDtoSchema>;
+
+export const SkillCatalogResponseSchema = z.object({
+  enabled: z.boolean(),
+  learning: z.boolean(),
+  total: z.number(),
+  skills: z.array(SkillCatalogDtoSchema),
+});
+export type SkillCatalogResponse = z.infer<typeof SkillCatalogResponseSchema>;
 
 /** 技能自学习未启用 / 请求非法时的统一错误 shape。 */
 export const SkillLearningErrorSchema = z.object({
@@ -438,6 +478,43 @@ export const WorkspaceInfoSchema = z.object({
 });
 export type WorkspaceInfo = z.infer<typeof WorkspaceInfoSchema>;
 
+export const WorkspaceListResponseSchema = z.object({
+  root: z.string(),
+  entries: z.array(
+    z.object({
+      path: z.string(),
+      name: z.string(),
+      type: z.enum(["file", "dir"]),
+      bytes: z.number().int().nonnegative().optional(),
+    }),
+  ),
+});
+export type WorkspaceListResponse = z.infer<typeof WorkspaceListResponseSchema>;
+
+export const WorkspaceBytesRequestSchema = z.object({
+  path: z.string().min(1),
+});
+export type WorkspaceBytesRequest = z.infer<typeof WorkspaceBytesRequestSchema>;
+
+export const WorkspaceBytesResponseSchema = z.object({
+  path: z.string(),
+  mimeType: z.string(),
+  base64: z.string(),
+  bytes: z.number().int().nonnegative(),
+});
+export type WorkspaceBytesResponse = z.infer<typeof WorkspaceBytesResponseSchema>;
+
+export const WorkspaceRevealRequestSchema = z.object({
+  path: z.string().optional(),
+});
+export type WorkspaceRevealRequest = z.infer<typeof WorkspaceRevealRequestSchema>;
+
+export const WorkspaceRevealResponseSchema = z.object({
+  ok: z.boolean(),
+  error: z.string().optional(),
+});
+export type WorkspaceRevealResponse = z.infer<typeof WorkspaceRevealResponseSchema>;
+
 /** pickWorkspaceDir ??????????????*/
 export const WorkspacePickResponseSchema = z.object({
   canceled: z.boolean(),
@@ -483,9 +560,16 @@ export const ModelProfileSchema = z.object({
 });
 export type ModelProfile = z.infer<typeof ModelProfileSchema>;
 
-export const DEFAULT_DESKTOP_MODEL_PROFILE_ID = "hunyuan-hy3";
+export const DEFAULT_DESKTOP_MODEL_PROFILE_ID = "hunyuan-hy4-preview";
+export const MODEL_DEFAULTS_VERSION = 2;
 
 export const DEFAULT_MODEL_PROFILES: readonly ModelProfile[] = [
+  {
+    id: "hunyuan-hy4-preview",
+    name: "腾讯混元 Hy4 Preview",
+    provider: "hunyuan",
+    model: "hy4-preview",
+  },
   { id: "hunyuan-hy3", name: "腾讯混元 Hy3", provider: "hunyuan", model: "hy3" },
   { id: "auto", name: "自动选择", provider: "auto", model: "auto", hasCredential: true },
   {
@@ -576,7 +660,7 @@ export const AppConfigSchema = z.object({
   llmProvider: ModelProviderSchema.optional(),
   modelProfiles: z.array(ModelProfileSchema.omit({ hasCredential: true })).optional(),
   activeModelProfileId: z.string().optional(),
-  modelDefaultsVersion: z.literal(1).optional(),
+  modelDefaultsVersion: z.number().int().nonnegative().optional(),
   activeWorkspaceId: z.string().optional(),
   activeTaskId: z.string().optional(),
   activeConversationId: z.string().optional(),
@@ -666,6 +750,7 @@ export const IPC = {
   SKILLS_REJECT: "openintj:skills.reject",
   SKILLS_REVOKE: "openintj:skills.revoke",
   SKILLS_ACTIVE: "openintj:skills.active",
+  SKILLS_CATALOG: "openintj:skills.catalog",
   // #6 ????
   UPDATE_CHECK: "openintj:update.check",
   UPDATE_INSTALL: "openintj:update.install",
@@ -674,6 +759,9 @@ export const IPC = {
   WORKSPACE_WRITE: "openintj:workspace.write",
   WORKSPACE_INFO: "openintj:workspace.info",
   WORKSPACE_PICK_DIR: "openintj:workspace.pickDir",
+  WORKSPACE_LIST: "openintj:workspace.list",
+  WORKSPACE_READ_BYTES: "openintj:workspace.readBytes",
+  WORKSPACE_REVEAL: "openintj:workspace.reveal",
   // ??????
   CONFIG_GET: "openintj:config.get",
   CONFIG_UPDATE: "openintj:config.update",
@@ -684,6 +772,7 @@ export const IPC = {
   APP_RESTART: "openintj:app.restart",
   WORKBENCH_BOOTSTRAP: "openintj:workbench.bootstrap",
   WORKBENCH_WORKSPACE_CREATE: "openintj:workbench.workspace.create",
+  WORKBENCH_WORKSPACE_CLOSE: "openintj:workbench.workspace.close",
   WORKBENCH_TASK_CREATE: "openintj:workbench.task.create",
   WORKBENCH_TASK_UPDATE: "openintj:workbench.task.update",
   WORKBENCH_CONVERSATION_CREATE: "openintj:workbench.conversation.create",
@@ -695,6 +784,7 @@ export const IPC = {
   EVT_AUDIT: "openintj:evt.audit",
   EVT_UPDATE: "openintj:evt.update",
   EVT_WORKSPACE: "openintj:evt.workspace",
+  EVT_SKILL: "openintj:evt.skill",
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

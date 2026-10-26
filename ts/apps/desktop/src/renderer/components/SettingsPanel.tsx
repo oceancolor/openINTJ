@@ -160,6 +160,7 @@ export const SettingsPanel: React.FC = () => {
       if (!result.ok) setError(result.reason ?? "restart_failed");
     } catch (e) {
       setError((e as Error).message);
+    } finally {
       setBusy(false);
     }
   };
@@ -543,14 +544,24 @@ export const SettingsPanel: React.FC = () => {
                   ? cfg.enableProductBehavior !== false
                   : t.key === "enableClassifier" && cfg.enableTaskPool === true
                     ? true
-                    : cfg[t.key] === true
+                    : t.key === "enableSkills" && cfg.enableSkillLearning === true
+                      ? true
+                      : cfg[t.key] === true
               }
-              disabled={busy || (t.key === "enableClassifier" && cfg.enableTaskPool === true)}
+              disabled={
+                busy ||
+                (t.key === "enableClassifier" && cfg.enableTaskPool === true) ||
+                (t.key === "enableSkills" && cfg.enableSkillLearning === true)
+              }
               onChange={(e) =>
                 void patch(
                   t.key === "enableTaskPool" && e.target.checked
                     ? { enableTaskPool: true, enableClassifier: true }
-                    : ({ [t.key]: e.target.checked } as AppConfigPatch),
+                    : t.key === "enableSkillLearning" && e.target.checked
+                      ? { enableSkillLearning: true, enableSkills: true }
+                      : t.key === "enableSkills" && !e.target.checked
+                        ? { enableSkills: false, enableSkillLearning: false }
+                        : ({ [t.key]: e.target.checked } as AppConfigPatch),
                 )
               }
               className="mt-0.5"

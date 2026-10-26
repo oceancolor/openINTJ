@@ -207,4 +207,11 @@ describe("MemoryPlane", () => {
     expect(f.taskTags).toContain("user_input");
     expect(plane.getStats().total).toBe(1);
   });
+
+  it("skips blank short-term writes so empty answers do not hit the embedder", async () => {
+    const plane = new MemoryPlane();
+    await plane.recordUserInputAsync("   ");
+    await plane.recordAssistantOutputAsync("");
+    expect(plane.getStats().total).toBe(0);
+  });
 });
