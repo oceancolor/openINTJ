@@ -8,7 +8,7 @@
  * 安全基线：contextIsolation = true / nodeIntegration = false / 无 remote / CSP 由渲染层注入
  */
 
-import { app, BrowserWindow, ipcMain, safeStorage, shell, WebContentsView } from 'electron'
+import { app, BrowserWindow, desktopCapturer, ipcMain, safeStorage, shell, WebContentsView } from 'electron'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -54,6 +54,16 @@ import { TERMINAL_CHANNELS, terminalRunId, type TerminalSubmitResult } from '../
 import { VscodiumHost } from './vscodium'
 import { FORBIDDEN_TRADEMARKS } from '../shared/ide'
 import type { IdeLayoutRect, IdeStartParams, IdeStartResult, IdeStatus, IdeStopResult } from '../shared/ide'
+import {
+  FILE_CHANGE_CHANNELS,
+  SESSION_METHODS,
+  type AgentSession,
+  type ChatMessage,
+  type FileChange,
+  type PreviewTarget,
+  type SessionSendResult,
+  type TaskItem
+} from '../shared/session'
 import type { Checkpoint } from '../shared/events'
 import type { ApprovalRequest } from '../shared/approval'
 
@@ -65,6 +75,15 @@ let toolHost: WorkerHost | null = null
 let currentTier: ApprovalTier = DEFAULT_TIER
 
 /**
+ * 最近一次起过的 run。
+ *
+ * tool-host 的监听器不知道「当前在跑哪个 run」（那是编排层的概念），
+ * 所以文件变化上报到主进程后，由主进程补上 runId —— 补在这里是因为
+ * 主进程是唯一同时认识「执行」与「界面」两层的地方。
+ */
+let lastRunId: string | null = null
+
+/**
  * 票据密钥 —— 全应用唯一副本的「签发侧」。
  *
  * 只经 tool-host 专用端口下发（见 initToolHost）。**绝不经 agent-host 转发**，
@@ -72,8 +91,27 @@ let currentTier: ApprovalTier = DEFAULT_TIER
  */
 const TICKET_SECRET = randomBytes(32).toString('hex')
 
-/** 工作区根目录：所有写入判定的边界，启动即固定，运行期不可被调用方改写 */
-const WORKSPACE_ROOT = process.env['OPENINTJ_WORKSPACE'] ?? process.cwd()
+/**
+ * 工作区根目录：所有写入判定的边界，启动即固定，运行期不可被调用方改写。
+ *
+ * 打包态不能沿用 cwd：快捷方式启动时 cwd 是安装目录（C:\Program Files\openINTJ），
+ * 那里既不该被当成工作区（只读、且混着应用自身文件），越界判定也会跟着失真。
+ * 所以打包后默认落到用户目录下，并顺手建出来 —— 空的也比指向安装目录好。
+ */
+function resolveWorkspaceRoot(): string {
+  const fromEnv = process.env['OPENINTJ_WORKSPACE']
+  if (fromEnv) return fromEnv
+  if (!app.isPackaged) return process.cwd()
+  const dir = join(homedir(), 'openINTJ')
+  try {
+    mkdirSync(dir, { recursive: true })
+  } catch {
+    /* 建不出来也照原样返回：启动不该因为目录失败而中断 */
+  }
+  return dir
+}
+
+const WORKSPACE_ROOT = resolveWorkspaceRoot()
 
 /** 待审批请求 → 供签发票据时取命令原文与风险等级 */
 const pendingApprovals = new Map<string, ApprovalRequest>()
@@ -436,6 +474,20 @@ function startWorkers(): void {
       mainWindow?.webContents.send('evt:termData', payload)
     } else if (channel === TERMINAL_CHANNELS.exit) {
       mainWindow?.webContents.send('evt:termExit', payload)
+    } else if (channel === FILE_CHANGE_CHANNELS.changed) {
+      // 文件变化：先转交 agent-host 登记（会话状态都在那边），再通知界面刷新。
+      // 顺序不能反 —— 反了的话界面先拉，拉到的是登记前的旧列表。
+      const notice = payload as { changeId: string; path: string; kind: string; at: number }
+      void agentHost
+        ?.request(SESSION_METHODS.noteChange, {
+          runId: lastRunId ?? '-',
+          path: notice.path,
+          kind: notice.kind
+        })
+        .catch((err: Error) => {
+          console.warn(`[main] 文件变化登记失败：${err.message}`)
+        })
+      mainWindow?.webContents.send('evt:fileChanged', payload)
     }
   })
 
@@ -709,11 +761,13 @@ function registerIpc(): void {
   ipcMain.handle('api:startRun', async (_e, goal: string, opts?: { draft?: boolean }) => {
     if (!agentHost) throw new Error('agent-host 尚未就绪')
     // 模型起草可能要一两分钟，超时给足；未配置模型时是秒回
-    return await agentHost.request(
+    const res = await agentHost.request<{ runId: string }>(
       AGENT_METHODS.startRun,
       { goal, draft: opts?.draft },
       180_000
     )
+    if (res?.runId) lastRunId = res.runId
+    return res
   })
 
   // 发起一次工具调用：整条链可能包含「等用户点允许」，超时给足
@@ -738,6 +792,87 @@ function registerIpc(): void {
   ipcMain.handle('api:confirmContract', async (_e, input: { runId: string; accepted: boolean; contract?: unknown }) => {
     if (!agentHost) throw new Error('agent-host 尚未就绪')
     return await agentHost.request(AGENT_METHODS.confirmContract, input, 30_000)
+  })
+
+  /* ---- 会话（IDE 右栏：对话 / 任务 / 变更 / 预览） ---- */
+
+  /** 会话列表 */
+  ipcMain.handle('api:sessionList', async (): Promise<AgentSession[]> => {
+    if (!agentHost) return []
+    return (await agentHost.request<AgentSession[]>(SESSION_METHODS.list, undefined, 10_000)) ?? []
+  })
+
+  /** 新建会话 */
+  ipcMain.handle('api:sessionCreate', async (_e, title?: string): Promise<AgentSession> => {
+    if (!agentHost) throw new Error('agent-host 尚未就绪')
+    return await agentHost.request<AgentSession>(SESSION_METHODS.create, { title }, 10_000)
+  })
+
+  /** 某会话的消息 */
+  ipcMain.handle('api:sessionMessages', async (_e, sessionId: string): Promise<ChatMessage[]> => {
+    if (!agentHost) return []
+    return (await agentHost.request<ChatMessage[]>(SESSION_METHODS.messages, { sessionId }, 10_000)) ?? []
+  })
+
+  /**
+   * 发一句话。
+   *
+   * 超时给足 1800s：一轮循环最多 12 步，每步可能等审批 120s。
+   * 这不是「放任它跑」—— 界面上有中断入口（暂停），
+   * 而静默超时返回会让用户以为「说完了」，实际还在跑。
+   */
+  ipcMain.handle('api:sessionSend', async (_e, input: { sessionId?: string; text: string }) => {
+    if (!agentHost) throw new Error('agent-host 尚未就绪')
+    return await agentHost.request<SessionSendResult>(SESSION_METHODS.send, input, 1_800_000)
+  })
+
+  /** 确认 / 否决契约 —— 走的就是 IC-07 那条闸门，不另开一条 */
+  ipcMain.handle('api:sessionConfirmContract', async (_e, input: { sessionId: string; accepted: boolean; contract?: unknown }) => {
+    if (!agentHost) throw new Error('agent-host 尚未就绪')
+    return await agentHost.request(SESSION_METHODS.confirmContract, input, 30_000)
+  })
+
+  /** 任务列表 */
+  ipcMain.handle('api:sessionTasks', async (_e, sessionId: string): Promise<TaskItem[]> => {
+    if (!agentHost) return []
+    return (await agentHost.request<TaskItem[]>(SESSION_METHODS.tasks, { sessionId }, 10_000)) ?? []
+  })
+
+  /** 文件变化 */
+  ipcMain.handle('api:sessionChanges', async (_e, sessionId: string): Promise<FileChange[]> => {
+    if (!agentHost) return []
+    return (await agentHost.request<FileChange[]>(SESSION_METHODS.changes, { sessionId }, 10_000)) ?? []
+  })
+
+  /** 用户确认某条文件变化 */
+  ipcMain.handle('api:sessionConfirmChange', async (_e, changeId: string) => {
+    if (!agentHost) return { ok: false }
+    return await agentHost.request<{ ok: boolean }>(SESSION_METHODS.confirmChange, { changeId }, 10_000)
+  })
+
+  /** 预览目标 */
+  ipcMain.handle('api:sessionPreview', async (_e, sessionId: string): Promise<PreviewTarget[]> => {
+    if (!agentHost) return []
+    return (await agentHost.request<PreviewTarget[]>(SESSION_METHODS.preview, { sessionId }, 10_000)) ?? []
+  })
+
+  /** 手动登记预览地址 */
+  ipcMain.handle(
+    'api:sessionPreviewAdd',
+    async (_e, input: { sessionId: string; url: string; title?: string }) => {
+      if (!agentHost) return { ok: false, reason: 'agent-host 尚未就绪' }
+      return await agentHost.request(SESSION_METHODS.previewAdd, input, 10_000)
+    }
+  )
+
+  /**
+   * 外链一律走系统浏览器。
+   *
+   * 应用内不承载外部内容：预览页面里跑什么脚本我们控制不了，
+   * 让它进主界面等于把 CSP 撕一个口子。
+   */
+  ipcMain.handle('api:openExternal', async (_e, url: string): Promise<void> => {
+    await shell.openExternal(url)
   })
 
   // LLM 接入状态（不含密钥，只报 host 与模型名）
@@ -1178,6 +1313,11 @@ async function smoke(): Promise<void> {
     await verifyTerminal()
   }
 
+  // 可选：会话面板 —— 验 IDE 右栏「对话 / 任务 / 变更 / 预览」四个分页签
+  if (process.argv.includes('--smoke-session')) {
+    await verifySessionPanel()
+  }
+
   // 可选：内嵌 IDE —— 真拉起 VSCodium 服务端，验外部产品边界被收紧
   // 放在靠后：它会把界面切到编辑器页，且快照探针要在最后拍
   if (process.argv.includes('--smoke-ide')) {
@@ -1397,6 +1537,50 @@ async function verifyLlm(): Promise<void> {
  * 后者在受限环境里会被安全策略拦掉（`Add-Type` 一类），而这是进程内 API，无外部依赖。
  * 顺带说明：这比截屏更可靠的地方在于它截的是**渲染结果**，不受窗口是否被遮挡影响。
  */
+/**
+ * 截**整屏**（含原生 view）。
+ *
+ * `capturePage()` 只能拍到渲染层 —— 工作台是独立的 WebContentsView，
+ * 是盖在网页上面的另一层，capturePage 的画面里根本没有它。
+ * 而「右栏被工作台盖住」恰恰是两层之间的问题：DOM 查询全绿、
+ * bounds 数字也对，但用户看到的是工作台铺满整行。
+ * 这种事只能用 desktopCapturer 截屏亲眼看，数据骗不了人，但数据也不全。
+ */
+async function captureScreen(tag: string): Promise<void> {
+  try {
+    // 整屏截图拍的是「屏幕上最上面那层」—— 不把自己窗口顶到最前，
+    // 拍到的就是用户正在看的别的应用，而不是我们的布局。
+    mainWindow?.show()
+    mainWindow?.moveTop()
+    mainWindow?.focus()
+    await new Promise((r) => setTimeout(r, 600))
+    const sources = await desktopCapturer.getSources({
+      types: ['window'],
+      thumbnailSize: { width: 2560, height: 1440 },
+      fetchWindowIcons: false
+    })
+    // 按标题找自己的窗口：截屏不需要抢前台（前台权在 Windows 上受限制），
+    // 而窗口捕获走的是系统合成结果，原生 view 也在里面。
+    const mine =
+      sources.find((s) => (s.name ?? '').includes('openINTJ')) ??
+      sources.find((s) => (s.name ?? '').includes('Agent Console')) ??
+      sources[0]
+    const shot = mine?.thumbnail
+    if (!shot || shot.isEmpty()) {
+      console.error('[probe] 整屏截图失败：无可用屏幕源')
+      return
+    }
+    const dir = join(process.cwd(), '.snapshots')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, `openintj-screen-${tag}-${Date.now()}.png`)
+    writeFileSync(file, shot.toPNG())
+    const size = shot.getSize()
+    console.log(`[probe] 整屏截图已保存 → ${file}（${size.width}×${size.height}）`)
+  } catch (e) {
+    console.error(`[probe] 整屏截图失败：${(e as Error).message}`)
+  }
+}
+
 async function captureSnapshot(tag = ''): Promise<void> {
   if (!mainWindow) {
     console.error('[probe] 无窗口，无法截图')
@@ -2537,6 +2721,196 @@ async function verifyTier(): Promise<void> {
  *   73 端口释放 —— 进程树被杀干净，不留常驻
  *   74 界面文案不含禁用商标（C2）
  */
+/**
+ * 可选：会话面板（IDE 右栏）—— 验「对话 / 任务 / 变更 / 预览」各司其职。
+ *
+ * 这组探针关心的不是「按钮能不能点」，而是三件容易做错的事：
+ *   1. 右栏与工作台**并排**，不是盖在上面（三栏的本义是同时可见）
+ *   2. 「预览」签只在真有预览目标时才出现 —— 常驻一个空白签，
+ *      用户点进去会以为功能坏了，而不是「还没发生」
+ *   3. 消息存在 agent-host：换会话再切回来还在。
+ *      若消息只活在渲染层，刷新/切页就丢，而 run 还在跑 —— 那种
+ *      「执行在继续、对话已清空」的错位比什么都难解释。
+ */
+async function verifySessionPanel(): Promise<void> {
+  if (!mainWindow) {
+    console.error('[probe] 无窗口，跳过会话面板探针')
+    return
+  }
+  const js = (code: string): Promise<unknown> => mainWindow!.webContents.executeJavaScript(code)
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+  const until = async <T>(
+    fn: () => Promise<T>,
+    ok: (v: T) => boolean,
+    tries = 40,
+    gap = 250
+  ): Promise<T> => {
+    let last = await fn()
+    for (let i = 0; i < tries && !ok(last); i++) {
+      await sleep(gap)
+      last = await fn()
+    }
+    return last
+  }
+  /** 用原生 setter 写值再派发 input —— React 监听的是合成事件 */
+  const setInput = async (selector: string, value: string): Promise<void> => {
+    await js(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)})
+      if (!el) return
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      setter.call(el, ${JSON.stringify(value)})
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+      return
+    })()`)
+  }
+  const clickTab = async (label: string): Promise<void> => {
+    await js(`(() => {
+      const b = [...document.querySelectorAll('[data-testid="ide-side-tabs"] .side-tab')]
+        .find(x => (x.textContent || '').includes(${JSON.stringify(label)}))
+      if (b) b.click()
+      return
+    })()`)
+  }
+
+  const tabLabels = async (): Promise<string[]> =>
+    JSON.parse(
+      String(
+        await js(
+          `JSON.stringify([...document.querySelectorAll('[data-testid="ide-side-tabs"] .side-tab')].map(b => (b.textContent || '').trim()))`
+        )
+      )
+    )
+
+  console.log('[probe] ── 会话面板（IDE 右栏）──')
+
+  await clickIdeTab()
+  await sleep(400)
+
+  // 75 —— 右栏与工作台并排，且默认开好一个会话
+  const labels = await until(async () => tabLabels(), (v) => v.length === 3)
+  console.log(
+    labels.length === 3 && !labels.some((t) => t.includes('预览'))
+      ? `[probe] 75 右栏三签就位 → ${labels.join(' / ')}（无预览时不亮「预览」签）`
+      : `[probe] 75 失败：功能签=${labels.join('/')}`
+  )
+
+  const sessionCount = Number(
+    String(
+      await js(
+        `document.querySelectorAll('[data-testid="ide-session-tabs"] .session-tab').length`
+      )
+    )
+  )
+  console.log(
+    sessionCount >= 2
+      ? `[probe] 76 会话签就绪 → ${sessionCount - 1} 个会话 ＋ 新建入口`
+      : `[probe] 76 失败：会话签节点数=${sessionCount}`
+  )
+
+  // 77 —— 发一句话：没有模型也会落库（起草会失败，但「用户说过什么」不能丢）
+  const line = '看看这个仓库现在缺什么测试'
+  await setInput('[data-testid="ide-chat-input"]', line)
+  await js(`document.querySelector('[data-testid="ide-chat-send"]').click()`)
+  const chatText = await until(
+    async () => String(await js(`document.querySelector('[data-testid="ide-chat-list"]').innerText`)),
+    (v) => v.includes(line)
+  )
+  console.log(
+    chatText.includes(line)
+      ? '[probe] 77 消息落库 → 发出的话已出现在对话列表'
+      : `[probe] 77 失败：对话列表里没有这句话（${chatText.slice(0, 60)}）`
+  )
+
+  // 78 —— 外部地址必须被拒 —— 预览入口不能变成「打开任意网址」的口子
+  await setInput('[data-testid="ide-preview-url"]', 'https://example.com/evil')
+  await js(`document.querySelector('[data-testid="ide-preview-register"]')?.click()`)
+  const external = await until(
+    async () =>
+      String(await js(`document.querySelector('[data-testid="ide-notice"]')?.innerText || ''`)),
+    (v) => v.includes('回环')
+  )
+  const externalTabs = await tabLabels()
+  console.log(
+    external.includes('回环') && externalTabs.length === 3
+      ? `[probe] 78 外部地址被拒 → ${external.trim().slice(0, 40)}（仍 ${externalTabs.length} 个签）`
+      : `[probe] 78 失败：提示=${external.slice(0, 40)} 签数=${externalTabs.length}`
+  )
+
+  // 79 —— 登记一个回环地址后，「预览」签才亮出来
+  await setInput('[data-testid="ide-preview-url"]', 'http://127.0.0.1:5173')
+  await js(`document.querySelector('[data-testid="ide-preview-register"]')?.click()`)
+  const after = await until(async () => tabLabels(), (v) => v.length === 4)
+  console.log(
+    after.includes('预览')
+      ? `[probe] 79 预览签按需出现 → ${after.join(' / ')}`
+      : `[probe] 79 失败：登记后签=${after.join('/')}`
+  )
+
+  // 80 —— 切到预览签，能看到登记进去的地址
+  await clickTab('预览')
+  const previewText = await until(
+    async () => textOfSide(),
+    (v) => v.includes('127.0.0.1:5173')
+  )
+  console.log(
+    previewText.includes('127.0.0.1:5173')
+      ? '[probe] 80 预览内容上屏 → 已列出 127.0.0.1:5173'
+      : `[probe] 80 失败：预览页未见该地址（${previewText.slice(0, 50)}）`
+  )
+
+  // 81 —— 新建会话是空的；切回上一个，消息还在（证明存在 agent-host 而非渲染层）
+  await js(`document.querySelector('[data-testid="ide-session-new"]').click()`)
+  await sleep(400)
+  const fresh = await textOfSide()
+  await js(`document.querySelector('[data-testid="ide-session-tabs"] .session-tab').click()`)
+  const back = await until(async () => textOfSide(), (v) => v.includes(line))
+  console.log(
+    fresh.includes('还没有对话') && back.includes(line)
+      ? '[probe] 81 会话隔离与回溯 → 新会话为空，切回来消息仍在'
+      : `[probe] 81 失败：新会话空=${fresh.includes('还没有对话')} 回溯=${back.includes(line)}`
+  )
+
+  // 82 —— 任务签 / 变更签：切过去之后各自渲染，且内容不同（不是一块空白）
+  await clickTab('任务')
+  await sleep(350)
+  const taskPanel = await textOfSide()
+  await clickTab('变更')
+  await sleep(350)
+  const changePanel = await textOfSide()
+  console.log(
+    taskPanel.length > 0 && changePanel.length > 0 && taskPanel !== changePanel
+      ? '[probe] 82 任务签 / 变更签可切换 → 两页各自渲染，内容不同'
+      : `[probe] 82 失败：任务=${taskPanel.slice(0, 20)} 变更=${changePanel.slice(0, 20)}`
+  )
+}
+
+/** 切到编辑器页，并等面板挂载 */
+async function clickIdeTab(): Promise<void> {
+  if (!mainWindow) return
+  await mainWindow.webContents.executeJavaScript(
+    `(() => {
+      const b = [...document.querySelectorAll('.tab')].find(x => (x.textContent || '').includes('编辑器'))
+      if (b) b.click()
+      return
+    })()`
+  )
+}
+
+/**
+ * 取右栏的文本。
+ *
+ * 用 textContent 而不是 innerText：innerText 只返回**可见**文本，
+ * 面板一旦被折叠/裁剪（或还没布局完）就返回空串，断言会假阴性。
+ */
+async function textOfSide(): Promise<string> {
+  if (!mainWindow) return ''
+  return String(
+    await mainWindow.webContents.executeJavaScript(
+      `document.querySelector('.ide-side')?.textContent || ''`
+    )
+  )
+}
+
 async function verifyIde(): Promise<void> {
   if (!mainWindow) {
     console.error('[probe] 无窗口，跳过 IDE 探针')
@@ -2682,13 +3056,114 @@ async function verifyIde(): Promise<void> {
       : `[probe] 71 失败：viewUrl=${viewUrl.slice(0, 60)} workbench=${workbench}`
   )
 
-  // 72 —— 停止
+  // 72 —— 布局同步：view 的实际矩形必须贴着渲染层占位区，且不能盖住右栏
+  //
+  // 这条是三栏布局的命门：右栏（对话/任务/变更/预览）和 view 是**两层**东西 ——
+  // DOM 在渲染层，工作台是盖在上面的原生 view。view 一旦比占位区宽，
+  // 右栏不会报错、探针 75~82 也照样绿（它们查的是 DOM），
+  // 但用户看到的是「工作台铺满整行、右栏不见了」。所以必须拿两边的实测数字对。
+  const rects = JSON.parse(
+    String(
+      await js(`(() => {
+        const pick = (el) => {
+          if (!el) return null
+          const r = el.getBoundingClientRect()
+          return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), right: Math.round(r.right) }
+        }
+        return JSON.stringify({
+          stage: pick(document.querySelector('[data-testid="ide-stage"]')),
+          side: pick(document.querySelector('[data-testid="ide-side"]')),
+          win: { w: window.innerWidth }
+        })
+      })()`)
+    )
+  )
+  const viewBounds = ideView?.getBounds() ?? null
+  const stage = rects?.stage
+  const side = rects?.side
+  const aligned =
+    viewBounds && stage
+      ? Math.abs(viewBounds.x - stage.x) <= 2 &&
+        Math.abs(viewBounds.width - stage.w) <= 2 &&
+        Boolean(side) &&
+        side.x >= viewBounds.x + viewBounds.width
+      : false
+  console.log(
+    aligned
+      ? `[probe] 72 布局同步 → 占位区 x=${stage.x} w=${stage.w}，view x=${viewBounds!.x} w=${viewBounds!.width}，右栏从 ${side.x} 起（未被盖住）`
+      : `[probe] 72 失败：占位区=${JSON.stringify(stage)} 右栏=${JSON.stringify(side)} view=${JSON.stringify(viewBounds)} 窗口宽=${rects?.win?.w}`
+  )
+  await captureScreen('ide')
+  if (process.argv.includes('--snapshot')) {
+    // 渲染层 + 工作台各拍一张：都不依赖窗口是否在前台，
+    // 两张的宽度对上，两层的位置关系就清楚了
+    await captureSnapshot('layout')
+  }
+
+  // 73 —— 窗口尺寸变化（最大化/还原）后 view 也要跟住。
+  // 用户几乎必然先开工作台再最大化 —— 若 resize 通知丢了，
+  // view 停在旧尺寸，比占位区宽出的那一条正好压在右栏上。
+  const measure = async (): Promise<{ stage: { x: number; w: number } | null; side: { x: number } | null; win: number }> =>
+    JSON.parse(
+      String(
+        await js(`(() => {
+          const pick = (el) => {
+            if (!el) return null
+            const r = el.getBoundingClientRect()
+            return { x: Math.round(r.x), w: Math.round(r.width) }
+          }
+          return JSON.stringify({
+            stage: pick(document.querySelector('[data-testid="ide-stage"]')),
+            side: pick(document.querySelector('[data-testid="ide-side"]')),
+            win: window.innerWidth
+          })
+        })()`)
+      )
+    )
+
+  const snap = async (label: string): Promise<void> => {
+    const before = await measure()
+    mainWindow?.maximize()
+    await new Promise((r) => setTimeout(r, 900))
+    const after = await measure()
+    const vb = ideView?.getBounds() ?? null
+    const ok =
+      vb && after.stage
+        ? Math.abs(vb.width - after.stage.w) <= 2 && (after.side?.x ?? 0) >= vb.x + vb.width
+        : false
+    console.log(
+      ok
+        ? `[probe] ${label} 最大化后仍同步 → 窗口 ${before.win}→${after.win}，view w=${vb!.width}，右栏从 ${after.side!.x} 起`
+        : `[probe] ${label} 失败：窗口 ${before.win}→${after.win} view=${JSON.stringify(vb)} 占位区=${JSON.stringify(after.stage)} 右栏=${JSON.stringify(after.side)}`
+    )
+    mainWindow?.unmaximize()
+    await new Promise((r) => setTimeout(r, 900))
+    if (!ok) await captureScreen('ide-max')
+  }
+
+  await snap('72b')
+  // 再来一次还原态的确认 —— unmaximize 之后也要回到贴合格局
+  {
+    const m = await measure()
+    const vb = ideView?.getBounds() ?? null
+    const ok =
+      vb && m.stage
+        ? Math.abs(vb.width - m.stage.w) <= 2 && (m.side?.x ?? 0) >= vb.x + vb.width
+        : false
+    console.log(
+      ok
+        ? `[probe] 72c 还原后仍同步 → view w=${vb!.width}，右栏从 ${m.side!.x} 起`
+        : `[probe] 72c 失败：view=${JSON.stringify(vb)} 占位区=${JSON.stringify(m.stage)} 右栏=${JSON.stringify(m.side)}`
+    )
+  }
+
+  // 74 —— 停止
   await js("document.querySelector('[data-testid=\"ide-stop\"]')?.click() ?? null")
   const s2 = await until(async () => host.status(), (s) => s.phase === 'stopped', 40, 250)
   console.log(
     s2.phase === 'stopped'
-      ? '[probe] 72 已停止 → phase=stopped'
-      : `[probe] 72 失败：phase=${s2.phase}`
+      ? '[probe] 73 已停止 → phase=stopped'
+      : `[probe] 73 失败：phase=${s2.phase}`
   )
 
   // 73 —— 进程树真的没了。只杀父进程会留下占着端口的孤儿，这里正是抓那种情况
@@ -2700,8 +3175,8 @@ async function verifyIde(): Promise<void> {
   )
   console.log(
     deadCode === -1
-      ? `[probe] 73 端口已释放 → :${s1.port} 不再应答（进程树杀干净了）`
-      : `[probe] 73 失败：:${s1.port} 仍在应答（HTTP ${deadCode}），有孤儿进程`
+      ? `[probe] 74 端口已释放 → :${s1.port} 不再应答（进程树杀干净了）`
+      : `[probe] 74 失败：:${s1.port} 仍在应答（HTTP ${deadCode}），有孤儿进程`
   )
 
   // 74 —— C2 商标：我们渲染的每一个字都必须干净
@@ -2709,8 +3184,8 @@ async function verifyIde(): Promise<void> {
   const hits = FORBIDDEN_TRADEMARKS.filter((t) => bodyText.includes(t))
   console.log(
     hits.length === 0
-      ? '[probe] 74 界面文案无禁用商标 → 仅出现 VSCodium'
-      : `[probe] 74 失败：界面出现 ${hits.join(' / ')}`
+      ? '[probe] 83 界面文案无禁用商标 → 仅出现 VSCodium'
+      : `[probe] 83 失败：界面出现 ${hits.join(' / ')}`
   )
 }
 

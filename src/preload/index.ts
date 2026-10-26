@@ -34,6 +34,14 @@ import type {
   IdeStatus,
   IdeStopResult
 } from '../shared/ide'
+import type {
+  AgentSession,
+  ChatMessage,
+  FileChange,
+  PreviewTarget,
+  SessionSendResult,
+  TaskItem
+} from '../shared/session'
 
 const api = {
   getBootInfo: (): Promise<BootInfo> => ipcRenderer.invoke('api:bootInfo'),
@@ -198,7 +206,64 @@ const api = {
     const listener = (_: unknown, payload: IdeStatus): void => handler(payload)
     ipcRenderer.on('evt:ideStatus', listener)
     return () => ipcRenderer.removeListener('evt:ideStatus', listener)
-  }
+  },
+
+  /* ---- 会话（IDE 右栏：对话 / 任务 / 变更 / 预览） ---- */
+
+  /** 会话列表 */
+  sessionList: (): Promise<AgentSession[]> => ipcRenderer.invoke('api:sessionList'),
+
+  /** 新建会话 */
+  sessionCreate: (title?: string): Promise<AgentSession> => ipcRenderer.invoke('api:sessionCreate', title),
+
+  /** 某会话的消息 */
+  sessionMessages: (sessionId: string): Promise<ChatMessage[]> =>
+    ipcRenderer.invoke('api:sessionMessages', sessionId),
+
+  /**
+   * 发一句话。
+   *
+   * 窄接口只收「会话 id + 正文」：什么算一轮、契约怎么起、循环怎么跑，
+   * 全在 agent-host 里定。渲染层不持有这些规则，也就不可能与后端判断不一致。
+   */
+  sessionSend: (input: { sessionId?: string; text: string }): Promise<SessionSendResult> =>
+    ipcRenderer.invoke('api:sessionSend', input),
+
+  /** 确认 / 否决契约（IC-07 硬闸门） */
+  sessionConfirmContract: (input: {
+    sessionId: string
+    accepted: boolean
+    contract?: GoalContract
+  }): Promise<{ ok: boolean; session?: AgentSession; reason?: string }> =>
+    ipcRenderer.invoke('api:sessionConfirmContract', input),
+
+  sessionTasks: (sessionId: string): Promise<TaskItem[]> =>
+    ipcRenderer.invoke('api:sessionTasks', sessionId),
+
+  sessionChanges: (sessionId: string): Promise<FileChange[]> =>
+    ipcRenderer.invoke('api:sessionChanges', sessionId),
+
+  sessionConfirmChange: (changeId: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('api:sessionConfirmChange', changeId),
+
+  sessionPreview: (sessionId: string): Promise<PreviewTarget[]> =>
+    ipcRenderer.invoke('api:sessionPreview', sessionId),
+
+  /** 手动登记一个预览地址；只接受回环地址，非法地址由后端拒掉 */
+  sessionAddPreview: (
+    input: { sessionId: string; url: string; title?: string }
+  ): Promise<{ ok: boolean; reason?: string; preview?: PreviewTarget }> =>
+    ipcRenderer.invoke('api:sessionPreviewAdd', input),
+
+  /** 订阅工作区文件变化 */
+  onFileChanged: (handler: (c: FileChange) => void): (() => void) => {
+    const listener = (_: unknown, payload: FileChange): void => handler(payload)
+    ipcRenderer.on('evt:fileChanged', listener)
+    return () => ipcRenderer.removeListener('evt:fileChanged', listener)
+  },
+
+  /** 用系统浏览器打开外部地址 */
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke('api:openExternal', url)
 }
 
 contextBridge.exposeInMainWorld('openintj', api)

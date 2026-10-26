@@ -1093,6 +1093,313 @@ body {
   color: var(--text-faint);
 }
 
+/* ------------------------------------------------------------------ *
+ * IDE 三栏：左两栏 = 工作台（自带资源管理器 + 编辑器），右一栏 = 会话面板
+ *
+ * 右栏固定 380px 而不是按比例分：工作台需要宽度才有意义，
+ * 而对话栏在 300~420px 之间可读性最好。窄窗口下右栏不塌缩（min-width），
+ * 因为塌缩后的对话栏什么都看不清，不如让工作台窄一点。
+ * ------------------------------------------------------------------ */
+
+.ide-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.ide-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 10px);
+  background: var(--bg-raise);
+}
+
+/* 会话分页签 —— 一段对话一个签，可新建 */
+.ide-side-sessions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.session-tab {
+  flex: 0 0 auto;
+  max-width: 132px;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.session-tab:hover {
+  color: var(--text);
+  border-color: rgba(120, 220, 255, 0.4);
+}
+
+.session-tab.active {
+  color: var(--cyan, #6ee7ff);
+  border-color: rgba(110, 231, 255, 0.55);
+  background: rgba(110, 231, 255, 0.08);
+}
+
+.session-tab.new {
+  border-style: dashed;
+  color: var(--text-faint);
+}
+
+/* 功能分页签 —— 对话 / 任务 / 变更 / 预览 复用同一块面积 */
+.ide-side-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.side-tab {
+  flex: 1 1 0;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 99px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.side-tab:hover {
+  color: var(--text);
+}
+
+.side-tab.active {
+  color: var(--cyan, #6ee7ff);
+  background: rgba(110, 231, 255, 0.12);
+}
+
+.tab-count {
+  padding: 0 5px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.ide-side-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- 对话 ---- */
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.chat-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 2px;
+}
+
+.chat-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 100%;
+}
+
+.chat-msg[data-role='user'] {
+  align-items: flex-end;
+}
+
+.chat-meta {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.chat-bubble {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+.chat-msg[data-role='user'] .chat-bubble {
+  background: rgba(110, 231, 255, 0.1);
+  border-color: rgba(110, 231, 255, 0.28);
+}
+
+.chat-composer {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.chat-composer input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chat-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.chat-state {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  margin-left: auto;
+}
+
+.chat-pending {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.side-card {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+
+.contract-lines {
+  margin-top: 6px;
+}
+
+.contract-lines ul {
+  margin: 3px 0 0;
+  padding-left: 16px;
+}
+
+.contract-lines li {
+  margin-bottom: 2px;
+  word-break: break-word;
+}
+
+.evidence {
+  display: block;
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+
+/* ---- 任务 / 变更 / 预览 ---- */
+
+.side-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.side-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.side-row-title {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.side-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.side-row-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.change-kind {
+  padding: 0 6px;
+  border-radius: 99px;
+  font-size: 10px;
+}
+
+.change-kind.added {
+  color: var(--mint);
+  background: rgba(63, 224, 176, 0.12);
+}
+
+.change-kind.modified {
+  color: var(--yellow, #ffd479);
+  background: rgba(255, 212, 121, 0.12);
+}
+
+.change-kind.deleted {
+  color: var(--danger);
+  background: rgba(255, 107, 138, 0.12);
+}
+
+.confirmed {
+  font-size: 10.5px;
+  color: var(--mint);
+}
+
+.preview-add {
+  flex-direction: row;
+  gap: 6px;
+}
+
+.preview-add input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .ide-hint code {
   padding: 1px 5px;
   border-radius: 4px;

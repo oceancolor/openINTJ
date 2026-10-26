@@ -11,6 +11,8 @@
     "build": "node scripts/run.mjs build",
     "start": "node scripts/run.mjs start",
     "smoke": "node scripts/run.mjs smoke",
+    "dist": "electron-builder --win --x64",
+    "dist:dir": "electron-builder --win --x64 --dir",
     "preview": "electron-vite preview",
     "vscodium:fetch": "node scripts/vscodium/fetch.mjs",
     "vscodium:check": "node scripts/vscodium/fetch.mjs --check",

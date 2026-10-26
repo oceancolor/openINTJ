@@ -14,12 +14,22 @@
 
 import { join } from 'node:path'
 import { openStore, type AppendInput, type EventStoreLike } from './event-store'
+import * as sessions from './session-store'
+import {
+  SESSION_METHODS,
+  type AgentSession,
+  type FileChange,
+  type PreviewTarget,
+  type SessionSendResult,
+  type SessionState,
+  type TaskItem
+} from '../shared/session'
 import { ulid } from '../shared/ulid'
 import { applyRedaction } from '../shared/redaction'
 import { complete, textOf, thinkingOf } from './llm'
 import { runAgentLoop, type McpInvokeOutcome } from './agent-loop'
 import { AGENT_TOOLS } from './tool-specs'
-import type { LlmConfigResult, LlmStatus, ToolSpec } from '../shared/llm'
+import type { LlmConfigResult, LlmStatus, ToolSpec, UnifiedMessage } from '../shared/llm'
 import { describeLlm } from '../shared/llm'
 import { extractContract, type GoalContract } from '../shared/contract'
 import { mcpCommandString, type McpToolInfo } from '../shared/mcp'
@@ -89,6 +99,8 @@ interface Run {
   contract?: GoalContract
   /** 循环是否在跑 —— 防止同一 run 被并发驱动两次（会把事件流的 seq 搅乱） */
   loopRunning?: boolean
+  /** 最近一轮循环走了几步 —— 任务列表里显示用，没有跑过为 0 */
+  lastSteps?: number
 }
 const runs = new Map<string, Run>()
 
@@ -468,7 +480,11 @@ function pauseRun(runId: string): { ok: boolean; reason?: string } {
  * 不能声明风险、不能自带批准。唯一的区别是：发起方从人换成了模型。
  * 这恰恰是更需要闸门的场景，所以这里没有为模型开任何捷径。
  */
-async function runLoop(runId: string): Promise<RunLoopResult> {
+async function runLoop(
+  runId: string,
+  followUp?: string,
+  history?: UnifiedMessage[]
+): Promise<RunLoopResult> {
   const emptyUsage = {
     inputTokens: 0,
     outputTokens: 0,
@@ -545,6 +561,9 @@ async function runLoop(runId: string): Promise<RunLoopResult> {
       llm: llm.config,
       contract: run.contract,
       goal: run.goal,
+      // 多轮对话的追加指令：只在有内容时带上，不塞空串污染提示词
+      followUps: followUp ? [followUp] : undefined,
+      history: history ?? [],
       tools: specs,
       requestCommand: async (command, purpose) => invokeTool({ runId, command, purpose }),
       requestMcpTool: async (server, tool, args, purpose) =>
@@ -558,6 +577,7 @@ async function runLoop(runId: string): Promise<RunLoopResult> {
 
     if (result.outcome === 'delivered') {
       run.state = 'DELIVERED'
+      run.lastSteps = result.steps
       const cp = store.createCheckpoint(runId, 'milestone-boundary', 'run-delivered')
       emitEvent({
         runId,
@@ -928,6 +948,27 @@ async function invokeTool(input: {
       redaction: 'content'
     })
 
+    // 命令输出里若出现回环地址（dev server 的提示），登记为预览目标 ——
+    // 「预览」分页签只在真有预览时才亮出来，没有就一次都不出现。
+    for (const url of sessions.detectLoopbackUrls(`${result.stdout}\n${result.stderr}`)) {
+      const saved = sessions.notePreview({
+        previewId: ulid(),
+        runId: run.runId,
+        url,
+        title: input.command
+      })
+      if (saved) {
+        emitEvent({
+          runId: run.runId,
+          traceId: run.traceId,
+          agentId: 'main',
+          kind: 'observation',
+          type: 'CommandOutput',
+          payload: { stage: 'preview-detected', url, from: input.command }
+        })
+      }
+    }
+
     const { risk, ...rest } = result
     return { ok: true, risk, result: rest }
   } catch (err) {
@@ -1091,6 +1132,212 @@ function waitForDecision(request: ApprovalRequest): Promise<ApprovalDecision> {
 }
 
 /* ------------------------------------------------------------------ *
+ * 会话（IDE 右栏：对话 / 任务 / 变更 / 预览）
+ *
+ * 会话是「多轮」的载体：消息存在本进程，界面切走了也不丢。
+ * 任务列表与文件变化则是**派生**数据 —— 前者从 runs 读，后者由主进程
+ * 把 tool-host 的监听结果转交过来登记。事件流才是事实来源，
+ * 这里不复制第二份。
+ * ------------------------------------------------------------------ */
+
+/**
+ * run 状态 → 会话状态。
+ *
+ * 不直接拿 TaskRunState 当会话状态用：run 关心「执行到哪一步」，
+ * 会话关心「界面现在该显示什么」。强行共用的结果是界面要写好几个
+ * `if` 去反推「现在到底该不该显示契约卡」，而那种推导迟早错一次。
+ */
+function sessionStateOf(run: Run | undefined): SessionState {
+  if (!run) return 'empty'
+  switch (run.state) {
+    case 'CONTRACT_PENDING':
+      return 'contract-pending'
+    case 'CONFIRMED':
+    case 'RUNNING':
+    case 'CRITIC_REVIEW':
+    case 'REPLANNING':
+      return 'running'
+    case 'PAUSED':
+    case 'INTERRUPTED':
+      return 'paused'
+    case 'DELIVERED':
+      return 'delivered'
+    case 'FAILED':
+      return 'failed'
+    default:
+      return 'failed'
+  }
+}
+
+/** run 状态变了之后把会话状态同步过去 —— 界面的按钮可用性全靠这个值 */
+function syncSession(sessionId: string): AgentSession | undefined {
+  const s = sessions.getSession(sessionId)
+  if (!s) return undefined
+  sessions.setState(sessionId, sessionStateOf(s.runId ? runs.get(s.runId) : undefined))
+  return sessions.getSession(sessionId)
+}
+
+/** 取（必要时新建）会话 —— 支持「发第一句话自动开一个会话」 */
+function resolveSession(sessionId?: string, firstText?: string): AgentSession {
+  const found = sessionId ? sessions.getSession(sessionId) : undefined
+  if (found) return found
+  return sessions.createSession(firstText)
+}
+
+/**
+ * 发一句话。
+ *
+ * 分支不是按「第几轮」分，而是按**契约的许可状态**分 —— 因为真正决定
+ * 这句话怎么处理的，是「现在许不许动手」：
+ *   - 还没有 run（第一轮）      → 起草契约，停在硬闸门
+ *   - run 还在 CONTRACT_PENDING → 契约没被确认，这句并入补充约束重新起草
+ *   - 其余（已确认 / 暂停 / 收尾）→ 当作追加指令，再驱动一轮循环
+ */
+async function sendMessage(input: { sessionId?: string; text: string }): Promise<SessionSendResult> {
+  const text = input.text.trim()
+  if (!text) throw new Error('消息为空')
+
+  const session = resolveSession(input.sessionId, text)
+  const run = session.runId ? runs.get(session.runId) : undefined
+
+  // 先落用户消息再动：跑崩了也留得下「用户当时说了什么」
+  sessions.appendMessage({ sessionId: session.sessionId, role: 'user', kind: 'text', text })
+
+  if (!run || run.state === 'CONTRACT_PENDING') {
+    const goal = run ? `${run.goal}\n补充约束：${text}` : text
+    const res = await startRun(goal)
+    sessions.bindRun(session.sessionId, res.runId)
+
+    const drafted = Boolean(res.contract)
+    sessions.appendMessage({
+      sessionId: session.sessionId,
+      role: 'agent',
+      kind: 'contract-draft',
+      text: drafted
+        ? `契约已起草：${res.contract?.objective ?? ''}（成功判据 ${res.contract?.successCriteria.length ?? 0} 条）`
+        : (res.llm.missing.length > 0
+            ? `未能起草契约：模型未配置（缺 ${res.llm.missing.join(' / ')}）`
+            : '未能起草契约：模型返回无法解析'),
+      payload: { contract: res.contract ?? null, llm: res.llm }
+    })
+
+    const updated = syncSession(session.sessionId) ?? session
+    return {
+      session: updated,
+      messages: sessions.messagesOf(session.sessionId),
+      phase: drafted ? 'contract-pending' : 'awaiting-model'
+    }
+  }
+
+  const result = await runLoop(run.runId, text, historyOf(session))
+  const ok = result.outcome === 'delivered'
+
+  sessions.appendMessage({
+    sessionId: session.sessionId,
+    role: 'agent',
+    kind: ok ? 'delivery' : 'error',
+    text: ok
+      ? `完成（${result.steps} 步）${result.summary ? `：${result.summary}` : ''}`
+      : (result.reason ?? result.outcome),
+    payload: result
+  })
+
+  const updated = syncSession(session.sessionId) ?? session
+  return {
+    session: updated,
+    messages: sessions.messagesOf(session.sessionId),
+    phase: ok ? 'finished' : 'error'
+  }
+}
+
+/**
+ * 确认 / 否决当前会话的契约 —— IC-07 硬闸门的开关在用户手上。
+ *
+ * 确认这里**不自动开跑**：契约成立与「开始执行」是两件事，
+ * 合在一起的后果是用户点一下确认，命令就已经跑完了 —— 那不叫确认，叫追认。
+ * 所以这里只推进状态，跑循环是界面上「开始执行」的另一个动作。
+ */
+function confirmSessionContract(input: {
+  sessionId: string
+  accepted: boolean
+  contract?: GoalContract
+}): { ok: boolean; session?: AgentSession; reason?: string } {
+  const session = sessions.getSession(input.sessionId)
+  if (!session) return { ok: false, reason: '会话不存在' }
+  if (!session.runId) return { ok: false, reason: '该会话还没有待确认的契约' }
+
+  const res = confirmContract({
+    runId: session.runId,
+    accepted: input.accepted,
+    contract: input.contract
+  })
+  if (!res.ok) return { ok: false, reason: res.reason }
+
+  sessions.appendMessage({
+    sessionId: session.sessionId,
+    role: 'system',
+    kind: 'contract-result',
+    text: input.accepted ? '契约已确认，可以开始执行' : '契约已被否决，任务停在待确认',
+    payload: { accepted: input.accepted, state: res.state }
+  })
+
+  return { ok: true, session: syncSession(session.sessionId) }
+}
+
+/**
+ * 把会话里之前轮次的消息拼成模型看得懂的历史。
+ *
+ * 只带文本类消息：契约草稿、审批请求、执行结果这些**结构化**的东西不进历史，
+ * 它们各自在界面上有卡片，塞进上下文只会占地方、还会让模型以为自己说过那些 JSON。
+ *
+ * 最后一条（当前这句）由 `followUps` 单独呈现，这里要去掉，否则会重复一遍。
+ */
+function historyOf(session: AgentSession): UnifiedMessage[] {
+  const all = sessions.messagesOf(session.sessionId)
+  const prior = all.slice(0, -1)
+  const out: UnifiedMessage[] = []
+  for (const m of prior) {
+    if (m.role === 'user' && m.kind === 'text') {
+      out.push({ role: 'user', content: [{ type: 'text', text: m.text }] })
+    } else if (m.role === 'agent' && (m.kind === 'text' || m.kind === 'progress')) {
+      out.push({ role: 'assistant', content: [{ type: 'text', text: m.text }] })
+    }
+  }
+  return out
+}
+
+/** 会话的任务列表 —— 从 runs 直接派生，不另存一份 */
+function tasksOf(sessionId: string): TaskItem[] {
+  const s = sessions.getSession(sessionId)
+  if (!s?.runId) return []
+  const run = runs.get(s.runId)
+  if (!run) return []
+
+  return [
+    {
+      taskId: run.runId,
+      runId: run.runId,
+      title: run.goal,
+      state: run.state,
+      steps: run.lastSteps ?? 0,
+      at: run.createdAt
+    }
+  ]
+}
+
+function changesOf(sessionId: string): FileChange[] {
+  const s = sessions.getSession(sessionId)
+  if (!s?.runId) return []
+  return sessions.changesOf(s.runId)
+}
+
+function previewsOf(sessionId: string): PreviewTarget[] {
+  const s = sessions.getSession(sessionId)
+  if (!s?.runId) return []
+  return sessions.previewsOf(s.runId)
+}
+
+/* ------------------------------------------------------------------ *
  * 请求处理
  * ------------------------------------------------------------------ */
 
@@ -1198,6 +1445,78 @@ async function handleRequest(method: string, params: unknown): Promise<unknown> 
         mcp: mcp.map((t) => ({ name: t.qualifiedName, server: t.server, trust: t.trust })),
         total: specs.length
       }
+    }
+
+    /* ---------------- 会话（IDE 右栏） ---------------- */
+
+    case SESSION_METHODS.list: {
+      return sessions.listSessions()
+    }
+
+    case SESSION_METHODS.create: {
+      const { title } = (params ?? {}) as { title?: string }
+      return sessions.createSession(title)
+    }
+
+    case SESSION_METHODS.messages: {
+      const { sessionId } = params as { sessionId: string }
+      return sessions.messagesOf(sessionId)
+    }
+
+    case SESSION_METHODS.confirmContract: {
+      const input = params as { sessionId: string; accepted: boolean; contract?: GoalContract }
+      return confirmSessionContract(input)
+    }
+
+    case SESSION_METHODS.send: {
+      const input = params as { sessionId?: string; text: string }
+      return await sendMessage(input)
+    }
+
+    case SESSION_METHODS.tasks: {
+      const { sessionId } = params as { sessionId: string }
+      return tasksOf(sessionId)
+    }
+
+    case SESSION_METHODS.changes: {
+      const { sessionId } = params as { sessionId: string }
+      return changesOf(sessionId)
+    }
+
+    case SESSION_METHODS.noteChange: {
+      const p = params as { runId: string; path: string; kind: FileChange['kind'] }
+      return sessions.noteChange(p)
+    }
+
+    case SESSION_METHODS.confirmChange: {
+      const { changeId } = params as { changeId: string }
+      return { ok: sessions.confirmChange(changeId) }
+    }
+
+    case SESSION_METHODS.preview: {
+      const { sessionId } = params as { sessionId: string }
+      return previewsOf(sessionId)
+    }
+
+    /**
+     * 手动登记预览地址。
+     *
+     * 地址是用户自己填的，仍然只接受回环地址 ——
+     * 不是不信任用户，而是「预览」这个入口一旦能指向外部，
+     * 就再没有一个地方能说清「应用里显示的到底是谁的内容」。
+     */
+    case SESSION_METHODS.previewAdd: {
+      const input = params as { sessionId: string; url: string; title?: string }
+      const session = sessions.getSession(input.sessionId)
+      if (!session?.runId) return { ok: false, reason: '该会话还没有执行中的 run' }
+      const saved = sessions.notePreview({
+        previewId: ulid(),
+        runId: session.runId,
+        url: input.url,
+        title: input.title ?? input.url
+      })
+      if (!saved) return { ok: false, reason: '只接受回环地址（127.0.0.1 / localhost / ::1）' }
+      return { ok: true, preview: saved }
     }
 
     default:

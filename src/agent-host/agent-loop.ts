@@ -42,6 +42,21 @@ export interface AgentLoopDeps {
   contract: GoalContract
   goal: string
   /**
+   * 多轮对话里用户确认契约之后追加的指令。
+   *
+   * 契约是本轮的授权边界，追加指令只在契约范围内生效 ——
+   * 它不能扩大授权，只能改变在授权范围内怎么做。
+   * 界面上要照实说明这一点，否则用户会以为「补一句话」就能让它去做契约外的事。
+   */
+  followUps?: string[]
+  /**
+   * 之前轮次的对话（用户 → 模型），按时间顺序。
+   *
+   * 为什么需要：没有它的话每一轮都是一次全新的对话，模型不知道自己上一步
+   * 改了什么、为什么这么改，于是会重复劳动 —— 表现为「它又做了一遍」。
+   */
+  history?: UnifiedMessage[]
+  /**
    * 本次要发给模型的工具清单。由编排层组装 —— 内置工具 + 当前连上的 MCP 工具。
    * 循环自己不认识 MCP server，它只按名字前缀决定往哪个回调上分发。
    */
@@ -106,16 +121,25 @@ function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
 }
 
 /** 开场白：把契约原样交给模型，并把「只有这些是你被授权做的事」讲清楚 */
-function kickoffText(goal: string, contract: GoalContract): string {
-  return [
+function kickoffText(goal: string, contract: GoalContract, followUps?: string[]): string {
+  const lines = [
     '用户的一句话目标：',
     goal,
     '',
     '用户已确认的目标契约（这是你的授权边界）：',
-    JSON.stringify(contract, null, 2),
-    '',
-    '现在开始。第一步建议先只读地看清现状，再决定要不要动手。'
-  ].join('\n')
+    JSON.stringify(contract, null, 2)
+  ]
+
+  if (followUps && followUps.length > 0) {
+    lines.push(
+      '',
+      '用户在此之后追加的要求（按时间顺序，后说的优先；不得超出上面的契约范围）：',
+      followUps.map((f, i) => `${i + 1}. ${f}`).join('\n')
+    )
+  }
+
+  lines.push('', '现在开始。第一步建议先只读地看清现状，再决定要不要动手。')
+  return lines.join('\n')
 }
 
 /** 工具返回结果 → 回灌给模型的文本。太长的输出要截断，否则上下文会被一条命令吃掉 */
@@ -189,8 +213,11 @@ function parseFinish(input: unknown): FinishInput | null {
  * 返回的 outcome 一定是这四种之一，不存在「不知道算不算成功」的第五种。
  */
 export async function runAgentLoop(deps: AgentLoopDeps): Promise<AgentLoopResult> {
+  // 历史在前、开场白在后：模型先看到「之前说过什么」，再看到「现在要做什么」。
+  // 顺序反过来的话，多轮上下文会被当成背景噪声，行为退化成单轮。
   const messages: UnifiedMessage[] = [
-    { role: 'user', content: [{ type: 'text', text: kickoffText(deps.goal, deps.contract) }] }
+    ...(deps.history ?? []),
+    { role: 'user', content: [{ type: 'text', text: kickoffText(deps.goal, deps.contract, deps.followUps) }] }
   ]
 
   let usage = ZERO_USAGE

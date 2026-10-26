@@ -34,7 +34,9 @@ import { verifyTicket, type ApprovalTicket } from '../shared/approval-token'
 import { mcpCommandString } from '../shared/mcp'
 import { McpHub } from './mcp-client'
 import { TerminalHost } from './terminal'
+import { WorkspaceWatcher } from './file-watcher'
 import type { TerminalCreateParams } from '../shared/terminal'
+import { FILE_CHANGE_CHANNELS } from '../shared/session'
 import {
   TOOL_METHODS,
   type McpCallParams,
@@ -430,6 +432,44 @@ function checkTicket(
 }
 
 /* ------------------------------------------------------------------ *
+ * 工作区文件变化监听
+ * ------------------------------------------------------------------ */
+
+/**
+ * 监听器实例。放在模块级而不是 init 里 new ——
+ * 一个进程只该有一个监听者，否则同一份改动会被上报两次。
+ */
+let watcher: WorkspaceWatcher | null = null
+
+/**
+ * 启动监听。
+ *
+ * 只上报**工作区内**的变化：`relative()` 之后仍以 `..` 开头的路径直接丢掉。
+ * 这不是洁癖 —— 「变更」页的意义是「这次任务动了你的哪些文件」，
+ * 越界的路径既不该出现在列表里，也不该让人误以为任务碰了它。
+ */
+function startWatching(root: string): { ok: boolean; recursive: boolean; reason?: string } {
+  stopWatching()
+  watcher = new WorkspaceWatcher(root, (notice) => {
+    emitEvent(FILE_CHANGE_CHANNELS.changed, notice)
+  })
+  const result = watcher.start()
+  if (!result.ok) {
+    console.warn(`[tool-host] 文件变化监听未启动：${result.reason ?? '未知原因'}`)
+    return result
+  }
+  console.log(
+    `[tool-host] 文件变化监听已启动（root=${root}，基线 ${result.files} 个文件，递归=${result.recursive}）`
+  )
+  return result
+}
+
+function stopWatching(): void {
+  watcher?.stop()
+  watcher = null
+}
+
+/* ------------------------------------------------------------------ *
  * 请求处理
  * ------------------------------------------------------------------ */
 
@@ -447,7 +487,24 @@ async function handleRequest(method: string, params: unknown): Promise<unknown> 
       openAuditLog(p.dataDir)
       // MCP 连接不阻塞 init（见 loadMcp 注释）
       if (p.mcpConfigPath) void loadMcp(p.mcpConfigPath)
-      return { ok: true, workspaceRoot }
+      // 文件变化监听同样不阻塞 init：它是「变更」页的输入，起不来也不该挡住执行通道
+      const watchResult = startWatching(p.workspaceRoot)
+      return { ok: true, workspaceRoot, watching: watchResult.ok, watchReason: watchResult.reason }
+    }
+
+    /**
+     * 开始 / 重启监听（幂等）。
+     *
+     * 与 exec 一样要求先初始化：没有工作区根就没有边界，
+     * 而监听工作区外的内容等于给界面开了一扇不该有的窗。
+     */
+    case TOOL_METHODS.fsWatch: {
+      return startWatching(requireRoot())
+    }
+
+    case TOOL_METHODS.fsWatchStop: {
+      stopWatching()
+      return { ok: true }
     }
 
     case TOOL_METHODS.setTier: {

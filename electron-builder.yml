@@ -1,0 +1,58 @@
+# 打包配置（electron-builder）
+#
+# 两条容易踩的坑，写在这里免得以后有人「顺手优化」掉：
+#   1. npmRebuild: false —— 两个原生依赖（better-sqlite3 / node-pty）都是 Node-API，
+#      本机编好的产物在 Electron 里直接能加载（已实测），打开 rebuild 只会让打包
+#      依赖 MSVC + Python 工具链，装不上就没法出包。
+#   2. extraResources 里的 vscodium-server —— 内嵌 IDE 的服务端，284MB，不进 asar
+#      （asar 是只读归档，服务端要写 extension 目录）。主进程 locateServer() 在打包态
+#      找的就是 resources/vscodium-server。
+
+appId: io.openintj.console
+productName: openINTJ
+copyright: Copyright © 2026 openINTJ
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - out/**/*
+  - package.json
+  - scripts/fixtures/**/*
+  - "!**/*.map"
+
+asar: true
+asarUnpack:
+  - "**/*.node"
+  - node_modules/node-pty/prebuilds/**/*
+
+npmRebuild: false
+
+extraResources:
+  - from: vendor/vscodium-server
+    to: vscodium-server
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: openINTJ-Setup-${version}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: openINTJ
+  deleteAppDataOnUninstall: false
+
+mac:
+  target: dmg
+  category: public.app-category.developer-tools
+
+linux:
+  target: AppImage
+  category: Development

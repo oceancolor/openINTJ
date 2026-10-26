@@ -33,6 +33,14 @@ import type {
   IdeStatus,
   IdeStopResult
 } from './ide'
+import type {
+  AgentSession,
+  ChatMessage,
+  FileChange,
+  PreviewTarget,
+  SessionSendResult,
+  TaskItem
+} from './session'
 
 /* ------------------------------------------------------------------ *
  * 通用信封
@@ -128,6 +136,55 @@ export interface RendererApi {
   ideLayout(rect: IdeLayoutRect | null): Promise<{ ok: boolean }>
   /** 订阅 IDE 状态变化（启动中 → 可用 / 失败） */
   onIdeStatus(handler: (s: IdeStatus) => void): () => void
+
+  /* ---- 会话（IDE 右栏：对话 / 任务 / 变更 / 预览） ---- */
+
+  /** 会话列表（按创建时间升序） */
+  sessionList(): Promise<AgentSession[]>
+
+  /** 新建会话 */
+  sessionCreate(title?: string): Promise<AgentSession>
+
+  /** 某会话的消息 */
+  sessionMessages(sessionId: string): Promise<ChatMessage[]>
+
+  /**
+   * 发一句话。首轮 = 起草契约并停在硬闸门；
+   * 契约已确认之后 = 追加指令再跑一轮循环。
+   */
+  sessionSend(input: { sessionId?: string; text: string }): Promise<SessionSendResult>
+
+  /** 确认 / 否决该会话的契约（IC-07 硬闸门） */
+  sessionConfirmContract(input: {
+    sessionId: string
+    accepted: boolean
+    contract?: GoalContract
+  }): Promise<{ ok: boolean; session?: AgentSession; reason?: string }>
+
+  /** 该会话的任务列表 */
+  sessionTasks(sessionId: string): Promise<TaskItem[]>
+
+  /** 该会话下的文件变化 */
+  sessionChanges(sessionId: string): Promise<FileChange[]>
+
+  /** 用户确认某条文件变化 */
+  sessionConfirmChange(changeId: string): Promise<{ ok: boolean }>
+
+  /** 该会话的预览目标；为空表示当前没有可预览的东西 */
+  sessionPreview(sessionId: string): Promise<PreviewTarget[]>
+
+  /** 手动登记一个预览地址（只接受回环地址） */
+  sessionAddPreview(input: {
+    sessionId: string
+    url: string
+    title?: string
+  }): Promise<{ ok: boolean; reason?: string; preview?: PreviewTarget }>
+
+  /** 订阅工作区文件变化 */
+  onFileChanged(handler: (c: FileChange) => void): () => void
+
+  /** 用系统浏览器打开外部地址 —— 应用内不承载外链内容 */
+  openExternal(url: string): Promise<void>
 
   /** 健康探针：验证三进程链路连通 */
   ping(): Promise<{ main: string; agentHost: string; toolHost: string }>
@@ -390,7 +447,18 @@ export const TOOL_METHODS = {
   terminalInterrupt: 'tool.term.interrupt',
   terminalResize: 'tool.term.resize',
   terminalClose: 'tool.term.close',
-  terminalList: 'tool.term.list'
+  terminalList: 'tool.term.list',
+
+  /* ---- 工作区文件变化（「变更」分页签的数据源） ---- */
+  /**
+   * 开始监听工作区内的文件变化（幂等）。
+   *
+   * 只读、不落盘、不喂模型 —— 内容与终端回显同一条边界：
+   * 路径可上报，内容必须先过脱敏才准离开本进程。
+   */
+  fsWatch: 'tool.fs.watch',
+  /** 停止监听 */
+  fsWatchStop: 'tool.fs.watch.stop'
 } as const
 
 export interface RecordDenialParams {

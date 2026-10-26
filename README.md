@@ -24,6 +24,21 @@ npm run start        # 以已构建产物启动
 
 ---
 
+## 打包桌面版
+
+```bash
+npm run dist:dir   # 只出 dist/win-unpacked/（可直接双击 openINTJ.exe 运行，最快）
+npm run dist       # 出 dist/openINTJ-Setup-<version>.exe（NSIS 安装程序）
+```
+
+配置在 `electron-builder.yml`。两点值得知道：
+
+- `npmRebuild: false` —— `better-sqlite3` 与 `node-pty` 都是 Node-API 产物，本机编好的在 Electron 里直接能加载，开 rebuild 反而要依赖 MSVC + Python 工具链
+- `extraResources` 把 `vendor/vscodium-server`（284MB）分发到 `resources/`，主进程 `locateServer()` 在打包态找的就是这个位置；**先跑一次 `npm run vscodium:fetch`**，否则打包出来的编辑器页会显示「服务端未安装」
+- 打包态的工作区根目录不再取 `process.cwd()`（那会是安装目录），默认落到 `%USERPROFILE%/openINTJ`
+
+---
+
 ## 进程模型
 
 | 进程 | 位置 | 职责 |
