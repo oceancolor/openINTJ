@@ -1405,3 +1405,127 @@ body {
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.06);
 }
+
+/* ------------------------------------------------------------------ *
+ * 工作区文件树（「变更」签内，只读）
+ * ------------------------------------------------------------------ */
+
+.file-tree {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+}
+
+.file-tree-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 10.5px;
+  opacity: 0.7;
+  padding: 2px 2px 6px;
+}
+
+/*
+ * 树区给固定高度而不是让它把「变化列表」挤出屏幕：
+ * 文件树是**辅助**，变化列表才是这个签的主角。挤掉了就成了主次颠倒。
+ */
+.file-tree-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 190px;
+  overflow-y: auto;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.file-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.file-row.active {
+  background: rgba(120, 170, 255, 0.16);
+}
+
+.file-row.dir .file-name {
+  font-weight: 600;
+}
+
+.file-caret {
+  width: 10px;
+  font-size: 9px;
+  opacity: 0.55;
+}
+
+.file-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-size {
+  font-size: 9.5px;
+  opacity: 0.5;
+}
+
+.file-preview {
+  margin-top: 6px;
+  border-top: 1px dashed var(--line);
+  padding-top: 6px;
+}
+
+.file-preview-head {
+  font-size: 10px;
+  opacity: 0.7;
+  word-break: break-all;
+  margin-bottom: 6px;
+}
+
+.file-preview-img {
+  display: block;
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+}
+
+.file-preview-text {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.28);
+  font-size: 10.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 契约卡里的「输入歧义度」一行 */
+.contract-ambiguity {
+  font-size: 10px;
+  opacity: 0.72;
+  padding: 3px 6px;
+  margin-bottom: 10px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+}

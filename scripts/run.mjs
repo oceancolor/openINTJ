@@ -71,7 +71,7 @@ switch (mode) {
         console.error('[run] 构建失败，冒烟自检取消')
         process.exit(code ?? 1)
       }
-      run(electronBin, ['.', '--smoke', ...passthrough], '冒烟自检')
+      run(electronBin, ['.', '--smoke', '--smoke-harness', ...passthrough], '冒烟自检')
     })
     break
   }

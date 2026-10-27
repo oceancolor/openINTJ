@@ -10,8 +10,13 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import type { CredentialInput, CredentialStatus, McpStatusSnapshot } from '../shared/ipc'
-import type { LlmProtocol } from '../shared/llm'
+import type {
+  CredentialInput,
+  CredentialStatus,
+  ImageInput,
+  McpStatusSnapshot
+} from '../shared/ipc'
+import type { ImageStatus, LlmProtocol } from '../shared/llm'
 
 const PROTOCOLS: { id: LlmProtocol; label: string; hint: string }[] = [
   { id: 'anthropic', label: 'Anthropic Messages', hint: '/v1/messages · x-api-key' },
@@ -336,6 +341,9 @@ export default function SettingsPage({ status, onChanged }: SettingsPageProps) {
         ) : null}
       </div>
 
+      {/* ---- 生图服务（独立凭据） ---- */}
+      <ImageCredentialCard vaultBlocked={vaultBlocked} />
+
       {/* ---- MCP（D6） ---- */}
       <div className="card" data-testid="mcp-card">
         <div className="card-title">
@@ -384,6 +392,155 @@ export default function SettingsPage({ status, onChanged }: SettingsPageProps) {
           MCP 工具与 shell 命令走同一条审批与审计链。server 声明为只读的自动放行，
           其余每次调用都要你点头 —— 外部进程能干什么，静态判断不了。
         </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 生图服务凭据。
+ *
+ * 与对话模型分成两张卡，是因为它们**不是同一件事**：端点不同、计费不同、
+ * 连失败的原因也不同（生图 402 是「没开通后付费」，与「模型没配」毫无关系）。
+ * 合成一张卡的后果是：生图跑不起来时，用户会去改对话模型而改不好。
+ */
+function ImageCredentialCard({ vaultBlocked }: { vaultBlocked: boolean }): React.ReactElement {
+  const [st, setSt] = useState<ImageStatus | null>(null)
+  const [baseUrl, setBaseUrl] = useState('')
+  const [model, setModel] = useState('')
+  const [size, setSize] = useState('1280x720')
+  const [apiKey, setApiKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<{ tone: 'ok' | 'warn' | 'danger'; text: string } | null>(null)
+
+  const refresh = useCallback(async (): Promise<void> => {
+    const s = await window.openintj.imageStatus()
+    setSt(s)
+    if (s.model) setModel(s.model)
+  }, [])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  const save = useCallback(async (): Promise<void> => {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const input: ImageInput = {
+        provider: 'hunyuan',
+        baseUrl: baseUrl.trim(),
+        model: model.trim(),
+        size: size.trim(),
+        // 留空 = 沿用保险箱里已有的那一把
+        apiKey: apiKey.trim() || undefined
+      }
+      const res = await window.openintj.imageSave(input)
+      if (res.ok) {
+        setApiKey('') // 与对话凭据同一条规矩：存完立刻从输入框清掉
+        setMsg({ tone: 'ok', text: '生图凭据已加密保存' })
+        if (res.status) setSt(res.status)
+      } else {
+        setMsg({ tone: 'danger', text: res.reason ?? '保存失败' })
+      }
+    } finally {
+      setBusy(false)
+    }
+  }, [baseUrl, model, size, apiKey])
+
+  const clear = useCallback(async (): Promise<void> => {
+    setBusy(true)
+    try {
+      const res = await window.openintj.imageClear()
+      setMsg({ tone: res.ok ? 'ok' : 'danger', text: res.ok ? '生图凭据已清除' : (res.reason ?? '清除失败') })
+      await refresh()
+    } finally {
+      setBusy(false)
+    }
+  }, [refresh])
+
+  const canSave = Boolean(baseUrl.trim()) && !vaultBlocked && !busy
+
+  return (
+    <div className="card" data-testid="image-card">
+      <div className="card-title">
+        生图服务
+        <span className={'state-chip ' + (st?.configured ? 'done' : 'pending')}>
+          {st?.configured ? '已配置' : '未配置'}
+        </span>
+      </div>
+
+      <div className="hint">
+        生图走独立凭据，不复用对话模型那把 key：端点、计费与失败原因都不同，
+        混在一起只会让「生图为什么用不了」查不清。没配时生图任务会落一张
+        <b>写着失败原因的占位图</b>（同样要过审批才准落盘），而不是假装成功。
+      </div>
+
+      <div className="field">
+        <label>Base URL</label>
+        <input
+          className="mono"
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+          placeholder="https://tokenhub.tencentmaas.com/v1"
+        />
+        <div className="hint mono" style={{ color: 'var(--text-faint)' }}>
+          实际请求 {baseUrl.trim() ? baseUrl.trim().replace(/\/+$/, '') : '{baseUrl'}
+          /wand/hunyuan-image/v3-generation
+        </div>
+      </div>
+
+      <div className="field">
+        <label>模型 / 尺寸</label>
+        <div className="tier-row">
+          <input
+            className="mono"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="hy-image-v3"
+          />
+          <input
+            className="mono"
+            value={size}
+            onChange={(e) => setSize(e.target.value)}
+            placeholder="1280x720"
+          />
+        </div>
+      </div>
+
+      <div className="field">
+        <label>API Key</label>
+        <input
+          className="mono"
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder={st?.configured ? '已保存，留空则不修改' : '必填'}
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </div>
+
+      {(st?.missing.length ?? 0) > 0 && (
+        <div className="hint" style={{ color: 'var(--text-faint)' }}>
+          还缺：{st!.missing.join(' / ')}
+        </div>
+      )}
+
+      <div className="contract-actions">
+        <button className="pill primary" onClick={() => void save()} disabled={!canSave}>
+          {busy ? '保存中…' : '保存生图凭据'}
+        </button>
+        <button className="pill ghost" onClick={() => void clear()} disabled={!st?.configured || busy}>
+          清除
+        </button>
+      </div>
+
+      {msg && <div className={'result ' + msg.tone}>{msg.text}</div>}
+
+      <div className="hint">
+        需要先保存过对话模型凭据 —— 生图片段存在同一份密文里，不单独落一个文件。
+        产物一律落在工作区的 <span className="mono">artifacts/</span> 下。
       </div>
     </div>
   )

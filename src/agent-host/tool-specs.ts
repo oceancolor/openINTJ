@@ -46,6 +46,33 @@ export const AGENT_TOOLS: ToolSpec[] = [
     }
   },
   {
+    name: 'generate_image',
+    description: [
+      '按一句描述生成一张图，产物落在工作区的 artifacts/ 下，并把路径返回给你。',
+      '',
+      '重要：',
+      '- prompt 用中文或英文描述画面本身（主体、风格、构图、光线），不要写「生成一张图」这种指令。',
+      '- 它和 run_command 走**同一条审批链**：写文件那一步可能被拒绝。被拒不是错误，照实说明即可。',
+      '- 生图凭据没配好时，它会落一张**占位图**并告诉你原因 —— 那不是成功，如实转述给用户。',
+      '- 一次只生成一张。要出一组图就分多次调用。'
+    ].join('\n'),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prompt: {
+          type: 'string',
+          description: '画面描述，例如「清晨的江边步道，水彩风格，横向构图」'
+        },
+        purpose: {
+          type: 'string',
+          description: '这张图服务于契约里的哪一条成功判据'
+        }
+      },
+      required: ['prompt', 'purpose'],
+      additionalProperties: false
+    }
+  },
+  {
     name: 'finish',
     description: [
       '声明本次任务结束。这是唯一的正常终止方式。',

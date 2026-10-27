@@ -40,6 +40,14 @@ Thumbs.db
 # 探针截图（每次冒烟都会新生成一张，属于瞬时产物）
 .snapshots/
 
+# 任务产物（生图等生成的图与文档，落在工作区 artifacts/ 下）
+# 默认不入库 —— 它们是产出不是源码；真要留档用 `git add -f artifacts/...`
+artifacts/
+
 # 内嵌 IDE 服务端（reh-web，约 94MB，npm run vscodium:fetch 按需拉取，不入库）
 vendor/
+# 但 src/vendor/ 是**本分支自己的代码** —— 从主干搬过来的 @openintj 包源码，
+# 不是下载产物。它跟着上面那条一起被忽略了的话，别人 clone 下来直接编译不过，
+# 而症状是「Failed to resolve import @openintj/core」，极难归因到 .gitignore。
+!src/vendor/
 .cache/

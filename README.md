@@ -331,6 +331,42 @@ DOM，也截不到它的键盘事件，所以面板状态条放在占位区**上
 
 ---
 
+## 从主干合入的四项能力
+
+主干（`origin/main`）上的 harness 是**另一套架构**（`ts/apps/desktop` + monorepo 包），
+与本分支的 `src/` 契约无法目录级合并（试合产生 49 个 modify/delete 冲突）。
+所以按「移植到 `src/` 架构」的方式重做：只把**算法**搬过来
+（`src/vendor/openintj/`，来源与同步方式见那里的 README），
+外围全部按本工程的进程分层与裁决链重写。
+
+| 项 | 落在哪 | 关键约束 |
+| --- | --- | --- |
+| 工件识别 + 预览 | 一张扩展名表（shared/session）→ 文件树标记、预览登记、渲染三处共用 | 预览只渲染**工作区内**的工件；外部地址一律交系统浏览器 |
+| 生图任务 | Agent 内置工具 `generate_image` → 产物落 `artifacts/` | **落盘必经 tool-host 裁决**（precheck → 票据 → 审计），agent-host 不直接 `fs.writeFile` |
+| 工作区文件树 | tool-host 的 `fs.list` / `fs.read`（只读） | 只认工作区相对路径，上跳与绝对路径一律拒；读有 4MB 上限，超限如实说超了 |
+| 输入结构化 | `structureUserInput` 前置到契约起草 | 歧义分 ≥ 阈值且有问题时进 `needsClarification`（最多 3 条）；结构化失败按 pass-through 继续，**不阻断起草** |
+
+生图失败时落的是一张**写着失败原因的占位 SVG**，不是随机图也不是静默失败 ——
+它同样要过审批才准落盘。
+
+### 生图是独立凭据
+
+与对话模型分开存（`VaultCredential.image` 段，同一份密文）。理由：端点不同
+（`{baseUrl}/wand/hunyuan-image/v3-generation`）、计费不同（按张计费）、
+失败原因也不同（402 = 未开通后付费且无免费额度）。
+**不用对话模型的 key 兜底** —— 那样只会让生图报 401/402，
+而用户会去改对话模型，越改越远。
+
+```bash
+export OPENINTJ_IMAGE_BASE_URL=https://tokenhub.tencentmaas.com/v1
+export OPENINTJ_IMAGE_API_KEY=...
+# 可选：OPENINTJ_IMAGE_MODEL=hy-image-v3  OPENINTJ_IMAGE_SIZE=1280x720
+```
+
+也支持在「设置与凭据 → 生图服务」里存进系统保险箱（需先存过对话模型凭据）。
+
+---
+
 ## 尚未接入（按依赖排序）
 
 | 项 | 依赖 |

@@ -17,7 +17,17 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@shared/*": ["src/shared/*"]
+      "@shared/*": ["src/shared/*"],
+      /*
+       * @openintj/* 是从主干 monorepo 搬过来的包（见 src/vendor/openintj/README）。
+       *
+       * 用 paths 映射而不是改源码里的 import，是为了让搬过来的文件**原样可用**：
+       * 一旦动手改它们的 import，下次再同步上游就变成逐文件 diff，
+       * 而这类"顺手改一下"的偏差正是后来对不上的根源。
+       */
+      "@openintj/core": ["src/vendor/openintj/core/index.ts"],
+      "@openintj/shared": ["src/vendor/openintj/shared/index.ts"],
+      "@openintj/llm-hunyuan": ["src/vendor/openintj/llm-hunyuan/index.ts"]
     }
   },
   "include": [
@@ -26,6 +36,7 @@
     "src/tool-host/**/*.ts",
     "src/preload/**/*.ts",
     "src/shared/**/*.ts",
+    "src/vendor/**/*.ts",
     "electron.vite.config.ts"
   ]
 }

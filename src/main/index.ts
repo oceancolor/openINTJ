@@ -19,8 +19,10 @@ import {
   maskKey,
   normalizeCredential,
   readVault,
+  toImageConfig,
   toLlmConfig,
-  writeVault
+  writeVault,
+  normalizeImageCredential
 } from './credential-store'
 import {
   AGENT_METHODS,
@@ -31,6 +33,11 @@ import {
   type CredentialInput,
   type CredentialSource,
   type CredentialStatus,
+  type FsListResult,
+  type FsReadResult,
+  type FsWriteResult,
+  type ImageInput,
+  type ImageSaveResult,
   type LlmTestResult,
   type McpCallOutcome,
   type McpStatusSnapshot,
@@ -44,7 +51,15 @@ import {
   type McpServerStatus,
   type McpToolInfo
 } from '../shared/mcp'
-import { parseProtocol, readLlmConfig, type LlmConfig } from '../shared/llm'
+import {
+  describeImage,
+  parseProtocol,
+  readImageConfig,
+  readLlmConfig,
+  type ImageConfigResult,
+  type ImageStatus,
+  type LlmConfig
+} from '../shared/llm'
 import { applyRedaction } from '../shared/redaction'
 import { homedir, networkInterfaces } from 'node:os'
 import { DEFAULT_TIER, isTierAllowedOnPlatform, type ApprovalTier } from '../shared/approval'
@@ -57,6 +72,7 @@ import type { IdeLayoutRect, IdeStartParams, IdeStartResult, IdeStatus, IdeStopR
 import {
   FILE_CHANGE_CHANNELS,
   SESSION_METHODS,
+  previewKindOf,
   type AgentSession,
   type ChatMessage,
   type FileChange,
@@ -399,6 +415,32 @@ function resolveCredential(): ResolvedCredential {
   }
 }
 
+/**
+ * 生图凭据的生效来源 —— 与对话凭据同样「保险箱 > 环境变量」。
+ *
+ * 与对话凭据**不互相兜底**：保险箱里没配生图，就绝不会拿对话模型的 key 去顶。
+ * 那把 key 打在生图端点上大概率是 401/402，而用户会以为是生图服务坏了 ——
+ * 一个「好心」的兜底换来一次完全错误的归因，不值。
+ */
+function resolveImageCredential(): ImageConfigResult {
+  const vault = readVault(app.getPath('userData'))
+  const envMissing: string[] = []
+
+  if (vault.kind === 'ok') {
+    const cfg = toImageConfig(vault.credential)
+    if (cfg) return { configured: true, config: cfg }
+    envMissing.push('保险箱里没有生图凭据')
+  }
+
+  const env = readImageConfig(process.env)
+  if (env.configured) return env
+  return { configured: false, missing: [...envMissing, ...env.missing] }
+}
+
+function buildImageStatus(): ImageStatus {
+  return describeImage(resolveImageCredential())
+}
+
 function buildCredentialStatus(): CredentialStatus {
   const r = resolveCredential()
   const available = safeStorage.isEncryptionAvailable()
@@ -543,6 +585,27 @@ function startWorkers(): void {
       }
     }
     return { configured: true, config: r.config }
+  })
+
+  /**
+   * agent-host 反向拉**生图**凭据。与上面同一条通道、同样的约束
+   * （走 MessagePort，不落盘、不进事件流、不回渲染层）。
+   */
+  agentHost.handle(CREDENTIAL_METHODS.getImage, async () => {
+    const r = resolveImageCredential()
+    if (!r.configured) return { configured: false, missing: r.missing }
+    return { configured: true, config: r.config }
+  })
+
+  /**
+   * agent-host 请求写文件（生图落盘 / 工件产出）—— 原样转交 tool-host。
+   *
+   * 与 exec 一样由主进程搬运：不开 agent-host ↔ tool-host 直连，
+   * 「谁调用了谁」在主进程只有一个入口。
+   */
+  agentHost.handle(TOOL_METHODS.fsWrite, async (params) => {
+    if (!toolHost) throw new Error('tool-host 未就绪')
+    return await toolHost.request(TOOL_METHODS.fsWrite, params, 60_000)
   })
 
   agentHost.start()
@@ -916,6 +979,58 @@ function registerIpc(): void {
     const result = clearVault(app.getPath('userData'))
     if (!result.ok) return result
     return { ok: true, status: buildCredentialStatus() }
+  })
+
+  /* ---- 生图凭据（与对话模型分开存放） ---- */
+
+  ipcMain.handle('api:imageStatus', (): ImageStatus => buildImageStatus())
+
+  ipcMain.handle('api:imageSave', async (_e, input: ImageInput): Promise<ImageSaveResult> => {
+    if (!safeStorage.isEncryptionAvailable()) {
+      return { ok: false, reason: '系统密钥链不可用，拒绝保存（不会降级成明文存储）' }
+    }
+
+    const dataDir = app.getPath('userData')
+    const existing = readVault(dataDir)
+    // 没有对话凭据就没地方挂生图片段 —— 保险箱是一份整体密文，不能只写一半
+    if (existing.kind !== 'ok') {
+      return { ok: false, reason: '请先保存对话模型凭据（生图片段存在同一份密文里）' }
+    }
+
+    const prevKey = existing.credential.image?.apiKey ?? ''
+    const apiKey = (input.apiKey ?? '').trim() || prevKey
+    if (!apiKey) return { ok: false, reason: '首次保存必须填写 API Key' }
+
+    const image = normalizeImageCredential({ ...input, apiKey, savedAt: Date.now() })
+    if (!image) return { ok: false, reason: '生图配置不完整，或 Base URL 不是 http(s) 地址' }
+
+    // 原样写回整份凭据（含对话模型那一段），只替换 image 段
+    const written = writeVault(dataDir, { ...existing.credential, image })
+    if (!written.ok) return { ok: false, reason: written.reason }
+    return { ok: true, status: buildImageStatus() }
+  })
+
+  ipcMain.handle('api:imageClear', (): { ok: boolean; reason?: string } => {
+    const dataDir = app.getPath('userData')
+    const existing = readVault(dataDir)
+    if (existing.kind !== 'ok') return { ok: true }
+    // 摘掉 image 段再整份写回 —— 保险箱是一份整体密文，不能「删一个字段」
+    const { image: _dropped, ...rest } = existing.credential
+    void _dropped
+    const written = writeVault(dataDir, rest)
+    return written.ok ? { ok: true } : { ok: false, reason: written.reason }
+  })
+
+  /* ---- 工作区文件树（只读，读权限在 tool-host） ---- */
+
+  ipcMain.handle('api:workspaceList', async (_e, input: { path?: string }): Promise<FsListResult> => {
+    if (!toolHost) return { ok: false, path: input.path ?? '', entries: [], truncated: false }
+    return await toolHost.request<FsListResult>(TOOL_METHODS.fsList, input, 15_000)
+  })
+
+  ipcMain.handle('api:workspaceRead', async (_e, input: { path: string }): Promise<FsReadResult> => {
+    if (!toolHost) return { ok: false, reason: 'tool-host 未就绪' }
+    return await toolHost.request<FsReadResult>(TOOL_METHODS.fsRead, input, 20_000)
   })
 
   // 测试连接：交给 agent-host 用真实协议实现发一次最小请求，不在 main 里重写一遍协议
@@ -1316,6 +1431,11 @@ async function smoke(): Promise<void> {
   // 可选：会话面板 —— 验 IDE 右栏「对话 / 任务 / 变更 / 预览」四个分页签
   if (process.argv.includes('--smoke-session')) {
     await verifySessionPanel()
+  }
+
+  // 可选：主干合入的四项能力 —— 文件树只读、写入必经裁决、工件识别、生图凭据
+  if (process.argv.includes('--smoke-harness')) {
+    await verifyHarness()
   }
 
   // 可选：内嵌 IDE —— 真拉起 VSCodium 服务端，验外部产品边界被收紧
@@ -1867,6 +1987,136 @@ async function verifyTerminal(): Promise<void> {
       await toolHost.request(TOOL_METHODS.terminalClose, { sessionId: s.sessionId }, 5_000).catch(() => undefined)
     }
   }
+}
+
+/**
+ * 主干合入的四项能力自检。
+ *
+ * 这四项都是「新通道」，而新通道最该验的不是「它能跑通」，
+ * 而是**它绕不过旧闸门** —— 所以每一条探针问的都是「不许发生的事有没有被挡住」。
+ */
+async function verifyHarness(): Promise<void> {
+  if (!toolHost) {
+    console.log('[probe] ㊴ 失败：tool-host 未就绪')
+    return
+  }
+
+  /*
+   * ㊴ 文件树：只列工作区内，且目录排在前。
+   *
+   * 刻意**不**断言「里面有 src」：打包态的工作区根与开发态不同
+   * （自检不该因为跑在哪个目录下就红），要验的是排序与「列得出来」这两件事。
+   */
+  const root = await toolHost.request<FsListResult>(TOOL_METHODS.fsList, {}, 10_000)
+  const dirs = root.entries.filter((e) => e.kind === 'dir')
+  const firstFile = root.entries.findIndex((e) => e.kind === 'file')
+  const sortedOk = firstFile === -1 || firstFile >= dirs.length
+  console.log(
+    root.ok && root.entries.length > 0 && sortedOk
+      ? `[probe] ㊴ 文件树列出 ${root.entries.length} 项（目录 ${dirs.length} 个在前，排序正确）`
+      : `[probe] ㊴ 失败：${JSON.stringify(root).slice(0, 200)}`
+  )
+
+  /* ㊵ 越界路径必须被拒 —— 文件树与预览都只认工作区 */
+  const escape = await toolHost.request<FsReadResult>(
+    TOOL_METHODS.fsRead,
+    { path: '../outside.txt' },
+    10_000
+  )
+  const absEscape = await toolHost.request<FsReadResult>(
+    TOOL_METHODS.fsRead,
+    { path: 'C:/Windows/win.ini' },
+    10_000
+  )
+  console.log(
+    !escape.ok && !absEscape.ok
+      ? '[probe] ㊵ 相对上跳与绝对路径均被拒（文件树不出工作区）'
+      : `[probe] ㊵ 失败：越界路径竟然读到了内容 → ${JSON.stringify(escape).slice(0, 160)}`
+  )
+
+  /* ㊶ 写文件**没有票据**必须被拒 —— 生图落盘不是绕过审批的口子 */
+  const probePath = 'artifacts/.smoke-write-probe.txt'
+  const denied = await toolHost
+    .request<FsWriteResult>(
+      TOOL_METHODS.fsWrite,
+      {
+        runId: 'smoke-harness',
+        agentId: 'main',
+        path: probePath,
+        contentBase64: Buffer.from('probe', 'utf8').toString('base64'),
+        mimeType: 'text/plain',
+        overwrite: true
+      },
+      10_000
+    )
+    .catch((e: Error) => ({ ok: false, reason: e.message }) as FsWriteResult)
+  const fileAfterDeny = existsSync(join(WORKSPACE_ROOT, probePath))
+  console.log(
+    !denied.ok && !fileAfterDeny
+      ? '[probe] ㊶ 无票据写入被拒，且未产生任何文件（未获批准不落盘）'
+      : `[probe] ㊶ 失败：${JSON.stringify(denied).slice(0, 200)} / 文件存在=${fileAfterDeny}`
+  )
+
+  /* ㊷ 带上主进程签发的票据才写得进去；写完能读回，随后清理干净 */
+  const writeCmd = `writeFile ${probePath}`
+  const ticket = issueTicket(TICKET_SECRET, {
+    runId: 'smoke-harness',
+    command: writeCmd,
+    riskClass: 'L1',
+    scope: 'once'
+  })
+  const written = await toolHost
+    .request<FsWriteResult>(
+      TOOL_METHODS.fsWrite,
+      {
+        runId: 'smoke-harness',
+        agentId: 'main',
+        path: probePath,
+        contentBase64: Buffer.from('probe', 'utf8').toString('base64'),
+        mimeType: 'text/plain',
+        overwrite: true,
+        approvalTicket: ticket
+      },
+      15_000
+    )
+    .catch((e: Error) => ({ ok: false, reason: e.message }) as FsWriteResult)
+
+  const readBack = written.ok
+    ? await toolHost.request<FsReadResult>(TOOL_METHODS.fsRead, { path: probePath }, 10_000)
+    : ({ ok: false, reason: '未写入' } as FsReadResult)
+
+  // 用完即删：自检不该在工作区里留下东西，否则「变更」页会多出一条没人认领的记录
+  if (written.ok) {
+    try {
+      rmSync(join(WORKSPACE_ROOT, probePath), { force: true })
+    } catch {
+      /* 清理失败不影响结论，但会在变更列表里留一条 */
+    }
+  }
+
+  console.log(
+    written.ok && readBack.ok && readBack.text === 'probe'
+      ? `[probe] ㊷ 持票据写入成功（${written.bytes} 字节，风险 ${written.risk?.riskClass}），读回内容一致并已清理`
+      : `[probe] ㊷ 失败：${JSON.stringify(written).slice(0, 160)} / ${JSON.stringify(readBack).slice(0, 160)}`
+  )
+
+  /* ㊸ 工件识别：一张表三处用（文件树 / 预览登记 / 渲染），必须认得 png 也认不出 bin */
+  const img = previewKindOf('artifacts/2026-01-01-cat.png')
+  const txt = previewKindOf('notes.md')
+  const bin = previewKindOf('build/out.bin')
+  console.log(
+    img?.kind === 'image' && txt?.kind === 'text' && bin === null
+      ? '[probe] ㊸ 工件识别：png→图片、md→文本、bin→不可预览'
+      : `[probe] ㊸ 失败：${JSON.stringify({ img, txt, bin })}`
+  )
+
+  /* ㊹ 生图凭据：没配时要如实给出缺失项，而不是悄悄拿对话模型的 key 去顶 */
+  const imgStatus = buildImageStatus()
+  console.log(
+    imgStatus.configured || imgStatus.missing.length > 0
+      ? `[probe] ㊹ 生图凭据状态可读（configured=${imgStatus.configured}，缺 ${imgStatus.missing.join(' / ') || '无'}）`
+      : '[probe] ㊹ 失败：生图状态既没配好也没给出缺失项'
+  )
 }
 
 function verifyRedaction(): void {

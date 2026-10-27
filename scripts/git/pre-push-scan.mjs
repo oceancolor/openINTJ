@@ -14,18 +14,25 @@ import { join, relative } from 'node:path'
 
 const ROOT = process.cwd()
 
-/** 与 .gitignore 对齐的排除目录 —— 这些目录体积巨大且从不入库 */
+/**
+ * 排除目录 —— 体积巨大 / 从不入库。
+ *
+ * `vendor` 只排除**仓库根**那一层（内嵌 IDE 服务端，284MB 下载产物）。
+ * `src/vendor/` 是从主干搬过来的包源码，是本分支要入库的代码 ——
+ * 照旧按目录名一刀切的话，那片代码就永远不在扫描范围内，
+ * 而「扫描过」这件事本身会变成假的安心。
+ */
 const SKIP_DIRS = new Set([
   'node_modules',
   'out',
   'dist',
   'release',
-  'vendor',
   '.cache',
   '.vite',
   '.git',
   '.snapshots'
 ])
+const SKIP_REL_PATHS = new Set(['vendor'])
 const SKIP_FILES = new Set(['package-lock.json', '.npmrc'])
 
 /** 二进制/非文本扩展名：直接跳过内容扫描（但仍然计入清单） */
@@ -63,6 +70,8 @@ function walk(dir, out = []) {
     const rel = relative(ROOT, p).replace(/\\/g, '/')
     if (statSync(p).isDirectory()) {
       if (SKIP_DIRS.has(name)) continue
+      // 按**相对根的路径**排除：只有仓库根的 vendor/ 是下载产物
+      if (SKIP_REL_PATHS.has(rel)) continue
       walk(p, out)
       continue
     }
@@ -116,7 +125,9 @@ for (const f of files) {
   })
 }
 
-console.log(`扫描 ${scanned} 个文本文件（已排除 node_modules / vendor / out / .cache / .snapshots）`)
+console.log(
+  `扫描 ${scanned} 个文本文件（已排除 node_modules / 根 vendor / out / .cache / .snapshots）`
+)
 if (ignored.length) {
   console.log(`\nℹ️  按标记豁免 ${ignored.length} 处（应当只有脱敏探针的合成夹具）：`)
   for (const g of ignored) console.log(`  ${g.file}:${g.line}  [${g.label}]  理由：${g.reason}`)

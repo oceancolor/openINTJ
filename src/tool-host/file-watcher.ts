@@ -39,7 +39,13 @@ export interface FileChangeNotice {
  * 不过滤的话，「变更」页会变成噪音，用户反而看不到自己改了什么。
  * `dist` / `out` 是构建产物，不是人的改动。
  */
-const IGNORED_DIRS = new Set([
+/**
+ * 不监听、也不列给界面的目录。
+ *
+ * 这张表同时被「变化监听」与「文件树」使用 —— 一份表两处用，
+ * 否则会出现「文件树里看得见、但改了它变更列表没反应」的错位。
+ */
+export const IGNORED_DIRS = new Set([
   '.git',
   'node_modules',
   'dist',
@@ -160,7 +166,7 @@ export class WorkspaceWatcher {
   }
 }
 
-function isIgnored(rel: string): boolean {
+export function isIgnored(rel: string): boolean {
   return rel.split('/').some((seg) => IGNORED_DIRS.has(seg))
 }
 

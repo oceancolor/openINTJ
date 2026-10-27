@@ -39,6 +39,10 @@ import type { TerminalCreateParams } from '../shared/terminal'
 import { FILE_CHANGE_CHANNELS } from '../shared/session'
 import {
   TOOL_METHODS,
+  type FsListParams,
+  type FsReadParams,
+  type FsWriteParams,
+  type FsWriteResult,
   type McpCallParams,
   type McpCallOutcome,
   type McpDenialParams,
@@ -51,6 +55,13 @@ import {
   type ToolInitParams,
   type WireEnvelope
 } from '../shared/ipc'
+import {
+  listWorkspace,
+  readWorkspace,
+  resolveInside,
+  workspaceFileExists,
+  writeWorkspace
+} from './workspace-fs'
 
 interface ParentPortLike {
   on(event: 'message', cb: (e: { data: unknown; ports: MessagePortLike[] }) => void): void
@@ -731,6 +742,79 @@ async function handleRequest(method: string, params: unknown): Promise<unknown> 
       const { runId, limit } = params as { runId: string; limit?: number }
       if (!auditLog) throw new Error('审计库未就绪')
       return auditLog.recent(runId, limit ?? 20)
+    }
+
+    /* ---------------- 工作区文件（文件树 / 工件预览 / 生图落盘） ---------------- */
+
+    /** 列目录 —— 只读，不落审计（理由见 TOOL_METHODS.fsList 的注释） */
+    case TOOL_METHODS.fsList: {
+      const p = (params ?? {}) as FsListParams
+      return listWorkspace(requireRoot(), p.path ?? '')
+    }
+
+    /** 读文件 —— 只读，有大小上限，超限如实说超了 */
+    case TOOL_METHODS.fsRead: {
+      const p = params as FsReadParams
+      return readWorkspace(requireRoot(), p.path)
+    }
+
+    /**
+     * 写文件 —— 与 exec 走**同一条**裁决链：同一张真值表、同一套票据、同一份审计。
+     *
+     * 审批卡片与票据绑定的是 `writeFile <相对路径>` 这串文字。
+     * 这样写有两个好处：它能命中现有分级器的「工作区内写入」（L1），
+     * 也让「点允许意味着什么」在文件写入与命令执行上保持同一种解释 ——
+     * 两种写法会让用户学到两套语义，而其中一套必然是错的。
+     */
+    case TOOL_METHODS.fsWrite: {
+      const p = params as FsWriteParams
+      if (!ticketSecret || !workspaceRoot) {
+        throw new Error('拒绝写入：tool-host 未完成初始化（缺少票据密钥或工作区根目录）')
+      }
+      if (!auditLog) throw new Error('拒绝写入：审计库未就绪（没有审计就不执行）')
+
+      const relPath = p.path.replace(/^\.\//, '')
+      // 边界先于分级：越界的路径根本不该进裁决，直接拒
+      if (!resolveInside(workspaceRoot, relPath)) {
+        throw new Error(`拒绝写入：路径越出工作区根（${p.path}）`)
+      }
+      // 覆盖与否是**准入校验**而不是裁决项，放在审批之前：
+      // 否则会出现一条「批准了但什么都没写」的审计，那比没有审计更误导
+      if (!p.overwrite && workspaceFileExists(workspaceRoot, relPath)) {
+        throw new Error(`拒绝写入：${relPath} 已存在（未声明覆盖）`)
+      }
+
+      const command = `writeFile ${relPath}`
+      const risk = classify({ command, cwd: workspaceRoot, workspaceRoot })
+      const verdict = decide({ runId: p.runId, command, approvalTicket: p.approvalTicket }, risk)
+
+      const audit: RiskDecisionContext = {
+        command,
+        riskClass: risk.riskClass,
+        tier: currentTier,
+        outcome: verdict.outcome,
+        basis: verdict.basis,
+        matchedRuleId: risk.matchedRuleId
+      }
+      auditLog.record(p.runId, audit, verdict.allow)
+
+      if (!verdict.allow) {
+        throw new Error(
+          `拒绝写入：${verdict.reason ?? '未获批准'}（风险 ${audit.riskClass}，档位 ${audit.tier}，规则 ${audit.matchedRuleId}）`
+        )
+      }
+
+      let bytes: Uint8Array
+      try {
+        bytes = Uint8Array.from(Buffer.from(p.contentBase64, 'base64'))
+      } catch (err) {
+        throw new Error(`拒绝写入：内容不是合法 base64（${(err as Error).message}）`)
+      }
+
+      const written = writeWorkspace(workspaceRoot, relPath, bytes, p.overwrite === true)
+      if (!written.ok) throw new Error(`写入失败：${written.reason}`)
+
+      return { ok: true, path: written.path, bytes: written.bytes, risk: audit } satisfies FsWriteResult
     }
 
     case TOOL_METHODS.exec: {

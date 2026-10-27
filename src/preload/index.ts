@@ -9,12 +9,16 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { ApprovalRequest, ApprovalTier } from '../shared/approval'
 import type { EventEnvelope, Checkpoint } from '../shared/events'
 import type { GoalContract } from '../shared/contract'
-import type { LlmStatus } from '../shared/llm'
+import type { ImageStatus, LlmStatus } from '../shared/llm'
 import type {
   BootInfo,
   CredentialInput,
   CredentialSaveResult,
   CredentialStatus,
+  FsListResult,
+  FsReadResult,
+  ImageInput,
+  ImageSaveResult,
   LlmTestResult,
   McpStatusSnapshot,
   RunLoopResult,
@@ -254,6 +258,23 @@ const api = {
     input: { sessionId: string; url: string; title?: string }
   ): Promise<{ ok: boolean; reason?: string; preview?: PreviewTarget }> =>
     ipcRenderer.invoke('api:sessionPreviewAdd', input),
+
+  /* ---- 生图凭据（独立凭据） ---- */
+
+  imageStatus: (): Promise<ImageStatus> => ipcRenderer.invoke('api:imageStatus'),
+
+  imageSave: (input: ImageInput): Promise<ImageSaveResult> =>
+    ipcRenderer.invoke('api:imageSave', input),
+
+  imageClear: (): Promise<{ ok: boolean; reason?: string }> => ipcRenderer.invoke('api:imageClear'),
+
+  /* ---- 工作区文件树（只读） ---- */
+
+  workspaceList: (input: { path?: string }): Promise<FsListResult> =>
+    ipcRenderer.invoke('api:workspaceList', input),
+
+  workspaceRead: (input: { path: string }): Promise<FsReadResult> =>
+    ipcRenderer.invoke('api:workspaceRead', input),
 
   /** 订阅工作区文件变化 */
   onFileChanged: (handler: (c: FileChange) => void): (() => void) => {

@@ -37,6 +37,20 @@ export interface McpInvokeOutcome {
   reason?: string
 }
 
+/**
+ * 生图结果 —— 刻意比 McpOutcome 多一个 `path`。
+ *
+ * 原因很实际：图不是一个「返回值」，它是一个**落在工作区里的文件**。
+ * 只把字节回灌给模型的话，模型知道生成成功了，用户却不知道去哪儿看 ——
+ * 而预览签要的正是这个路径。
+ */
+export interface ImageOutcome {
+  ok: boolean
+  text: string
+  /** 成功时为工作区相对路径；兜底落了占位图时也有值 */
+  path?: string
+}
+
 export interface AgentLoopDeps {
   llm: LlmConfig
   contract: GoalContract
@@ -73,6 +87,14 @@ export interface AgentLoopDeps {
     args: unknown,
     purpose: string
   ) => Promise<McpInvokeOutcome>
+  /**
+   * 请求生成一张图。
+   *
+   * 它和另外两个是同一类东西：**请求**，不是能力。生图拿到的字节要落进工作区，
+   * 落盘那一步在编排层走的是与命令执行完全相同的裁决链（precheck → 审批 → 审计）。
+   * 循环自己依然不持有任何「直接动手」的通道。
+   */
+  requestImage: (prompt: string, purpose: string) => Promise<ImageOutcome>
   /** 落事件。循环不直接碰 store，避免与编排层的 seq 逻辑打架 */
   emit: (kind: 'action' | 'observation', type: ActionType | ObservationType, payload: unknown) => void
   /** 每步开始前问一次「还该继续吗」（用于暂停 / 中断） */
@@ -348,6 +370,32 @@ export async function runAgentLoop(deps: AgentLoopDeps): Promise<AgentLoopResult
           toolUseId: tu.id,
           content: out.ok ? clip(out.text || '（无返回内容）') : `【未执行】${out.reason ?? '未知原因'}`,
           isError: !out.ok || out.isError
+        })
+        continue
+      }
+
+      /* ---- 生图：产物落工作区，落盘那一步照旧过裁决 ---- */
+      if (tu.name === 'generate_image') {
+        const iargs = (tu.input ?? {}) as Record<string, unknown>
+        const iprompt = typeof iargs['prompt'] === 'string' ? iargs['prompt'].trim() : ''
+        const ipurpose = typeof iargs['purpose'] === 'string' ? iargs['purpose'].trim() : ''
+
+        if (!iprompt) {
+          results.push({
+            type: 'tool_result',
+            toolUseId: tu.id,
+            content: 'generate_image 缺少 prompt 参数',
+            isError: true
+          })
+          continue
+        }
+
+        const out = await deps.requestImage(iprompt, ipurpose)
+        results.push({
+          type: 'tool_result',
+          toolUseId: tu.id,
+          content: clip(out.text),
+          isError: !out.ok
         })
         continue
       }

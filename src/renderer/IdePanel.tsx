@@ -34,7 +34,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { IdePhase, IdeStatus } from '../shared/ide'
 import type { ApprovalRequest } from '../shared/approval'
 import { TIER_LABELS } from '../shared/approval'
-import type { GoalContract } from '../shared/contract'
+import type { GoalContract, InputStructureHint } from '../shared/contract'
 import type {
   AgentSession,
   ChatMessage,
@@ -42,6 +42,7 @@ import type {
   PreviewTarget,
   TaskItem
 } from '../shared/session'
+import type { FsEntry, FsReadResult } from '../shared/ipc'
 
 interface Props {
   /** 页面是否可见；不可见时必须上报 null，否则工作台会盖住别的页面 */
@@ -107,6 +108,8 @@ export default function IdePanel({ active }: Props): React.ReactElement {
   const [responding, setResponding] = useState<string[]>([])
   const [manualUrl, setManualUrl] = useState('')
   const [tier, setTier] = useState<string>('standard')
+  /** 「变更」里点了某条变化 → 让文件树定位到那个文件 */
+  const [focusPath, setFocusPath] = useState<string | null>(null)
 
   /** 当前会话。注意别叫 active —— 那一个是「页面是否可见」的 prop */
   const currentSession = useMemo(
@@ -617,7 +620,21 @@ export default function IdePanel({ active }: Props): React.ReactElement {
             )}
 
             {tab === 'tasks' && <TaskList tasks={tasks} />}
-            {tab === 'changes' && <ChangeList changes={changes} onConfirm={confirmChange} />}
+            {tab === 'changes' && (
+              <>
+                {/*
+                  文件树放在「变更」里而不是另开一个签：两件事是一件事的两面 ——
+                  「这次任务动了哪些文件」与「这个文件现在长什么样」。
+                  分开的结果是在两个签之间来回跳，而每次跳都要重新找那个文件。
+                */}
+                <FileTree focusPath={focusPath} />
+                <ChangeList
+                  changes={changes}
+                  onConfirm={confirmChange}
+                  onLocate={setFocusPath}
+                />
+              </>
+            )}
             {tab === 'preview' && hasPreview && (
               <PreviewList
                 previews={previews}
@@ -661,13 +678,33 @@ function ChatRow({ message }: { message: ChatMessage }): React.ReactElement {
 
 /** 契约草稿卡 —— IC-07 硬闸门的确认入口就在这里 */
 function ContractCard({ message }: { message: ChatMessage }): React.ReactElement | null {
-  const p = message.payload as { contract?: GoalContract | null; llm?: { configured: boolean } } | null
+  const p = message.payload as {
+    contract?: GoalContract | null
+    llm?: { configured: boolean }
+    /** 输入结构化的结论；未触发时为 null */
+    structure?: InputStructureHint | null
+  } | null
   const contract = p?.contract
   if (!contract) return null
+
+  const st = p?.structure ?? null
 
   return (
     <div className="side-card contract-mini">
       <div className="contract-obj">{contract.objective}</div>
+
+      {/*
+        歧义度单独显示，不藏进「待澄清」里：
+        待澄清为空可能是「这句话很清楚」，也可能是「结构化那一步根本没跑」——
+        看不出区别的话，用户会以为系统判断过，而实际上什么都没判。
+      */}
+      {st && (
+        <div className="contract-ambiguity mono" data-testid="ide-contract-ambiguity">
+          输入歧义度 {st.ambiguityScore.toFixed(2)} · {STRUCTURE_MODE_LABEL[st.mode] ?? st.mode}
+          {st.tokensSpent > 0 && ` · ${st.tokensSpent} tok`}
+        </div>
+      )}
+
       <ContractLines title="成功判据" items={contract.successCriteria} tone="ok" />
       <ContractLines title="明确不做" items={contract.nonGoals} />
       <ContractLines title="依赖假设" items={contract.assumptions} />
@@ -680,6 +717,20 @@ function ContractCard({ message }: { message: ChatMessage }): React.ReactElement
       />
     </div>
   )
+}
+
+/**
+ * 结构化的四种结果，界面必须说人话。
+ *
+ * 尤其 `fallback`：它是「结构化那一步失败了，已按原话继续」。
+ * 不显示出来，用户会以为「系统看过这句话、认为没问题」，
+ * 而事实是这次根本没看 —— 这两种情况的信任含义完全不同。
+ */
+const STRUCTURE_MODE_LABEL: Record<string, string> = {
+  'pass-through': '无需结构化（原话足够清楚）',
+  structured: '已结构化',
+  clarification: '需要澄清',
+  fallback: '结构化失败，已按原话继续'
 }
 
 function ContractLines({
@@ -806,10 +857,13 @@ function TaskList({ tasks }: { tasks: TaskItem[] }): React.ReactElement {
 
 function ChangeList({
   changes,
-  onConfirm
+  onConfirm,
+  onLocate
 }: {
   changes: FileChange[]
   onConfirm: (changeId: string) => Promise<void>
+  /** 在文件树里定位到这条变化对应的文件 */
+  onLocate: (path: string) => void
 }): React.ReactElement {
   if (changes.length === 0) {
     return (
@@ -828,6 +882,12 @@ function ChangeList({
         </div>
         <div className="side-row-title mono">{c.path}</div>
         <div className="side-row-actions">
+          {/* 删掉的文件在树里已经找不到了 —— 那就不给这个入口，别让人点了没反应 */}
+          {c.kind !== 'deleted' && (
+            <button className="pill ghost small" onClick={() => onLocate(c.path)}>
+              在文件树中定位
+            </button>
+          )}
           {c.confirmed ? (
             <span className="mono confirmed">已确认</span>
           ) : (
@@ -842,6 +902,176 @@ function ChangeList({
   )
 }
 
+/**
+ * 工作区文件树 —— 只读。
+ *
+ * 目录**懒加载**：一次性把整个工作区展开，在稍大一点的仓库里就是几千个节点，
+ * 既要等很久，也会让「找到刚才那个文件」变成不可能。
+ *
+ * 点文件就地预览而不是跳去「预览」签：这边是「看一眼这个文件是什么」，
+ * 那边是「这次任务产出了什么」，两种意图不该共用一块地方。
+ */
+function FileTree({ focusPath }: { focusPath: string | null }): React.ReactElement {
+  /** 已加载的目录：路径 → 目录项；'' 表示工作区根 */
+  const [dirs, setDirs] = useState<Record<string, FsEntry[]>>({})
+  const [expanded, setExpanded] = useState<Set<string>>(new Set(['']))
+  const [selected, setSelected] = useState<string | null>(null)
+  const [content, setContent] = useState<FsReadResult | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const loadDir = useCallback(async (rel: string): Promise<void> => {
+    if (dirs[rel]) return
+    const res = await window.openintj.workspaceList({ path: rel })
+    setDirs((prev) => ({ ...prev, [rel]: res.entries }))
+  }, [dirs])
+
+  useEffect(() => {
+    void loadDir('')
+    // 只在挂载时取一次根；后续目录由展开动作触发
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  /**
+   * 定位：把各级祖先目录依次展开并加载，最后选中目标文件。
+   *
+   * 逐级加载而不是一次性递规全展开 —— 后者在深层目录上会同时发出几十个请求，
+   * 而用户真正想看的只有那一条路径。
+   */
+  useEffect(() => {
+    if (!focusPath) return
+    void (async () => {
+      setLoading(true)
+      const parts = focusPath.split('/')
+      let cur = ''
+      const chain: string[] = ['']
+      for (let i = 0; i < parts.length - 1; i++) {
+        cur = cur ? `${cur}/${parts[i]}` : parts[i]!
+        chain.push(cur)
+      }
+      for (const d of chain) {
+        if (!dirs[d]) {
+          const res = await window.openintj.workspaceList({ path: d })
+          setDirs((prev) => ({ ...prev, [d]: res.entries }))
+        }
+      }
+      setExpanded((prev) => new Set([...prev, ...chain]))
+      setSelected(focusPath)
+      setLoading(false)
+    })()
+    // dirs 变化不该重新触发定位，否则会自激
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusPath])
+
+  const toggle = useCallback(
+    (entry: FsEntry): void => {
+      if (entry.kind === 'dir') {
+        setExpanded((prev) => {
+          const next = new Set(prev)
+          if (next.has(entry.path)) next.delete(entry.path)
+          else next.add(entry.path)
+          return next
+        })
+        void loadDir(entry.path)
+        return
+      }
+      setSelected(entry.path)
+      setContent(null)
+      void window.openintj
+        .workspaceRead({ path: entry.path })
+        .then(setContent)
+        .catch(() => setContent({ ok: false, reason: '读取失败' }))
+    },
+    [loadDir]
+  )
+
+  /** 刷新：文件变化后重读当前目录与当前文件 */
+  const refresh = useCallback((): void => {
+    void (async () => {
+      const res = await window.openintj.workspaceList({ path: '' })
+      setDirs({ '': res.entries })
+      if (selected) {
+        const r = await window.openintj.workspaceRead({ path: selected })
+        setContent(r)
+      }
+    })()
+  }, [selected])
+
+  const rows = useMemo(() => {
+    const out: { entry: FsEntry; depth: number }[] = []
+    const walk = (rel: string, depth: number): void => {
+      for (const e of dirs[rel] ?? []) {
+        out.push({ entry: e, depth })
+        if (e.kind === 'dir' && expanded.has(e.path)) walk(e.path, depth + 1)
+      }
+    }
+    walk('', 0)
+    return out
+  }, [dirs, expanded])
+
+  return (
+    <div className="file-tree" data-testid="ide-file-tree">
+      <div className="file-tree-head">
+        <span className="mono">工作区文件（只读）</span>
+        <button className="pill ghost small" onClick={refresh} data-testid="ide-file-tree-refresh">
+          刷新
+        </button>
+      </div>
+
+      <div className="file-tree-list">
+        {rows.length === 0 && <div className="empty">目录为空，或 tool-host 尚未就绪。</div>}
+        {rows.map(({ entry, depth }) => (
+          <button
+            key={entry.path}
+            className={
+              'file-row' +
+              (entry.kind === 'dir' ? ' dir' : ' file') +
+              (selected === entry.path ? ' active' : '')
+            }
+            style={{ paddingLeft: 6 + depth * 12 }}
+            onClick={() => toggle(entry)}
+            title={entry.path}
+          >
+            <span className="file-caret">{entry.kind === 'dir' ? (expanded.has(entry.path) ? '▾' : '▸') : ''}</span>
+            <span className="file-name mono">{entry.name}</span>
+            {entry.size != null && <span className="file-size mono">{kb(entry.size)}</span>}
+          </button>
+        ))}
+      </div>
+
+      {loading && <div className="empty">定位中 …</div>}
+
+      {selected && (
+        <div className="file-preview" data-testid="ide-file-preview">
+          <div className="file-preview-head mono">{selected}</div>
+          {content === null && <div className="empty">读取中 …</div>}
+          {content && !content.ok && <div className="empty">{content.reason}</div>}
+          {content?.ok && content.kind === 'image' && (
+            <img src={content.dataUrl} alt={content.path} className="file-preview-img" />
+          )}
+          {content?.ok && content.kind === 'text' && (
+            <pre className="file-preview-text">{content.text}</pre>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function kb(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}K`
+  return `${(bytes / 1024 / 1024).toFixed(1)}M`
+}
+
+/**
+ * 预览列表。
+ *
+ * 两类东西形状不同，所以渲染方式也不同：
+ *   url   —— 工作区外起的服务，只能交给系统浏览器（应用内不承载外部内容）
+ *   工件  —— 这次任务落在工作区里的文件，**就地渲染**（图片显示、文本原样显示）
+ * 区分开的理由：工件是我们自己的产物，把它交给外部浏览器等于放弃「看一眼」这件事，
+ * 而 url 反过来 —— 塞进应用里就是给外部内容开了一扇不用过裁决链的窗。
+ */
 function PreviewList({
   previews,
   onOpen
@@ -852,16 +1082,74 @@ function PreviewList({
   return (
     <div className="side-list" data-testid="ide-preview-list">
       {previews.map((p) => (
-        <div className="side-row" key={p.previewId}>
-          <div className="side-row-title mono">{p.url}</div>
-          <div className="side-row-meta mono">{p.title}</div>
-          <div className="side-row-actions">
-            <button className="pill ghost small" onClick={() => onOpen(p.url)}>
-              在系统浏览器打开
-            </button>
-          </div>
-        </div>
+        <PreviewRow key={p.previewId} target={p} onOpen={onOpen} />
       ))}
     </div>
   )
+}
+
+function PreviewRow({
+  target,
+  onOpen
+}: {
+  target: PreviewTarget
+  onOpen: (url: string) => void
+}): React.ReactElement {
+  const [content, setContent] = useState<FsReadResult | null>(null)
+  const [open, setOpen] = useState(false)
+
+  /** 工件就地读；读的是工作区内的文件，与文件树同一条口子 */
+  const show = useCallback(async (): Promise<void> => {
+    if (!target.path) return
+    setOpen((prev) => !prev)
+    if (content) return
+    const r = await window.openintj.workspaceRead({ path: target.path })
+    setContent(r)
+  }, [target.path, content])
+
+  return (
+    <div className="side-row">
+      <div className="side-row-title mono">
+        {target.kind === 'url' ? target.url : (target.path ?? '')}
+      </div>
+      <div className="side-row-meta mono">
+        <span className="change-kind added">{PREVIEW_KIND_LABEL[target.kind]}</span>
+        <span>{target.title}</span>
+        {target.size != null && <span>{kb(target.size)}</span>}
+      </div>
+      <div className="side-row-actions">
+        {target.kind === 'url' ? (
+          <button className="pill ghost small" onClick={() => onOpen(target.url)}>
+            在系统浏览器打开
+          </button>
+        ) : (
+          <button className="pill ghost small" onClick={() => void show()} data-testid="ide-preview-show">
+            {open ? '收起' : '显示'}
+          </button>
+        )}
+      </div>
+
+      {open && target.kind !== 'url' && (
+        <div className="file-preview">
+          {content === null && <div className="empty">读取中 …</div>}
+          {content && !content.ok && <div className="empty">{content.reason}</div>}
+          {content?.ok && content.kind === 'image' && (
+            <img src={content.dataUrl} alt={target.path ?? ''} className="file-preview-img" />
+          )}
+          {content?.ok && content.kind === 'text' && (
+            <pre className="file-preview-text">{content.text}</pre>
+          )}
+          {content?.ok && content.truncated && (
+            <div className="empty">内容过长，已截断显示。</div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const PREVIEW_KIND_LABEL: Record<PreviewTarget['kind'], string> = {
+  url: '外部服务',
+  image: '图片工件',
+  text: '文本工件'
 }

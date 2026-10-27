@@ -27,6 +27,7 @@ import type {
   PreviewTarget,
   SessionState
 } from '../shared/session'
+import { previewKindOf } from '../shared/session'
 
 interface SessionRecord {
   session: AgentSession
@@ -173,21 +174,58 @@ export function changesOf(runId: string): FileChange[] {
 /**
  * 登记一个预览目标。
  *
- * 只认回环地址：预览指向的是本机起的服务，放行外部地址等于给「外部内容」
+ * `url` 类只认回环地址：预览指向的是本机起的服务，放行外部地址等于给「外部内容」
  * 开了一扇不用过裁决链的窗 —— 那和终端绕过策略层是同一类问题。
+ *
+ * 工件类（image / text）认的是**工作区内的路径**，不要求它是 URL：
+ * 它本来就不是地址，是这次任务做出来的一个文件。
  */
 export function notePreview(target: Omit<PreviewTarget, 'at'>): PreviewTarget | null {
-  if (!isLoopbackUrl(target.url)) return null
+  if (target.kind === 'url' && !isLoopbackUrl(target.url)) return null
   const full: PreviewTarget = { ...target, at: Date.now() }
   const list = previewsByRun.get(full.runId) ?? []
-  // 同一地址只留一条（dev server 的提示会重复输出很多次）
-  if (list.some((p) => p.url === full.url)) return full
+  const key = full.kind === 'url' ? `url:${full.url}` : `path:${full.path ?? ''}`
+  // 同一地址/同一文件只留一条（dev server 的提示会重复输出很多次）
+  if (list.some((p) => (p.kind === 'url' ? `url:${p.url}` : `path:${p.path ?? ''}`) === key)) {
+    return full
+  }
   previewsByRun.set(full.runId, [full, ...list].slice(0, MAX_PREVIEWS_PER_RUN))
   return full
 }
 
 export function previewsOf(runId: string): PreviewTarget[] {
   return previewsByRun.get(runId) ?? []
+}
+
+/**
+ * 登记一个**工件**为预览目标。
+ *
+ * 与 `notePreview` 分开成两个入口，是因为两者的准入规则根本不同：
+ * 一个是「这个地址是不是本机的」，另一个是「这个文件是不是可预览的」。
+ * 合成一个函数就只能靠 `kind` 分叉，而这种分叉迟早会漏掉一边。
+ *
+ * 扩展名不可预览时返回 null —— 不登记，也不报错：
+ * 生成了一个 .bin 不是错误，只是没什么可预览的。
+ */
+export function noteArtifact(input: {
+  runId: string
+  path: string
+  title: string
+  mimeType?: string
+  size?: number
+}): PreviewTarget | null {
+  const kind = previewKindOf(input.path)
+  if (!kind) return null
+  return notePreview({
+    previewId: ulid(),
+    runId: input.runId,
+    kind: kind.kind,
+    url: '',
+    title: input.title,
+    path: input.path,
+    mimeType: input.mimeType ?? kind.mimeType,
+    size: input.size
+  })
 }
 
 /** 预览地址白名单：只放行回环地址 */

@@ -18,8 +18,8 @@
 import { safeStorage } from 'electron'
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import type { LlmConfig, LlmProtocol } from '../shared/llm'
-import { parseProtocol } from '../shared/llm'
+import type { ImageConfig, ImageProvider, LlmConfig, LlmProtocol } from '../shared/llm'
+import { IMAGE_DEFAULT_MODEL, IMAGE_DEFAULT_SIZE, parseImageProvider, parseProtocol } from '../shared/llm'
 
 /** 落盘的凭据内容（明文形态，仅在内存中出现） */
 export interface VaultCredential {
@@ -29,6 +29,24 @@ export interface VaultCredential {
   apiKey: string
   disableThinking: boolean
   /** 保存时间，界面用来显示「什么时候配的」 */
+  savedAt: number
+  /**
+   * 生图凭据 —— 与对话模型**同一份密文**里的一段，可选。
+   *
+   * 放同一份而不是另开一个 credentials-image.enc：两者共用同一把 OS 密钥，
+   * 拆成两个文件只是多一次加解密与多一处「有一个解开了另一个没解开」的错位。
+   * 但字段上严格分开：没配生图时它就是 undefined，绝不拿对话模型的 key 去顶。
+   */
+  image?: VaultImageCredential
+}
+
+/** 生图片段。baseUrl 允许与对话模型不同（生图常走另一个网关） */
+export interface VaultImageCredential {
+  provider: ImageProvider
+  baseUrl: string
+  model: string
+  apiKey: string
+  size: string
   savedAt: number
 }
 
@@ -119,7 +137,43 @@ export function normalizeCredential(input: unknown): VaultCredential | null {
   if (!/^https?:\/\//i.test(baseUrl)) return null
 
   const savedAt = typeof o['savedAt'] === 'number' ? o['savedAt'] : Date.now()
-  return { protocol, baseUrl, model, apiKey, disableThinking: o['disableThinking'] !== false, savedAt }
+  const image = normalizeImageCredential(o['image'])
+  return {
+    protocol,
+    baseUrl,
+    model,
+    apiKey,
+    disableThinking: o['disableThinking'] !== false,
+    savedAt,
+    ...(image ? { image } : {})
+  }
+}
+
+/**
+ * 校验生图片段。返回 null 表示「没配」或「配得不合格」——
+ * 两者对上层是同一件事（生图不可用），所以不区分。
+ */
+export function normalizeImageCredential(input: unknown): VaultImageCredential | null {
+  if (typeof input !== 'object' || input === null) return null
+  const o = input as Record<string, unknown>
+
+  const provider = parseImageProvider(String(o['provider'] ?? ''))
+  const baseUrl = String(o['baseUrl'] ?? '').trim().replace(/\/+$/, '')
+  const apiKey = String(o['apiKey'] ?? '').trim()
+  const model = String(o['model'] ?? '').trim()
+  const sizeRaw = String(o['size'] ?? '').trim()
+
+  if (!provider || !baseUrl || !apiKey) return null
+  if (!/^https?:\/\//i.test(baseUrl)) return null
+
+  return {
+    provider,
+    baseUrl,
+    apiKey,
+    model: model || IMAGE_DEFAULT_MODEL,
+    size: /^\d{2,4}x\d{2,4}$/i.test(sizeRaw) ? sizeRaw : IMAGE_DEFAULT_SIZE,
+    savedAt: typeof o['savedAt'] === 'number' ? o['savedAt'] : Date.now()
+  }
 }
 
 export type VaultWriteResult = { ok: true; file: string } | { ok: false; reason: string }
@@ -172,5 +226,18 @@ export function toLlmConfig(cred: VaultCredential): LlmConfig {
     apiKey: cred.apiKey,
     model: cred.model,
     disableThinking: cred.disableThinking
+  }
+}
+
+/** 保险箱里的生图片段 → 生图配置；没配过返回 null（子进程据此判定「生图不可用」） */
+export function toImageConfig(cred: VaultCredential | null): ImageConfig | null {
+  const image = cred?.image
+  if (!image) return null
+  return {
+    provider: image.provider,
+    baseUrl: image.baseUrl,
+    apiKey: image.apiKey,
+    model: image.model,
+    size: image.size
   }
 }

@@ -237,3 +237,133 @@ export function describeLlm(result: LlmConfigResult): LlmStatus {
     missing: []
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * 生图（独立凭据，不复用对话模型那一把 key）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 生图走**另一份凭据**，不复用对话模型的 key —— 这不是洁癖：
+ *
+ * ① 端点不同。生图是 `{baseUrl}/wand/hunyuan-image/v3-generation`，与
+ *    `/v1/messages` / `/v1/chat/completions` 不是一个服务，同一把 key 未必开在同一个网关上。
+ * ② 计费口径不同。生图按张计费且常有独立免费额度，混在对话配额里会让
+ *    「到底是谁把额度用完了」变成一笔查不清的账。
+ * ③ 失败方式不同。生图 402 = 未开通后付费且无免费额度，这条提示必须原样给用户
+ *    （见 image.ts），与「模型未配置」混在一起报，用户会去改对话模型而改不好。
+ */
+export type ImageProvider = 'hunyuan'
+
+export interface ImageConfig {
+  provider: ImageProvider
+  /** 网关根地址，如 https://tokenhub.tencentmaas.com/v1 */
+  baseUrl: string
+  apiKey: string
+  /** 模型名，如 hy-image-v3 */
+  model: string
+  /** 形如 1280x720 */
+  size: string
+}
+
+export type ImageConfigResult =
+  | { configured: true; config: ImageConfig }
+  | { configured: false; missing: string[] }
+
+export const IMAGE_ENV = {
+  provider: 'OPENINTJ_IMAGE_PROVIDER',
+  baseUrl: 'OPENINTJ_IMAGE_BASE_URL',
+  apiKey: 'OPENINTJ_IMAGE_API_KEY',
+  model: 'OPENINTJ_IMAGE_MODEL',
+  size: 'OPENINTJ_IMAGE_SIZE'
+} as const
+
+/** 目前只认混元；别的名字一律不猜（猜了就变成「配了却用不上」） */
+export const IMAGE_PROVIDERS: ImageProvider[] = ['hunyuan']
+
+export const IMAGE_DEFAULT_MODEL = 'hy-image-v3'
+export const IMAGE_DEFAULT_SIZE = '1280x720'
+
+export function parseImageProvider(raw: string | undefined): ImageProvider | null {
+  const key = (raw ?? '').trim().toLowerCase()
+  if (key === 'hunyuan' || key === 'hy-image' || key === 'hunyuan-image') return 'hunyuan'
+  return null
+}
+
+export function readImageConfig(env: NodeJS.ProcessEnv): ImageConfigResult {
+  const baseUrl = env[IMAGE_ENV.baseUrl]?.trim()
+  const apiKey = env[IMAGE_ENV.apiKey]?.trim()
+
+  const missing: string[] = []
+  if (!baseUrl) missing.push(IMAGE_ENV.baseUrl)
+  if (!apiKey) missing.push(IMAGE_ENV.apiKey)
+  if (missing.length > 0) return { configured: false, missing }
+
+  const providerRaw = env[IMAGE_ENV.provider] ?? 'hunyuan'
+  const provider = parseImageProvider(providerRaw)
+  if (!provider) {
+    return {
+      configured: false,
+      missing: [`${IMAGE_ENV.provider}=${providerRaw.trim()}（未知生图服务，可选 ${IMAGE_PROVIDERS.join(' / ')}）`]
+    }
+  }
+
+  const sizeRaw = env[IMAGE_ENV.size]?.trim() ?? ''
+  return {
+    configured: true,
+    config: {
+      provider,
+      baseUrl: baseUrl!.replace(/\/+$/, ''),
+      apiKey: apiKey!,
+      model: env[IMAGE_ENV.model]?.trim() || IMAGE_DEFAULT_MODEL,
+      size: /^\d{2,4}x\d{2,4}$/i.test(sizeRaw) ? sizeRaw : IMAGE_DEFAULT_SIZE
+    }
+  }
+}
+
+/** 对外只暴露「配好了没、用哪个模型」，绝不吐密钥 */
+export interface ImageStatus {
+  configured: boolean
+  provider: ImageProvider | null
+  model: string | null
+  baseUrlHost: string | null
+  missing: string[]
+}
+
+export function describeImage(result: ImageConfigResult): ImageStatus {
+  if (!result.configured) {
+    return { configured: false, provider: null, model: null, baseUrlHost: null, missing: result.missing }
+  }
+  let host = result.config.baseUrl
+  try {
+    host = new URL(result.config.baseUrl).host
+  } catch {
+    /* 配置写错时原样显示，便于排错 */
+  }
+  return {
+    configured: true,
+    provider: result.config.provider,
+    model: result.config.model,
+    baseUrlHost: host,
+    missing: []
+  }
+}
+
+/**
+ * 生图的产物。
+ *
+ * `bytesBase64` 而不是直接给 Uint8Array：这段数据要跨 MessagePort 与 IPC 两道口子，
+ * 结构化克隆对 TypedArray 支持良好，但对**渲染层**要再转一次 data URL ——
+ * 统一成 base64 字符串，两端都不用各写一份编码。
+ */
+export interface ImageGenerateResult {
+  mimeType: string
+  bytesBase64: string
+  byteLength: number
+  /** 网关改写的 prompt（revise=true 时有值）；改写过要如实告诉用户，他才知道自己最终提交了什么 */
+  revisedPrompt?: string
+  /** 网关返回的图片地址；仅作溯源，不保证长期可访问 */
+  sourceUrl?: string
+  durationMs: number
+  model: string
+  size: string
+}

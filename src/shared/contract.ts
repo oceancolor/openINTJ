@@ -21,6 +21,26 @@ export interface GoalContract {
   needsClarification: string[]
 }
 
+/**
+ * 输入结构化的结论 —— 起草契约时一并产出，随契约一起给用户看。
+ *
+ * 为什么它要进契约而不是只留在日志里：澄清问题只有被用户看见才算问过。
+ * 记在日志里的「我们认为这句话有 0.8 的歧义」对用户毫无意义 ——
+ * 他需要的是界面上那三行问题，以及「为什么问这个」。
+ */
+export interface InputStructureHint {
+  /** 0~1，越大越含糊。≥0.62 且有问题时判为需澄清（主干阈值） */
+  ambiguityScore: number
+  /** 最多 3 条 */
+  questions: string[]
+  /** pass-through（未触发）/ structured / clarification / fallback（失败回退） */
+  mode: string
+  /** 结构化后的执行输入；需澄清时为空 */
+  executionInput: string
+  tokensSpent: number
+  durationMs: number
+}
+
 /** 契约草稿的生成结果 */
 export type ContractDraft =
   | { status: 'drafted'; contract: GoalContract }

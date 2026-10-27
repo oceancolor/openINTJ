@@ -8,8 +8,14 @@
  */
 
 import type { EventEnvelope, Checkpoint } from './events'
-import type { GoalContract } from './contract'
-import type { LlmProtocol, LlmStatus, TokenUsage } from './llm'
+import type { GoalContract, InputStructureHint } from './contract'
+import type {
+  ImageProvider,
+  ImageStatus,
+  LlmProtocol,
+  LlmStatus,
+  TokenUsage
+} from './llm'
 import type {
   ApprovalRequest,
   ApprovalTier,
@@ -87,6 +93,12 @@ export interface RendererApi {
   credentialClear(): Promise<{ ok: boolean; reason?: string }>
   /** 用当前生效凭据发一次最小请求，验证端点与密钥能用 */
   llmTest(): Promise<LlmTestResult>
+  /** 生图凭据状态（独立凭据，不复用对话模型那把 key） */
+  imageStatus(): Promise<ImageStatus>
+  /** 保存生图凭据到保险箱；apiKey 留空表示沿用已有的那一把 */
+  imageSave(input: ImageInput): Promise<ImageSaveResult>
+  /** 清除生图凭据（环境变量若仍在，会回落为 env 来源） */
+  imageClear(): Promise<{ ok: boolean; reason?: string }>
   /** MCP 连接状态（含每个 server 的失败原因 —— 界面必须显示） */
   mcpStatus(): Promise<McpStatusSnapshot>
   /** 重读 mcp.json 并重连；返回重连后的状态 */
@@ -183,6 +195,21 @@ export interface RendererApi {
   /** 订阅工作区文件变化 */
   onFileChanged(handler: (c: FileChange) => void): () => void
 
+  /* ---- 工作区文件树（只读；读权限也在 tool-host） ---- */
+
+  /**
+   * 列目录。只读、不落审计 —— 但它与终端输出、文件监听是同一条边界：
+   * **返回的是内容**，所以只能经 tool-host 出，且同样不进事件库。
+   */
+  workspaceList(input: { path?: string }): Promise<FsListResult>
+  /**
+   * 读一个文件（有大小上限，超了如实说超了，不截断冒充全文）。
+   *
+   * 工件预览也走这一条：预览目标里已经带了工作区相对路径，
+   * 不需要再为「读预览」另开一条口子 —— 多一条就多一处可能绕过边界的地方。
+   */
+  workspaceRead(input: { path: string }): Promise<FsReadResult>
+
   /** 用系统浏览器打开外部地址 —— 应用内不承载外链内容 */
   openExternal(url: string): Promise<void>
 
@@ -251,6 +278,74 @@ export interface LlmTestResult {
   reason?: string
 }
 
+/* ------------------------------------------------------------------ *
+ * 生图凭据（与对话模型凭据分开存放）
+ * ------------------------------------------------------------------ */
+
+export interface ImageInput {
+  provider: ImageProvider
+  baseUrl: string
+  model: string
+  size: string
+  /** 留空表示沿用保险箱里已有的那一把 */
+  apiKey?: string
+}
+
+export interface ImageSaveResult {
+  ok: boolean
+  reason?: string
+  /** 保存后的状态，省一次往返 */
+  status?: ImageStatus
+}
+
+/* ------------------------------------------------------------------ *
+ * 工作区文件树（只读）
+ * ------------------------------------------------------------------ */
+
+/** 目录里的一项 */
+export interface FsEntry {
+  name: string
+  /** 相对工作区根的路径，分隔符统一为 `/` */
+  path: string
+  kind: 'file' | 'dir'
+  /** 文件大小（字节）；目录为 null */
+  size: number | null
+  /**
+   * 是否可预览 —— 由扩展名判定，界面据此决定「能不能点开看」。
+   *
+   * 判定放在后端而不是界面：同一份白名单要同时给「工件识别」和「文件树」用，
+   * 各写一份的结果必然是两边慢慢长出不同的白名单。
+   */
+  previewable: boolean
+}
+
+export interface FsListResult {
+  ok: boolean
+  reason?: string
+  /** 当前目录（相对工作区根，根为空串） */
+  path: string
+  entries: FsEntry[]
+  /** 目录项数超过上限时置 true —— 如实说明「没列全」，不假装这就是全部 */
+  truncated: boolean
+}
+
+export type FsReadResult =
+  | {
+      ok: true
+      path: string
+      /** 判定出的形态：图片 / 文本 / 其它 */
+      kind: 'image' | 'text' | 'binary'
+      /** 图片的 data URL（含 mime 与 base64）；非图片为空 */
+      dataUrl: string
+      /** 文本正文；超过上限时为截断后的内容，并置 truncated */
+      text: string
+      size: number
+      truncated: boolean
+    }
+  | { ok: false; reason: string }
+
+
+
 /**
  * agent-host → P-01 的反向调用：拉当前生效凭据。
  *
@@ -258,15 +353,23 @@ export interface LlmTestResult {
  * 之所以「按需拉」而不是「启动即推送」：设置改完立刻生效，也不需要失效缓存。
  */
 export const CREDENTIAL_METHODS = {
-  get: 'credential.get'
+  get: 'credential.get',
+  /**
+   * 生图凭据。与对话凭据分开一条，理由同 ImageConfig：
+   * 两者端点、计费与失败方式都不同，混在一条里只会让「生图为什么用不了」查不清。
+   */
+  getImage: 'credential.image.get'
 } as const
 
-/** 启动一次 run 的返回：含契约草稿与模型接入状态 */export interface StartRunResult {
+/** 启动一次 run 的返回：含契约草稿与模型接入状态 */
+export interface StartRunResult {
   runId: string
   state: string
   /** 模型起草成功的契约；未配置/解析失败时为空，需用户手写或先配模型 */
   contract?: GoalContract
   llm: LlmStatus
+  /** 输入结构化的结论（歧义分与澄清问题）；未触发或未配置时为空 */
+  structure?: InputStructureHint
 }
 
 /** 一次工具调用的最终结果（含被拒的情况） */
@@ -458,8 +561,60 @@ export const TOOL_METHODS = {
    */
   fsWatch: 'tool.fs.watch',
   /** 停止监听 */
-  fsWatchStop: 'tool.fs.watch.stop'
+  fsWatchStop: 'tool.fs.watch.stop',
+
+  /* ---- 工作区文件读写（文件树 / 工件预览 / 生图落盘的载体） ---- */
+  /**
+   * 列目录 —— 只读，不落审计。
+   *
+   * 不落审计的理由：`ls` 也不落。审计记的是「动手」，读文件不算动手；
+   * 若每次点开目录都写一条，审计表会被浏览噪音灌满，真正的写入记录反而难查。
+   */
+  fsList: 'tool.fs.list',
+  /** 读文件内容（有上限，超限如实说） */
+  fsRead: 'tool.fs.read',
+  /**
+   * 写文件 —— **必须过裁决链**，与 exec 同一张真值表、同一套票据。
+   *
+   * 为什么单开一条而不是让调用方拼一条 `writeFile` 命令去 exec：
+   * 生图产物是二进制，用命令行传字节流必然要绕 base64 落地临时文件，
+   * 那条路上「临时文件谁删、删之前被谁读到」是说不清的。
+   * 这里由 tool-host 直接接收字节并在裁决通过后一次性写入，路径全程在进程内。
+   */
+  fsWrite: 'tool.fs.write'
 } as const
+
+/** 写文件的请求。路径必须是**相对工作区根**的相对路径 —— 绝对路径一律拒 */
+export interface FsWriteParams {
+  runId: string
+  agentId: string
+  /** 相对工作区根，分隔符 `/`，不允许 `..` 上跳 */
+  path: string
+  /** 文件内容（base64）。二进制与文本都用它，避免编码在进程边界上被解释两次 */
+  contentBase64: string
+  mimeType: string
+  /** 允许覆盖已存在的文件；不传视为不允许 */
+  overwrite?: boolean
+  approvalTicket?: ApprovalTicket
+}
+
+export interface FsWriteResult {
+  ok: boolean
+  reason?: string
+  path?: string
+  bytes?: number
+  risk?: RiskDecisionContext
+}
+
+export interface FsListParams {
+  /** 相对工作区根的子目录；不传表示根 */
+  path?: string
+}
+
+export interface FsReadParams {
+  /** 相对工作区根的路径 */
+  path: string
+}
 
 export interface RecordDenialParams {
   runId: string

@@ -15,7 +15,11 @@
 import { join } from 'node:path'
 import { openStore, type AppendInput, type EventStoreLike } from './event-store'
 import * as sessions from './session-store'
+import { generateImage, placeholderSvg } from './image-gen'
+import { hintOf, structureInput } from './input-structure'
+import type { InputStructureHint } from '../shared/contract'
 import {
+  ARTIFACT_DIR,
   SESSION_METHODS,
   type AgentSession,
   type FileChange,
@@ -29,7 +33,14 @@ import { applyRedaction } from '../shared/redaction'
 import { complete, textOf, thinkingOf } from './llm'
 import { runAgentLoop, type McpInvokeOutcome } from './agent-loop'
 import { AGENT_TOOLS } from './tool-specs'
-import type { LlmConfigResult, LlmStatus, ToolSpec, UnifiedMessage } from '../shared/llm'
+import type {
+  ImageConfigResult,
+  ImageGenerateResult,
+  LlmConfigResult,
+  LlmStatus,
+  ToolSpec,
+  UnifiedMessage
+} from '../shared/llm'
 import { describeLlm } from '../shared/llm'
 import { extractContract, type GoalContract } from '../shared/contract'
 import { mcpCommandString, type McpToolInfo } from '../shared/mcp'
@@ -38,6 +49,8 @@ import {
   CREDENTIAL_METHODS,
   EVENT_CHANNELS,
   TOOL_METHODS,
+  type FsWriteParams,
+  type FsWriteResult,
   type LlmTestResult,
   type McpCallOutcome,
   type PrecheckResult,
@@ -278,18 +291,45 @@ const CONTRACT_SYSTEM_PROMPT = `你是 openINTJ 的目标契约起草器。要�
 规则：
 1. 不得编造用户没提过的约束；
 2. 拿不准的放进 needsClarification，不要塞进 assumptions 冒充已知；
-3. 宁可少写，也不要写无法验证的判据。`
+3. 宁可少写，也不要写无法验证的判据。
+4. 用户的话里如果出现「这个/那个/之前/尽快/适当」这类指代词，或没说清交付物形态，
+   needsClarification 必须提出**最关键**的那几个问题（最多 3 个），不要自行补全。`
+
+/**
+ * 把结构化提出的澄清问题并进契约的 `needsClarification`。
+ *
+ * 上限 3 条是主干定的（超过 3 个问题没人会逐条答，只会全部忽略），
+ * 去重按文本完全相同判 —— 语义相近但不相同的两条都留着，
+ * 因为「合并掉一个真问题」比「多显示一条」贵得多。
+ */
+function mergeClarifications(existing: string[], questions: string[]): string[] {
+  // 结构化提的问题排前面：它们是「不看就一定会做错」的那几条，
+  // 起草顺手写的问题次之。上限取 3 与已有条数的较大者 ——
+  // 契约里已经列了 4 条时不该因为合并反而被砍到 3 条。
+  const out: string[] = []
+  for (const q of [...questions, ...existing]) {
+    const t = q.trim()
+    if (!t || out.some((x) => x.trim() === t)) continue
+    out.push(t)
+  }
+  return out.slice(0, Math.max(3, existing.length))
+}
 
 /**
  * 启动一次 run 并起草目标契约。
  *
  * 契约由**真实模型**生成；模型不可用/解析失败时如实标记，绝不产出看似合理的假契约（N2）。
  */
-async function startRun(goal: string, opts?: { draft?: boolean }): Promise<{
+async function startRun(
+  goal: string,
+  opts?: { draft?: boolean; history?: UnifiedMessage[] }
+): Promise<{
   runId: string
   state: TaskRunState
   contract?: GoalContract
   llm: LlmStatus
+  /** 输入结构化的结论（歧义分 / 澄清问题 / 这一步做了什么）；未触发或未配置时为空 */
+  structure?: InputStructureHint
 }> {
   const now = Date.now()
   const runId = ulid(now)
@@ -341,16 +381,63 @@ async function startRun(goal: string, opts?: { draft?: boolean }): Promise<{
     return { runId, state: run.state, llm: status }
   }
 
+  /**
+   * 输入结构化 —— 起草之前先量一下这句话有多含糊。
+   *
+   * 它失败时**必须继续起草**（主干的 pass-through 语义），不能因此拒绝用户：
+   * 为了消歧把一句话挡回去，是比不问更糟的体验。
+   */
+  let structure: InputStructureHint | undefined
   try {
+    const s = await structureInput(llm.config, { text: goal, history: opts?.history ?? [] })
+    structure = hintOf(s)
+    emitEvent({
+      runId,
+      traceId,
+      agentId: 'main',
+      kind: 'observation',
+      type: 'ModelUsage',
+      payload: {
+        stage: 'input-structuring',
+        mode: s.mode,
+        ambiguityScore: s.ambiguityScore,
+        questions: s.questions,
+        tokensSpent: s.tokensSpent,
+        durationMs: s.durationMs
+      }
+    })
+  } catch (err) {
+    // 结构化失败不阻断：它只是让契约更准的手段，不是契约的前提
+    emitEvent({
+      runId,
+      traceId,
+      agentId: 'main',
+      kind: 'observation',
+      type: 'ErrorObserved',
+      payload: { stage: 'input-structuring', message: (err as Error).message }
+    })
+  }
+
+  try {
+    // 用结构化后的执行输入去起草（没触发时它就是原话）
+    const draftInput = structure?.executionInput?.trim() || goal
     const res = await complete(llm.config, {
       system: CONTRACT_SYSTEM_PROMPT,
       maxTokens: 4000,
-      messages: [{ role: 'user', content: [{ type: 'text', text: goal }] }]
+      messages: [{ role: 'user', content: [{ type: 'text', text: draftInput }] }]
     })
     const draft = extractContract(textOf(res))
 
     if (draft.status === 'drafted') {
-      run.contract = draft.contract
+      // 结构化提出的澄清问题并进契约：契约是用户要逐条过目的东西，
+      // 问题不进这里就等于没问 —— 模型会在 assumption 里悄悄替他决定
+      const merged: GoalContract = structure?.questions.length
+        ? {
+            ...draft.contract,
+            needsClarification: mergeClarifications(draft.contract.needsClarification, structure.questions)
+          }
+        : draft.contract
+      run.contract = merged
       emitEvent({
         runId,
         traceId,
@@ -360,7 +447,9 @@ async function startRun(goal: string, opts?: { draft?: boolean }): Promise<{
         payload: {
           goal,
           status: 'drafted',
-          contract: draft.contract,
+          contract: merged,
+          // 结构化结论一并落事件：事后要能回答「这几个问题是谁提的」
+          structure: structure ?? null,
           model: res.model,
           stopReason: res.stopReason,
           usage: res.usage,
@@ -378,7 +467,13 @@ async function startRun(goal: string, opts?: { draft?: boolean }): Promise<{
         type: 'CheckpointCreated',
         payload: { checkpointId: cp2.checkpointId, atSeq: cp2.atSeq, scope: cp2.scope, label: cp2.label }
       })
-      return { runId, state: run.state, contract: draft.contract, llm: status }
+      return {
+        runId,
+        state: run.state,
+        contract: merged,
+        llm: status,
+        ...(structure ? { structure } : {})
+      }
     }
 
     emitEvent({
@@ -392,11 +487,12 @@ async function startRun(goal: string, opts?: { draft?: boolean }): Promise<{
         status: 'unparseable',
         reason: draft.reason,
         rawText: draft.rawText,
+        structure: structure ?? null,
         model: res.model,
         usage: res.usage
       }
     })
-    return { runId, state: run.state, llm: status }
+    return { runId, state: run.state, llm: status, ...(structure ? { structure } : {}) }
   } catch (err) {
     emitEvent({
       runId,
@@ -568,6 +664,8 @@ async function runLoop(
       requestCommand: async (command, purpose) => invokeTool({ runId, command, purpose }),
       requestMcpTool: async (server, tool, args, purpose) =>
         invokeMcpTool({ runId, server, tool, args, purpose }),
+      // 生图：与命令执行共用同一道闸门 —— 写文件那一步照旧要过 tool-host 裁决
+      requestImage: async (prompt, purpose) => generateImageTask({ runId, prompt, purpose }),
       emit: (kind, type, payload) => {
         emitEvent({ runId: run.runId, traceId: run.traceId, agentId: 'main', kind, type, payload })
       },
@@ -954,6 +1052,7 @@ async function invokeTool(input: {
       const saved = sessions.notePreview({
         previewId: ulid(),
         runId: run.runId,
+        kind: 'url',
         url,
         title: input.command
       })
@@ -1205,20 +1304,26 @@ async function sendMessage(input: { sessionId?: string; text: string }): Promise
 
   if (!run || run.state === 'CONTRACT_PENDING') {
     const goal = run ? `${run.goal}\n补充约束：${text}` : text
-    const res = await startRun(goal)
+    // 之前轮次的对话也交给结构化器：一句「再快一点」只有接在上文之后才消得掉歧义
+    const res = await startRun(goal, { history: historyOf(session) })
     sessions.bindRun(session.sessionId, res.runId)
 
     const drafted = Boolean(res.contract)
+    const st = res.structure
     sessions.appendMessage({
       sessionId: session.sessionId,
       role: 'agent',
       kind: 'contract-draft',
       text: drafted
-        ? `契约已起草：${res.contract?.objective ?? ''}（成功判据 ${res.contract?.successCriteria.length ?? 0} 条）`
+        ? `契约已起草：${res.contract?.objective ?? ''}（成功判据 ${res.contract?.successCriteria.length ?? 0} 条${
+            res.contract?.needsClarification.length
+              ? `，待澄清 ${res.contract.needsClarification.length} 项`
+              : ''
+          }）`
         : (res.llm.missing.length > 0
             ? `未能起草契约：模型未配置（缺 ${res.llm.missing.join(' / ')}）`
             : '未能起草契约：模型返回无法解析'),
-      payload: { contract: res.contract ?? null, llm: res.llm }
+      payload: { contract: res.contract ?? null, llm: res.llm, structure: st ?? null }
     })
 
     const updated = syncSession(session.sessionId) ?? session
@@ -1335,6 +1440,251 @@ function previewsOf(sessionId: string): PreviewTarget[] {
   const s = sessions.getSession(sessionId)
   if (!s?.runId) return []
   return sessions.previewsOf(s.runId)
+}
+
+/* ------------------------------------------------------------------ *
+ * 工件落盘与生图
+ * ------------------------------------------------------------------ */
+
+/** 生图凭据 —— 与对话模型分开一条，见 shared/llm.ts 里 ImageConfig 的说明 */
+async function currentImage(): Promise<ImageConfigResult> {
+  try {
+    return await callMain<ImageConfigResult>(CREDENTIAL_METHODS.getImage, undefined, 5_000)
+  } catch (err) {
+    // 拉不到就当没配：生图是可选能力，不能因为它把整个循环拖死
+    console.warn(`[agent-host] 生图凭据获取失败：${(err as Error).message}`)
+    return { configured: false, missing: ['credential.image.get 调用失败'] }
+  }
+}
+
+export interface ArtifactWriteOutcome {
+  ok: boolean
+  /** 相对工作区根的路径 */
+  path?: string
+  bytes?: number
+  reason?: string
+}
+
+/**
+ * 把一个工件写进工作区 —— **必须过 tool-host 的裁决链**。
+ *
+ * 这里是最容易被「图省事」绕过去的地方：agent-host 手里已经有字节了，
+ * 直接 `fs.writeFile` 三行就能落盘。但那样写进去的东西
+ *   —— 没有风险分级、没有审计、没有「用户拒绝过什么」的记录，
+ * 与这条产品最核心的承诺（动手必经裁决）直接冲突。
+ * 所以哪怕只是落一张图，也老老实实走 precheck → 审批 → 写入 → 审计。
+ */
+async function writeArtifact(input: {
+  runId: string
+  path: string
+  contentBase64: string
+  mimeType: string
+  purpose: string
+}): Promise<ArtifactWriteOutcome> {
+  const run = runs.get(input.runId)
+  if (!run) return { ok: false, reason: '任务不存在' }
+
+  const gate = ensureExecutable(run)
+  if (gate) return { ok: false, reason: gate }
+
+  let pre: PrecheckResult
+  try {
+    pre = await callMain<PrecheckResult>(TOOL_METHODS.precheck, {
+      runId: run.runId,
+      command: `writeFile ${input.path}`,
+      cwd: workspaceDir()
+    })
+  } catch (err) {
+    return { ok: false, reason: `预判失败：${(err as Error).message}` }
+  }
+
+  emitEvent({
+    runId: run.runId,
+    traceId: run.traceId,
+    agentId: 'main',
+    kind: 'action',
+    type: 'ToolInvoked',
+    payload: {
+      command: `writeFile ${input.path}`,
+      purpose: input.purpose,
+      cwd: workspaceDir(),
+      riskClass: pre.riskClass,
+      matchedRuleId: pre.matchedRuleId,
+      outcome: pre.outcome,
+      needsTicket: pre.needsTicket
+    }
+  })
+
+  let ticket: ApprovalTicket | undefined
+  if (pre.needsTicket) {
+    const decision = await requestApproval(run, pre, `writeFile ${input.path}`, workspaceDir())
+    if (!decision.approved) {
+      await callMain(TOOL_METHODS.recordDenial, {
+        runId: run.runId,
+        command: `writeFile ${input.path}`,
+        cwd: workspaceDir(),
+        basis: decision.basis
+      }).catch((err: Error) => {
+        console.warn(`[agent-host] 拒绝审计写入失败：${err.message}`)
+      })
+      return { ok: false, reason: describeDenial(decision.basis) }
+    }
+    ticket = decision.ticket
+  }
+
+  try {
+    const res = await callMain<FsWriteResult>(
+      TOOL_METHODS.fsWrite,
+      {
+        runId: run.runId,
+        agentId: 'main',
+        path: input.path,
+        contentBase64: input.contentBase64,
+        mimeType: input.mimeType,
+        overwrite: true,
+        approvalTicket: ticket
+      } satisfies FsWriteParams,
+      60_000
+    )
+    if (!res.ok) return { ok: false, reason: res.reason ?? '写入未通过' }
+
+    emitEvent({
+      runId: run.runId,
+      traceId: run.traceId,
+      agentId: 'main',
+      kind: 'observation',
+      type: 'CommandOutput',
+      payload: {
+        stage: 'artifact-written',
+        path: res.path ?? input.path,
+        bytes: res.bytes ?? 0,
+        mimeType: input.mimeType
+      }
+    })
+    return { ok: true, path: res.path ?? input.path, bytes: res.bytes ?? 0 }
+  } catch (err) {
+    const message = (err as Error).message
+    emitEvent({
+      runId: run.runId,
+      traceId: run.traceId,
+      agentId: 'main',
+      kind: 'observation',
+      type: 'ErrorObserved',
+      payload: { stage: 'artifact-write', path: input.path, message }
+    })
+    return { ok: false, reason: message }
+  }
+}
+
+/** 工件文件名：时间戳 + 来自 prompt 的短 slug，避免同一次任务里互相覆盖 */
+function artifactName(prompt: string, ext: string): string {
+  const slug =
+    prompt
+      .toLowerCase()
+      .replace(/[^\p{Script=Han}\w]+/gu, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 24) || 'image'
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  return `${ARTIFACT_DIR}/${stamp}-${slug}.${ext}`
+}
+
+/**
+ * 生图任务。
+ *
+ * 不论成功还是失败，产物都要落盘：
+ *   成功 → 真正的图，登记为预览
+ *   失败 → 一张写着失败原因的占位 SVG（**同样走审批**）
+ *
+ * 为什么失败也要落盘：让它「静默失败、什么都不留」的后果是用户以为
+ * 自己在等一张图，而实际上早已放弃。留一张会说话的占位图，
+ * 至少让「这一步到底发生了什么」是可查的。
+ */
+async function generateImageTask(input: {
+  runId: string
+  prompt: string
+  purpose: string
+}): Promise<{ ok: boolean; text: string; path?: string }> {
+  const image = await currentImage()
+  const name = artifactName(input.prompt, 'png')
+
+  if (!image.configured) {
+    const reason = `生图未配置（缺 ${image.missing.join(' / ')}）`
+    const svg = placeholderSvg(input.prompt, reason)
+    const written = await writeArtifact({
+      runId: input.runId,
+      path: artifactName(input.prompt, 'svg'),
+      contentBase64: Buffer.from(svg, 'utf8').toString('base64'),
+      mimeType: 'image/svg+xml',
+      purpose: `${input.purpose}（生图不可用，落占位图）`
+    })
+    if (!written.ok) {
+      return { ok: false, text: `${reason}；占位图也未能落盘：${written.reason}` }
+    }
+    sessions.noteArtifact({
+      runId: input.runId,
+      path: written.path!,
+      title: `占位图：${input.prompt.slice(0, 40)}`,
+      mimeType: 'image/svg+xml',
+      size: svg.length
+    })
+    return {
+      ok: false,
+      text: `${reason}。已在工作区落下占位图 ${written.path}（说明失败原因），配置好生图凭据后可重试。`,
+      path: written.path
+    }
+  }
+
+  let result: ImageGenerateResult
+  try {
+    result = await generateImage(image.config, { prompt: input.prompt })
+  } catch (err) {
+    const reason = (err as Error).message
+    const svg = placeholderSvg(input.prompt, reason)
+    const written = await writeArtifact({
+      runId: input.runId,
+      path: artifactName(input.prompt, 'svg'),
+      contentBase64: Buffer.from(svg, 'utf8').toString('base64'),
+      mimeType: 'image/svg+xml',
+      purpose: `${input.purpose}（生图失败，落占位图）`
+    })
+    if (!written.ok) {
+      return { ok: false, text: `${reason}；占位图也未能落盘：${written.reason}` }
+    }
+    sessions.noteArtifact({
+      runId: input.runId,
+      path: written.path!,
+      title: `占位图：${input.prompt.slice(0, 40)}`,
+      mimeType: 'image/svg+xml',
+      size: svg.length
+    })
+    return { ok: false, text: `${reason}。已落占位图 ${written.path}。`, path: written.path }
+  }
+
+  const written = await writeArtifact({
+    runId: input.runId,
+    path: name,
+    contentBase64: result.bytesBase64,
+    mimeType: result.mimeType,
+    purpose: input.purpose
+  })
+  if (!written.ok) {
+    return { ok: false, text: `图已生成但未能落盘：${written.reason}` }
+  }
+
+  sessions.noteArtifact({
+    runId: input.runId,
+    path: written.path!,
+    title: input.prompt.slice(0, 60),
+    mimeType: result.mimeType,
+    size: result.byteLength
+  })
+
+  const revised = result.revisedPrompt ? `；网关改写后的 prompt：${result.revisedPrompt}` : ''
+  return {
+    ok: true,
+    text: `已生成 ${written.path}（${result.byteLength} 字节，${result.size}，耗时 ${result.durationMs}ms）${revised}`,
+    path: written.path
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -1512,6 +1862,7 @@ async function handleRequest(method: string, params: unknown): Promise<unknown> 
       const saved = sessions.notePreview({
         previewId: ulid(),
         runId: session.runId,
+        kind: 'url',
         url: input.url,
         title: input.title ?? input.url
       })

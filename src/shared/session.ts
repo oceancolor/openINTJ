@@ -67,6 +67,8 @@ export type ChatKind =
   | 'approval'
   /** 执行结果（payload: RunLoopResult 摘要） */
   | 'delivery'
+  /** 工件产出（payload: { path, mimeType, size, revisedPrompt? }）—— 出图/出文档时用它 */
+  | 'artifact'
   /** 出错或被拒（payload: { message }） */
   | 'error'
   /** 过程中的进展（payload: { stage, text }） */
@@ -114,13 +116,32 @@ export interface FileChange {
   confirmed: boolean
 }
 
+/**
+ * 预览目标的种类。
+ *
+ * `url` 是工作区外起的服务（dev server），`image` / `text` 是**工件**——
+ * 落在工作区里的文件（生图产物、生成的文档）。
+ *
+ * 分种类的理由不是显示：url 预览是「别人的内容」，工件是「这次任务做出来的东西」，
+ * 两者的可信度与失效方式完全不同。混成一类的话，工件被删之后界面上还挂着一个
+ * 打不开的卡片，而用户会以为是自己没刷新。
+ */
+export type PreviewKind = 'url' | 'image' | 'text'
+
 /** 预览目标 —— 没有就不亮「预览」签 */
 export interface PreviewTarget {
   previewId: string
   runId: string
+  kind: PreviewKind
+  /** url 类型的回环地址；工件类型为空串，位置看 `path` */
   url: string
   title: string
   at: number
+  /** 工件的工作区相对路径（kind 为 image / text 时有值） */
+  path?: string
+  /** 工件的 MIME 与字节数 —— 界面据此决定怎么渲染、要不要提示太大 */
+  mimeType?: string
+  size?: number
 }
 
 /**
@@ -156,6 +177,61 @@ export const SESSION_METHODS = {
   /** 手动登记一个预览地址（只接受回环地址） */
   previewAdd: 'session.preview.add'
 } as const
+
+/* ------------------------------------------------------------------ *
+ * 工件识别
+ * ------------------------------------------------------------------ */
+
+/**
+ * 可预览的扩展名 → 呈现形态与 MIME。
+ *
+ * 这张表**只有一份**，tool-host（文件树的 `previewable` 标记）、
+ * agent-host（把产出登记成预览目标）、渲染层（决定怎么画）共用。
+ * 分成三份的必然结果是：文件树里能点的东西，登记成预览之后画不出来。
+ */
+const PREVIEW_EXTENSIONS: Record<string, { kind: 'image' | 'text'; mimeType: string }> = {
+  png: { kind: 'image', mimeType: 'image/png' },
+  jpg: { kind: 'image', mimeType: 'image/jpeg' },
+  jpeg: { kind: 'image', mimeType: 'image/jpeg' },
+  gif: { kind: 'image', mimeType: 'image/gif' },
+  webp: { kind: 'image', mimeType: 'image/webp' },
+  svg: { kind: 'image', mimeType: 'image/svg+xml' },
+  md: { kind: 'text', mimeType: 'text/markdown' },
+  txt: { kind: 'text', mimeType: 'text/plain' },
+  json: { kind: 'text', mimeType: 'application/json' },
+  html: { kind: 'text', mimeType: 'text/html' },
+  css: { kind: 'text', mimeType: 'text/css' },
+  js: { kind: 'text', mimeType: 'text/javascript' },
+  ts: { kind: 'text', mimeType: 'text/typescript' },
+  csv: { kind: 'text', mimeType: 'text/csv' },
+  yml: { kind: 'text', mimeType: 'text/yaml' },
+  yaml: { kind: 'text', mimeType: 'text/yaml' }
+}
+
+export function extOf(path: string): string {
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  const dot = name.lastIndexOf('.')
+  return dot <= 0 ? '' : name.slice(dot + 1).toLowerCase()
+}
+
+/**
+ * 判定一个路径是不是「可预览的工件」。
+ *
+ * 只看扩展名，不猜内容：猜内容要先读文件，而读文件在 tool-host 那边
+ * 是另一件事（且有大小上限）。扩展名判定错了最多是「画不出来」，
+ * 猜错了会让人以为文件坏了。
+ */
+export function previewKindOf(path: string): { kind: 'image' | 'text'; mimeType: string } | null {
+  return PREVIEW_EXTENSIONS[extOf(path)] ?? null
+}
+
+/** 文件树用：这个路径能不能点开看 */
+export function isPreviewableFile(path: string): boolean {
+  return previewKindOf(path) !== null
+}
+
+/** 工件目录 —— 生图等产物的落点。集中在 `artifacts/` 是为了让「哪些是产出」一眼可辨 */
+export const ARTIFACT_DIR = 'artifacts'
 
 export interface SessionSendResult {
   session: AgentSession
