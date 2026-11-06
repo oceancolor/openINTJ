@@ -1,13 +1,20 @@
 import { randomUUID } from "node:crypto";
 import type { HookBus } from "../hooks/bus.js";
 import {
+  journalAssistant,
+  journalTurnEnd,
+  journalTurnStart,
+  journalUser,
+} from "../journal/sink.js";
+import type { JournalTurnContext, TurnEndStatus } from "../journal/types.js";
+import {
   type ShaderModeType,
   TASK_SHADER_MAP,
   TaskType,
   type TaskTypeType,
 } from "../types/shader.js";
 import type { ToolDescriptor } from "../types/tool.js";
-import type { ReactStateMachine } from "./react.js";
+import type { ReactRunOptions, ReactStateMachine } from "./react.js";
 import type {
   ChatMessage,
   ImagePayload,
@@ -39,6 +46,8 @@ export interface TaoContextInput {
   traceId: string;
   /** 本轮建议检索 topK（外部路由降 token 时透传；不传则由 provider 自定默认）。 */
   topK?: number;
+  /** RFC-011: plan-advice system section for this run (never spliced into the user query). */
+  planAdviceBlock?: string;
 }
 
 /**
@@ -189,6 +198,12 @@ export class TaoLoop {
       history?: readonly ChatMessage[];
       /** Conversation-scoped model override; never mutates the loop's default client. */
       llm?: LlmClient;
+      /** RFC-009 optional journal; missing or throwing sink never fails the loop. */
+      journal?: JournalTurnContext;
+      /** RFC-011: plan-advice system section, forwarded to contextProvider per run. */
+      planAdviceBlock?: string;
+      /** RFC-012 overflow recovery, forwarded to ReAct (see ReactRunOptions). */
+      onContextOverflow?: NonNullable<ReactRunOptions["onContextOverflow"]>;
     } = {},
   ): Promise<TaoResult> {
     opts.signal?.throwIfAborted();
@@ -212,181 +227,225 @@ export class TaoLoop {
     let totalTokensSpent = 0;
     let status: TaoStatus = "completed";
     let failureReason: string | undefined;
+    const journal = opts.journal
+      ? opts.traceId && !opts.journal.traceId
+        ? { ...opts.journal, traceId }
+        : opts.journal
+      : undefined;
+    journalTurnStart(journal, query.slice(0, 120));
+    journalUser(journal, query);
+
+    const taoStatusToJournal = (value: TaoStatus): TurnEndStatus => {
+      if (value === "max_iter_reached") return "max_iter";
+      if (value === "timeout") return "timeout";
+      if (value === "failed") return "failed";
+      return "completed";
+    };
 
     // ============================================================
     // 主循环：每一轮一次 Think → Act → Observe
     // ============================================================
     const runStart = Date.now();
-    while (true) {
-      opts.signal?.throwIfAborted();
-      ctx.iteration++;
-      if (ctx.iteration > this._config.maxTaoIterations) {
-        ctx.iteration = this._config.maxTaoIterations;
-        status = "max_iter_reached";
-        break;
-      }
+    try {
+      while (true) {
+        opts.signal?.throwIfAborted();
+        ctx.iteration++;
+        if (ctx.iteration > this._config.maxTaoIterations) {
+          ctx.iteration = this._config.maxTaoIterations;
+          status = "max_iter_reached";
+          break;
+        }
 
-      const taoOpts = traceId ? { traceId } : undefined;
+        const taoOpts = traceId ? { traceId } : undefined;
 
-      // ----- Think -----
-      await this._hooks.emit(
-        "tao.beforeThink",
-        { query: ctx.query, iteration: ctx.iteration },
-        taoOpts,
-      );
+        // ----- Think -----
+        const think = await this._hooks.emitOutcome(
+          "tao.beforeThink",
+          { query: ctx.query, iteration: ctx.iteration },
+          taoOpts,
+        );
+        if (think.cancelled) {
+          status = "failed";
+          failureReason = "hook_cancelled";
+          break;
+        }
+        const thinkQuery = think.payload.query;
+        if (think.payload.injectBlock) {
+          history.push({ role: "user", content: think.payload.injectBlock });
+          journalUser(journal, think.payload.injectBlock, { source: "inject" });
+        }
 
-      const built = this.builder.build({
-        query: ctx.query,
-        trajectory: ctx.trajectory,
-        iteration: ctx.iteration,
-        history,
-      });
+        const built = this.builder.build({
+          query: thinkQuery,
+          trajectory: ctx.trajectory,
+          iteration: ctx.iteration,
+          history,
+        });
 
-      // 模拟"plan"占位（v1 由 ReAct 负责真正规划）
-      const planLike = {
-        planId: randomUUID(),
-        totalSteps: 0,
-      };
-      await this._hooks.emit(
-        "tao.afterThink",
-        { plan: planLike, iteration: ctx.iteration },
-        taoOpts,
-      );
+        // 模拟"plan"占位（v1 由 ReAct 负责真正规划）
+        const planLike = {
+          planId: randomUUID(),
+          totalSteps: 0,
+        };
+        await this._hooks.emit(
+          "tao.afterThink",
+          { plan: planLike, iteration: ctx.iteration },
+          taoOpts,
+        );
 
-      // ----- Act -----
-      // 先跑 contextProvider（技能选择 / 记忆注入），再 list 工具，
-      // 让本轮 skill allowlist 能收窄 ReAct 看到的工具面。
-      let baseSystem = this.systemPrompt;
-      if (this.contextProvider) {
-        try {
-          baseSystem = await this.contextProvider({
-            query: ctx.query,
+        // ----- Act -----
+        // 先跑 contextProvider（技能选择 / 记忆注入），再 list 工具，
+        // 让本轮 skill allowlist 能收窄 ReAct 看到的工具面。
+        let baseSystem = this.systemPrompt;
+        if (this.contextProvider) {
+          try {
+            baseSystem = await this.contextProvider({
+              query: thinkQuery,
+              iteration: ctx.iteration,
+              history,
+              trajectory: ctx.trajectory,
+              taskType,
+              traceId,
+              ...(opts.topK !== undefined ? { topK: opts.topK } : {}),
+              ...(opts.planAdviceBlock ? { planAdviceBlock: opts.planAdviceBlock } : {}),
+            });
+          } catch {
+            // 记忆注入失败绝不阻断主循环，回退静态 systemPrompt。
+            baseSystem = this.systemPrompt;
+          }
+        }
+        const tools = this.availableTools();
+        await this._hooks.emit(
+          "tao.beforeAct",
+          {
+            plan: planLike,
+            availableTools: tools,
             iteration: ctx.iteration,
-            history,
-            trajectory: ctx.trajectory,
-            taskType,
-            traceId,
-            ...(opts.topK !== undefined ? { topK: opts.topK } : {}),
-          });
-        } catch {
-          // 记忆注入失败绝不阻断主循环，回退静态 systemPrompt。
-          baseSystem = this.systemPrompt;
+          },
+          taoOpts,
+        );
+        const finalSystemPrompt =
+          baseSystem.length > 0 ? `${baseSystem}\n\n${built.systemPrompt}` : built.systemPrompt;
+
+        const reactInput = {
+          messages: built.messages,
+          availableTools: tools,
+          taoIteration: ctx.iteration,
+          systemPrompt: finalSystemPrompt,
+        };
+
+        const reactOpts: {
+          traceId?: string;
+          signal?: AbortSignal;
+          llm?: LlmClient;
+          journal?: JournalTurnContext;
+          onContextOverflow?: NonNullable<ReactRunOptions["onContextOverflow"]>;
+        } = {};
+        if (traceId) reactOpts.traceId = traceId;
+        if (opts.signal) reactOpts.signal = opts.signal;
+        if (opts.llm) reactOpts.llm = opts.llm;
+        if (journal) reactOpts.journal = journal;
+        if (opts.onContextOverflow) reactOpts.onContextOverflow = opts.onContextOverflow;
+        // enableReact=false 退化为单次 LLM 调用（不跑微循环、不下发工具）。
+        const react = enableReact
+          ? await this._react.run(reactInput, reactOpts)
+          : await this._react.runSingle(reactInput, reactOpts);
+
+        ctx.trajectory.push(...react.trajectory);
+        totalReactSteps += react.iterations;
+        totalTokensSpent += react.totalTokensSpent;
+
+        await this._hooks.emit(
+          "tao.afterAct",
+          {
+            reactOutput: {
+              finalAnswer: react.finalAnswer,
+              status: react.status,
+              iterations: react.iterations,
+            },
+            iteration: ctx.iteration,
+          },
+          taoOpts,
+        );
+
+        // ----- Observe -----
+        await this._hooks.emit(
+          "tao.beforeObserve",
+          {
+            trajectory: ctx.trajectory.map((t) => ({ timestamp: t.timestamp })),
+            iteration: ctx.iteration,
+          },
+          taoOpts,
+        );
+
+        // ReAct 失败模式直接传播；正常模式以 reactOutput.finalAnswer 作为本轮答案
+        if (react.status === "fail_fast") {
+          status = "failed";
+          failureReason = react.failedTool
+            ? `tool ${react.failedTool.tool} failed: ${react.failedTool.error}`
+            : "react fail_fast";
+          ctx.finalAnswer = react.finalAnswer;
+        } else {
+          ctx.finalAnswer = react.finalAnswer;
+        }
+
+        // 把本轮 user 与 assistant 入会话历史，供下一轮使用
+        history.push({ role: "user", content: query });
+        history.push({ role: "assistant", content: react.finalAnswer });
+
+        const continues = this.needsContinueFn(ctx);
+        await this._hooks.emit(
+          "tao.afterObserve",
+          { needsContinue: continues, iteration: ctx.iteration },
+          taoOpts,
+        );
+
+        if (status === "failed") break;
+        if (!continues) break;
+
+        // 超时检查
+        if (Date.now() - runStart > this._config.taoTimeoutMs) {
+          status = "timeout";
+          failureReason = `tao timeout after ${this._config.taoTimeoutMs}ms`;
+          break;
         }
       }
-      const tools = this.availableTools();
-      await this._hooks.emit(
-        "tao.beforeAct",
-        {
-          plan: planLike,
-          availableTools: tools,
-          iteration: ctx.iteration,
-        },
-        taoOpts,
-      );
-      const finalSystemPrompt =
-        baseSystem.length > 0 ? `${baseSystem}\n\n${built.systemPrompt}` : built.systemPrompt;
 
-      const reactInput = {
-        messages: built.messages,
-        availableTools: tools,
-        taoIteration: ctx.iteration,
-        systemPrompt: finalSystemPrompt,
+      ctx.metrics["totalDurationMs"] = Date.now() - startTime;
+      ctx.metrics["totalReactSteps"] = totalReactSteps;
+      ctx.metrics["totalTokensSpent"] = totalTokensSpent;
+
+      await this._hooks.emit(
+        "event.LOOP_ITERATION",
+        { taoIter: ctx.iteration, metrics: ctx.metrics },
+        traceId ? { traceId } : undefined,
+      );
+
+      const result: TaoResult = {
+        traceId,
+        status,
+        finalAnswer: ctx.finalAnswer ?? "",
+        iterations: ctx.iteration,
+        reactTotalSteps: totalReactSteps,
+        totalTokensSpent,
+        durationMs: Date.now() - startTime,
+        trajectory: ctx.trajectory,
+        taskType,
+        shaderMode,
+        metrics: ctx.metrics,
       };
-
-      const reactOpts: { traceId?: string; signal?: AbortSignal; llm?: LlmClient } = {};
-      if (traceId) reactOpts.traceId = traceId;
-      if (opts.signal) reactOpts.signal = opts.signal;
-      if (opts.llm) reactOpts.llm = opts.llm;
-      // enableReact=false 退化为单次 LLM 调用（不跑微循环、不下发工具）。
-      const react = enableReact
-        ? await this._react.run(reactInput, reactOpts)
-        : await this._react.runSingle(reactInput, reactOpts);
-
-      ctx.trajectory.push(...react.trajectory);
-      totalReactSteps += react.iterations;
-      totalTokensSpent += react.totalTokensSpent;
-
-      await this._hooks.emit(
-        "tao.afterAct",
-        {
-          reactOutput: {
-            finalAnswer: react.finalAnswer,
-            status: react.status,
-            iterations: react.iterations,
-          },
-          iteration: ctx.iteration,
-        },
-        taoOpts,
-      );
-
-      // ----- Observe -----
-      await this._hooks.emit(
-        "tao.beforeObserve",
-        {
-          trajectory: ctx.trajectory.map((t) => ({ timestamp: t.timestamp })),
-          iteration: ctx.iteration,
-        },
-        taoOpts,
-      );
-
-      // ReAct 失败模式直接传播；正常模式以 reactOutput.finalAnswer 作为本轮答案
-      if (react.status === "fail_fast") {
-        status = "failed";
-        failureReason = react.failedTool
-          ? `tool ${react.failedTool.tool} failed: ${react.failedTool.error}`
-          : "react fail_fast";
-        ctx.finalAnswer = react.finalAnswer;
-      } else {
-        ctx.finalAnswer = react.finalAnswer;
-      }
-
-      // 把本轮 user 与 assistant 入会话历史，供下一轮使用
-      history.push({ role: "user", content: query });
-      history.push({ role: "assistant", content: react.finalAnswer });
-
-      const continues = this.needsContinueFn(ctx);
-      await this._hooks.emit(
-        "tao.afterObserve",
-        { needsContinue: continues, iteration: ctx.iteration },
-        taoOpts,
-      );
-
-      if (status === "failed") break;
-      if (!continues) break;
-
-      // 超时检查
-      if (Date.now() - runStart > this._config.taoTimeoutMs) {
-        status = "timeout";
-        failureReason = `tao timeout after ${this._config.taoTimeoutMs}ms`;
-        break;
-      }
+      if (failureReason) result.failureReason = failureReason;
+      journalAssistant(journal, result.finalAnswer, { status: result.status });
+      journalTurnEnd(journal, taoStatusToJournal(status));
+      return result;
+    } catch (error) {
+      const cancelled = opts.signal?.aborted === true;
+      journalAssistant(journal, ctx.finalAnswer ?? "", {
+        status: cancelled ? "cancelled" : "failed",
+      });
+      journalTurnEnd(journal, cancelled ? "cancelled" : "failed");
+      throw error;
     }
-
-    ctx.metrics["totalDurationMs"] = Date.now() - startTime;
-    ctx.metrics["totalReactSteps"] = totalReactSteps;
-    ctx.metrics["totalTokensSpent"] = totalTokensSpent;
-
-    await this._hooks.emit(
-      "event.LOOP_ITERATION",
-      { taoIter: ctx.iteration, metrics: ctx.metrics },
-      traceId ? { traceId } : undefined,
-    );
-
-    const result: TaoResult = {
-      traceId,
-      status,
-      finalAnswer: ctx.finalAnswer ?? "",
-      iterations: ctx.iteration,
-      reactTotalSteps: totalReactSteps,
-      totalTokensSpent,
-      durationMs: Date.now() - startTime,
-      trajectory: ctx.trajectory,
-      taskType,
-      shaderMode,
-      metrics: ctx.metrics,
-    };
-    if (failureReason) result.failureReason = failureReason;
-    return result;
   }
 }
 

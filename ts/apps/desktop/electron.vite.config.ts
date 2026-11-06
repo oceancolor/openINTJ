@@ -1,12 +1,20 @@
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 
+const appVersion = (
+  JSON.parse(readFileSync(resolve(__dirname, "package.json"), "utf8")) as { version: string }
+).version;
+
 const workspacePackages = [
+  "@openintj/channels",
   "@openintj/classifier",
   "@openintj/concurrency",
+  "@openintj/connectors",
   "@openintj/core",
   "@openintj/dormant",
+  "@openintj/identity",
   "@openintj/llm-hunyuan",
   "@openintj/llm-ollama",
   "@openintj/model-runtime",
@@ -14,12 +22,17 @@ const workspacePackages = [
   "@openintj/plane-execution",
   "@openintj/plane-governance",
   "@openintj/plane-memory",
+  "@openintj/profile",
+  "@openintj/runtime",
+  "@openintj/scheduler",
   "@openintj/shared",
   "@openintj/skills",
   "@openintj/storage-lance",
   "@openintj/storage-sqlite",
+  "@openintj/sync",
   "@openintj/taskpool",
   "@openintj/telemetry-otel",
+  "@openintj/voice",
 ];
 
 export default defineConfig({
@@ -42,6 +55,10 @@ export default defineConfig({
   renderer: {
     root: resolve(__dirname, "src/renderer"),
     plugins: [react()],
+    define: {
+      // Single source of truth for the window/document title version.
+      __OPENINTJ_APP_VERSION__: JSON.stringify(appVersion),
+    },
     build: {
       outDir: "out/renderer",
       rollupOptions: {
@@ -52,9 +69,6 @@ export default defineConfig({
       alias: {
         "@": resolve(__dirname, "src/renderer"),
       },
-    },
-    optimizeDeps: {
-      include: ["monaco-editor"],
     },
     server: {
       fs: {

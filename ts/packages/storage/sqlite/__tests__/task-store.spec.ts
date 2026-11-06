@@ -50,6 +50,9 @@ describe("SqliteTaskStore recovery", () => {
     expect(calls).toEqual(["b"]);
     expect([...result.results.values()]).toEqual(["A", "B"]);
     expect((await restarted.loadRun("recover-run"))?.status).toBe("completed");
+    await restarted.saveRun({ ...stored, runId: "older-run", status: "failed", updatedAt: 1 });
+    await expect(restarted.listRuns(1)).resolves.toMatchObject([{ runId: "recover-run" }]);
+    await expect(restarted.listRuns()).resolves.toHaveLength(2);
     await restarted.close();
     await rm(dbPath, { force: true });
   });

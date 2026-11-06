@@ -1,4 +1,4 @@
-/** Shared workspace-view helpers for the desktop workbench and a future IDE shell. */
+/** Shared workspace-view helpers for the desktop workbench (tree, preview, quick-open filter). */
 
 export type WorkspacePreviewKind = "image" | "text" | "file";
 
@@ -11,19 +11,18 @@ export interface WorkspaceEntry {
   path: string;
   name: string;
   type: "file" | "dir";
-  bytes?: number;
+  bytes?: number | undefined;
 }
 
 export interface WorkspaceTreeNode {
   path: string;
   name: string;
   type: "file" | "dir";
-  bytes?: number;
-  children?: WorkspaceTreeNode[];
+  bytes?: number | undefined;
+  children?: WorkspaceTreeNode[] | undefined;
 }
 
-const WORKSPACE_PATH_RE =
-  /`((?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,12})`/g;
+const WORKSPACE_PATH_RE = /`((?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,12})`/g;
 
 const RASTER_EXT = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
 const IMAGE_EXT = new Set([...RASTER_EXT, "svg"]);
@@ -51,19 +50,6 @@ const TEXT_EXT = new Set([
   "ini",
 ]);
 
-const MONACO_LANGUAGE: Record<string, string> = {
-  ts: "typescript",
-  tsx: "typescript",
-  js: "javascript",
-  jsx: "javascript",
-  json: "json",
-  css: "css",
-  html: "html",
-  md: "markdown",
-  xml: "xml",
-  svg: "xml",
-};
-
 export const extractWorkspaceArtifactPaths = (text: string): string[] => {
   const found: string[] = [];
   for (const match of text.matchAll(WORKSPACE_PATH_RE)) {
@@ -88,8 +74,38 @@ export const splitWorkspacePathMarkup = (
   return parts.length > 0 ? parts : [{ type: "text", value: text }];
 };
 
-export const extensionOf = (path: string): string =>
-  path.split(".").pop()?.toLowerCase() ?? "";
+export const extensionOf = (path: string): string => path.split(".").pop()?.toLowerCase() ?? "";
+
+export const isMarkdownPath = (path: string): boolean => {
+  const ext = extensionOf(path);
+  return ext === "md" || ext === "markdown";
+};
+
+/**
+ * Quick-open / filter ranking over the flat entry list: files only,
+ * name-prefix hits first, then name hits, then path hits. Empty query → [].
+ */
+export const filterWorkspaceFiles = (
+  entries: readonly WorkspaceEntry[],
+  query: string,
+  limit = 50,
+): WorkspaceEntry[] => {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [];
+  const scored: { entry: WorkspaceEntry; score: number }[] = [];
+  for (const entry of entries) {
+    if (entry.type !== "file") continue;
+    const name = entry.name.toLowerCase();
+    const path = entry.path.toLowerCase();
+    let score = -1;
+    if (name.startsWith(needle)) score = 0;
+    else if (name.includes(needle)) score = 1;
+    else if (path.includes(needle)) score = 2;
+    if (score >= 0) scored.push({ entry, score });
+  }
+  scored.sort((a, b) => a.score - b.score || a.entry.path.localeCompare(b.entry.path));
+  return scored.slice(0, limit).map((s) => s.entry);
+};
 
 export const previewKindForPath = (path: string): WorkspacePreviewKind => {
   const ext = extensionOf(path);
@@ -97,19 +113,6 @@ export const previewKindForPath = (path: string): WorkspacePreviewKind => {
   if (TEXT_EXT.has(ext)) return "text";
   return "file";
 };
-
-/** Raster stays a preview; SVG and other text open in the editor. */
-export const editorKindForPath = (path: string): WorkspacePreviewKind => {
-  const ext = extensionOf(path);
-  if (RASTER_EXT.has(ext)) return "image";
-  if (TEXT_EXT.has(ext)) return "text";
-  return "file";
-};
-
-export const isEditablePath = (path: string): boolean => editorKindForPath(path) === "text";
-
-export const monacoLanguageForPath = (path: string): string =>
-  MONACO_LANGUAGE[extensionOf(path)] ?? "plaintext";
 
 export const mimeForPath = (path: string): string => {
   const ext = extensionOf(path);

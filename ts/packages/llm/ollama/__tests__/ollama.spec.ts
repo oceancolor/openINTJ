@@ -65,6 +65,19 @@ describe("OllamaClient", () => {
     expect(fetchSignal?.aborted).toBe(true);
   });
 
+  it("classifies context-size rejections as CONTEXT_OVERFLOW (RFC-012)", async () => {
+    globalThis.fetch = (async () =>
+      new Response("the request exceeds the available context size, try increasing it", {
+        status: 400,
+      })) as unknown as typeof fetch;
+    const c = new OllamaClient({ baseUrl: "http://localhost:11434" });
+    await expect(c.chat([{ role: "user", content: "你好" }])).rejects.toMatchObject({
+      code: "CONTEXT_OVERFLOW",
+      retriable: false,
+      details: { provider: "ollama", status: 400, overflow: true },
+    });
+  });
+
   it("fails closed on HTTP errors without returning generated content", async () => {
     globalThis.fetch = (async () =>
       new Response("model not found", { status: 404 })) as unknown as typeof fetch;

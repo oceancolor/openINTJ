@@ -20,6 +20,11 @@ Thumbs.db
 **/playwright-report/
 playwright/.cache/
 
+# VSCodium reh-web（约 94MB，本地 pnpm --filter @openintj/desktop vscodium:fetch）
+ts/apps/desktop/vendor/vscodium-server/*
+!ts/apps/desktop/vendor/vscodium-server/README.md
+ts/apps/desktop/.cache/
+
 # 环境变量本地覆盖（HUNYUAN_API_KEY 等敏感信息，绝对不能上仓库）
 .env
 .env.local

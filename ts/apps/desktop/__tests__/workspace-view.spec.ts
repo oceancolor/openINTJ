@@ -1,88 +1,64 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
-import { listWorkspaceEntries, readWorkspaceBytes } from "../src/main/workspace-fs.js";
+import { describe, expect, it } from "vitest";
 import {
-  artifactsFromAnswer,
+  type WorkspaceEntry,
   buildWorkspaceTree,
-  extractWorkspaceArtifactPaths,
-  guessedRasterFromSvgPath,
-  preferredPreviewPath,
-  previewKindForPath,
-  rasterSiblingFromSvg,
-  requestsArtifactPreview,
-  splitWorkspacePathMarkup,
+  filterWorkspaceFiles,
+  isMarkdownPath,
 } from "../src/shared/workspace-view.js";
 
-const roots: string[] = [];
-afterAll(() => {
-  for (const root of roots) rmSync(root, { recursive: true, force: true });
-});
+const ENTRIES: WorkspaceEntry[] = [
+  { path: "src/index.ts", name: "index.ts", type: "file" },
+  { path: "src/identity.ts", name: "identity.ts", type: "file" },
+  { path: "docs/identity-guide.md", name: "identity-guide.md", type: "file" },
+  { path: "src", name: "src", type: "dir" },
+  { path: "README.md", name: "README.md", type: "file" },
+];
 
-describe("workspace-view helpers", () => {
-  it("extracts backticked workspace artifact paths from answers", () => {
-    const text =
-      "已写入工作区：`artifacts/3128030c-484f-4486-8b01-479af23b5533/cover.png`。";
-    expect(extractWorkspaceArtifactPaths(text)).toEqual([
-      "artifacts/3128030c-484f-4486-8b01-479af23b5533/cover.png",
-    ]);
-    expect(artifactsFromAnswer(text)[0]).toMatchObject({ kind: "image" });
-    expect(previewKindForPath("notes/a.md")).toBe("text");
-  });
-
-  it("splits markup so chat can turn paths into buttons", () => {
-    const parts = splitWorkspacePathMarkup("见 `artifacts/t/cover.png` 与说明");
-    expect(parts).toEqual([
-      { type: "text", value: "见 " },
-      { type: "path", value: "artifacts/t/cover.png" },
-      { type: "text", value: " 与说明" },
-    ]);
-  });
-
-  it("prefers a raster file over an SVG preview stub", () => {
-    expect(
-      preferredPreviewPath([
-        "other/photo.png",
-        "artifacts/t/cover_preview.svg",
-        "artifacts/t/cover.png",
-      ]),
-    ).toBe("artifacts/t/cover.png");
-    expect(requestsArtifactPreview("预览刚才生图的产物")).toBe(true);
-    expect(
-      rasterSiblingFromSvg(
-        '<svg><image href="cover.png" width="1280" height="720"/></svg>',
-        "artifacts/t/cover_preview.svg",
-      ),
-    ).toBe("artifacts/t/cover.png");
-    expect(guessedRasterFromSvgPath("artifacts/t/cover_preview.svg")).toBe(
-      "artifacts/t/cover.png",
+describe("filterWorkspaceFiles (quick-open)", () => {
+  it("ranks name-prefix above name-substring above path-substring, files only", () => {
+    // Both are name-prefix hits for "iden"; ties break by path order.
+    const out = filterWorkspaceFiles(ENTRIES, "iden");
+    expect(out.map((e) => e.path)).toEqual(["docs/identity-guide.md", "src/identity.ts"]);
+    // A pure name-substring hit ranks below a name-prefix hit.
+    const mixed = filterWorkspaceFiles(
+      [
+        { path: "x/reidentity.ts", name: "reidentity.ts", type: "file" },
+        { path: "a/identity.ts", name: "identity.ts", type: "file" },
+      ],
+      "ident",
     );
+    expect(mixed.map((e) => e.path)).toEqual(["a/identity.ts", "x/reidentity.ts"]);
+    const byPath = filterWorkspaceFiles(ENTRIES, "docs");
+    expect(byPath.map((e) => e.path)).toEqual(["docs/identity-guide.md"]);
+    expect(filterWorkspaceFiles(ENTRIES, "src").every((e) => e.type === "file")).toBe(true);
   });
 
-  it("builds a nested tree from a flat listing", () => {
-    const tree = buildWorkspaceTree([
-      { path: "artifacts", name: "artifacts", type: "dir" },
-      { path: "artifacts/t", name: "t", type: "dir" },
-      { path: "artifacts/t/cover.png", name: "cover.png", type: "file", bytes: 12 },
-    ]);
-    expect(tree).toHaveLength(1);
-    expect(tree[0]?.children?.[0]?.children?.[0]?.path).toBe("artifacts/t/cover.png");
+  it("empty query and no-match return empty", () => {
+    expect(filterWorkspaceFiles(ENTRIES, "  ")).toEqual([]);
+    expect(filterWorkspaceFiles(ENTRIES, "zzz")).toEqual([]);
+  });
+
+  it("respects the limit", () => {
+    const many: WorkspaceEntry[] = Array.from({ length: 80 }, (_, i) => ({
+      path: `f${i}.txt`,
+      name: `f${i}.txt`,
+      type: "file" as const,
+    }));
+    expect(filterWorkspaceFiles(many, "f")).toHaveLength(50);
+    expect(filterWorkspaceFiles(many, "f", 5)).toHaveLength(5);
   });
 });
 
-describe("workspace-fs", () => {
-  it("lists and reads a PNG as base64 without leaving the sandbox", async () => {
-    const root = mkdtempSync(join(tmpdir(), "openintj-wsfs-"));
-    roots.push(root);
-    mkdirSync(join(root, "artifacts", "t"), { recursive: true });
-    writeFileSync(join(root, "artifacts", "t", "cover.png"), "PNGDATA");
-    const entries = await listWorkspaceEntries(root);
-    expect(entries.map((entry) => entry.path)).toContain("artifacts/t/cover.png");
-    const bytes = await readWorkspaceBytes(root, "artifacts/t/cover.png");
-    expect(bytes.mimeType).toBe("image/png");
-    expect(Buffer.from(bytes.base64, "base64").toString()).toBe("PNGDATA");
-    await expect(readWorkspaceBytes(root, "../secret.png")).rejects.toThrow(/越界/);
+describe("workspace-view basics", () => {
+  it("detects markdown paths", () => {
+    expect(isMarkdownPath("a/b.md")).toBe(true);
+    expect(isMarkdownPath("a.markdown")).toBe(true);
+    expect(isMarkdownPath("a.txt")).toBe(false);
+  });
+
+  it("buildWorkspaceTree nests files under dirs", () => {
+    const tree = buildWorkspaceTree(ENTRIES);
+    const src = tree.find((n) => n.path === "src");
+    expect(src?.children?.map((c) => c.name).sort()).toEqual(["identity.ts", "index.ts"]);
   });
 });

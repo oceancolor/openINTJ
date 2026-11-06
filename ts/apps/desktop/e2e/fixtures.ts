@@ -50,9 +50,9 @@ export const test = base.extend<DesktopFixtures>({
 
   page: async ({ electronApp }, use) => {
     const win = await electronApp.firstWindow();
-    // 等待 React 挂载完成（renderer html 里 <div id="root">；body 里 header 出现就算 ready）
+    // 等待 React 挂载完成（以左侧自研工作区工作台为准）
     await win.waitForLoadState("domcontentloaded");
-    await win.waitForSelector("text=OpenINTJ", { timeout: 20_000 });
+    await win.waitForSelector('[data-testid="workspace-workbench"]', { timeout: 20_000 });
     await use(win);
   },
 });

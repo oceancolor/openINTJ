@@ -80,6 +80,46 @@ describeE2E("server persistence e2e (LanceDB + SQLite)", { timeout: 30_000 }, ()
     await verify.close();
   });
 
+  it("lists and manually resumes a checkpoint that appears after startup", async () => {
+    const dir = makeDir("taskpool-checkpoint");
+    const dbPath = join(dir, "taskpool.sqlite");
+    const agent = await assembleServerAgent({
+      llmProvider: "mock",
+      embedProvider: "simple",
+      dataDir: dir,
+      enableTaskPool: true,
+    });
+    const stored: StoredTaskRun = {
+      runId: "manual-checkpoint-run",
+      planId: "manual-checkpoint-plan",
+      status: "running",
+      graph: {
+        planId: "manual-checkpoint-plan",
+        goalIntent: "plan",
+        goalInput: "手动恢复检查点",
+        nodes: [{ id: "a", deps: [], action: "respond", description: "输出恢复结果" }],
+      },
+      nodes: [{ taskId: "a", state: "running", attempt: 1, updatedAt: 2 }],
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const external = new SqliteTaskStore(dbPath, false);
+    await external.init();
+    await external.saveRun(stored);
+    await external.close();
+
+    await expect(agent.taskPoolCheckpoints()).resolves.toMatchObject([
+      { runId: stored.runId, status: "running" },
+    ]);
+    const result = await agent.resumeTaskRun(stored.runId);
+    expect(result?.status).toBe("completed");
+    await expect(agent.taskPoolCheckpoints()).resolves.toMatchObject([
+      { runId: stored.runId, status: "completed" },
+    ]);
+    await expect(agent.cancelTaskRun(stored.runId)).resolves.toBe(false);
+    await agent.close();
+  });
+
   it("write → close → reassemble → memory + audit + vector search 一致", async () => {
     const dir = makeDir("roundtrip");
 
@@ -178,6 +218,25 @@ describeE2E("server persistence e2e (LanceDB + SQLite)", { timeout: 30_000 }, ()
     };
     expect(memBody.recent.length).toBeGreaterThanOrEqual(3);
 
+    await a2.close();
+  });
+
+  it("RFC-013 explicit grants persist across reassembly; approval-derived do not", async () => {
+    const dir = makeDir("grants");
+    const a1 = await assembleServerAgent({ llmProvider: "mock", dataDir: dir });
+    const manual = a1.grants.grant({ tool: "write_file", risk: "write", scope: "notes/" });
+    a1.grants.grant({ tool: "*", risk: "execute", source: "approval", label: "from-approval" });
+    await a1.close();
+
+    const a2 = await assembleServerAgent({ llmProvider: "mock", dataDir: dir });
+    expect(a2.grants.list().map((g) => g.id)).toEqual([manual.id]);
+    expect(
+      a2.grants.covers({ tool: "write_file", risk: "write", params: { path: "notes/a.md" } }),
+    ).toBe(true);
+    const app = buildApp(a2);
+    const res = await app.request("/api/grants");
+    const body = (await res.json()) as { grants: Array<{ id: string }> };
+    expect(body.grants.map((g) => g.id)).toEqual([manual.id]);
     await a2.close();
   });
 

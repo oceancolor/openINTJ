@@ -66,3 +66,44 @@ export class AgentError extends Error {
 export const isAgentError = (e: unknown): e is AgentError =>
   e instanceof AgentError ||
   (typeof e === "object" && e !== null && (e as { name?: string }).name === "AgentError");
+
+/**
+ * Provider phrasings for "the conversation no longer fits the context window".
+ * Kept deliberately strict (status codes alone never qualify): a false
+ * positive costs one wasted summarization + retry, a false negative just
+ * falls back to surfacing the original error.
+ */
+const OVERFLOW_MESSAGE_PATTERNS: readonly RegExp[] = [
+  /context_length_exceeded/i,
+  /maximum context length/i,
+  /prompt is too long/i,
+  /exceeds the available context size/i,
+  /context (length|window) (exceeded|limit)/i,
+  /input is too long for/i,
+  /超过[^。]{0,16}上下文(长度|上限|限制)?/,
+  /上下文(长度)?(超限|过长|超出)/,
+];
+
+export const matchesContextOverflowText = (text: string): boolean =>
+  OVERFLOW_MESSAGE_PATTERNS.some((pattern) => pattern.test(text));
+
+/**
+ * RFC-012 overflow classification. Structured signals win (adapters throw
+ * `CONTEXT_OVERFLOW` or set `details.overflow`), message text is the fallback
+ * for unknown providers and wrapped clients.
+ */
+export const isContextOverflowError = (e: unknown): boolean => {
+  if (typeof e === "object" && e !== null) {
+    const candidate = e as { code?: unknown; details?: unknown };
+    if (candidate.code === ErrorCode.CONTEXT_OVERFLOW) return true;
+    if (
+      typeof candidate.details === "object" &&
+      candidate.details !== null &&
+      (candidate.details as { overflow?: unknown }).overflow === true
+    ) {
+      return true;
+    }
+  }
+  const message = e instanceof Error ? e.message : typeof e === "string" ? e : "";
+  return message.length > 0 && matchesContextOverflowText(message);
+};

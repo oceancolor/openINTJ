@@ -28,7 +28,12 @@ export interface TaskStore {
   saveRun(run: StoredTaskRun): Promise<void>;
   loadRun(runId: string): Promise<StoredTaskRun | undefined>;
   listIncompleteRuns(): Promise<readonly StoredTaskRun[]>;
+  /** Most recently updated runs first; `limit` is clamped to 1..200. */
+  listRuns(limit?: number): Promise<readonly StoredTaskRun[]>;
 }
+
+export const normalizeTaskRunListLimit = (limit = 50): number =>
+  Math.min(200, Math.max(1, Math.floor(Number.isFinite(limit) ? limit : 50)));
 
 export class MemoryTaskStore implements TaskStore {
   private readonly runs = new Map<string, StoredTaskRun>();
@@ -46,6 +51,16 @@ export class MemoryTaskStore implements TaskStore {
     return [...this.runs.values()]
       .filter((run) => run.status === "running")
       .sort((a, b) => a.createdAt - b.createdAt || a.runId.localeCompare(b.runId))
+      .map((run) => structuredClone(run));
+  }
+
+  async listRuns(limit = 50): Promise<readonly StoredTaskRun[]> {
+    return [...this.runs.values()]
+      .sort(
+        (a, b) =>
+          b.updatedAt - a.updatedAt || b.createdAt - a.createdAt || a.runId.localeCompare(b.runId),
+      )
+      .slice(0, normalizeTaskRunListLimit(limit))
       .map((run) => structuredClone(run));
   }
 }

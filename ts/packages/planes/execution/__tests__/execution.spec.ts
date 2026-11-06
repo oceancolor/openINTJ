@@ -238,6 +238,42 @@ describe("ToolHub", () => {
     expect(allowed.success).toBe(true);
   });
 
+  it("setRunCap 是硬上限：技能名单只能交集收窄，父级 scope 不受子 scope 影响", async () => {
+    const hub = new ToolHub();
+    hub.registerBuiltinTools({
+      search: () => ({ hits: [] }),
+      writeFile: () => ({ ok: true }),
+    });
+
+    // 子会话 scope：cap=[search]，技能再声明 [search, write_file] → 有效名单仍只有 search。
+    const child = await hub.runInAllowlistScope(async () => {
+      hub.setRunCap(["search"]);
+      const cappedList = hub.list().map((t) => t.name);
+      hub.setRunAllowlist(["search", "write_file"]);
+      const narrowed = hub.list().map((t) => t.name);
+      const blocked = await hub.call("write_file", { path: "a.txt", content: "x" });
+      return { cappedList, narrowed, blockedOk: blocked.success };
+    });
+    expect(child.cappedList).toEqual(["search"]);
+    expect(child.narrowed).toEqual(["search"]);
+    expect(child.blockedOk).toBe(false);
+
+    // 子 scope 退出后父级无限制。
+    expect(hub.list().map((t) => t.name)).toEqual(expect.arrayContaining(["search", "write_file"]));
+  });
+
+  it("inherit 嵌套复用外层盒子，内层收窄对同一 run 生效", async () => {
+    const hub = new ToolHub();
+    hub.registerBuiltinTools({ search: () => ({ hits: [] }) });
+    const seen = await hub.runInAllowlistScope(async () => {
+      hub.setRunCap(["search"]);
+      return hub.runInAllowlistScope(async () => hub.list().map((t) => t.name), {
+        inherit: true,
+      });
+    });
+    expect(seen).toEqual(["search"]);
+  });
+
   it("camelCase 别名解析到已注册工具，且空 allowlist 不限制", async () => {
     const hub = new ToolHub();
     hub.registerBuiltinTools({

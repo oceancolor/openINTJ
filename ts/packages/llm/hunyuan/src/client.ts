@@ -6,16 +6,17 @@ import {
   type LlmClient,
   type LlmStatus,
   type ToolHandler,
+  matchesContextOverflowText,
 } from "@openintj/core";
 import {
+  HUNYUAN_REASONING_MAX_TOKEN_RETRY,
   extractAssistantText,
   extractReasoningText,
-  HUNYUAN_REASONING_MAX_TOKEN_RETRY,
   isTruncatedReasoning,
   resolveHunyuanMaxTokens,
   resolveHunyuanTimeoutMs,
 } from "./extract.js";
-import { generateHunyuanImage, type HunyuanImageResult } from "./image.js";
+import { type HunyuanImageResult, generateHunyuanImage } from "./image.js";
 import {
   type HunyuanConfig,
   HunyuanConfigSchema,
@@ -77,8 +78,7 @@ const missingContentMessage = (opts: {
   finishReason: string | undefined;
   reasoningChars: number;
 }): string => {
-  const truncated =
-    opts.finishReason === "length" || opts.finishReason === "max_tokens";
+  const truncated = opts.finishReason === "length" || opts.finishReason === "max_tokens";
   if (opts.reasoningChars > 0 && truncated) {
     return `Hunyuan ${opts.model} 思考过程占满了输出额度（finish_reason=${opts.finishReason}），未返回最终 content`;
   }
@@ -227,7 +227,9 @@ export class HunyuanClient implements LlmClient {
     };
 
     let timedOut = false;
-    const postOnce = async (tokenBudget: number): Promise<{
+    const postOnce = async (
+      tokenBudget: number,
+    ): Promise<{
       content: string;
       reasoning: string;
       finishReason: string | undefined;
@@ -277,10 +279,22 @@ export class HunyuanClient implements LlmClient {
               },
             });
           }
+          const overflow =
+            err?.code === "context_length_exceeded" || matchesContextOverflowText(this.lastError);
           throw new AgentError({
-            code: ErrorCode.INTERNAL_ERROR,
+            code: overflow ? ErrorCode.CONTEXT_OVERFLOW : ErrorCode.INTERNAL_ERROR,
             message: `Hunyuan 调用失败 (${res.status}): ${this.lastError}`,
-            retriable: res.status >= 500 || res.status === 429,
+            retriable: !overflow && (res.status >= 500 || res.status === 429),
+            ...(overflow
+              ? {
+                  details: {
+                    provider: "hunyuan",
+                    status: res.status,
+                    errorCode: this.lastErrorCode,
+                    overflow: true,
+                  },
+                }
+              : {}),
           });
         }
         const data = (parsed ?? {}) as OpenAIChatResponse;

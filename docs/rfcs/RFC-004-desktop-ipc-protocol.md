@@ -30,6 +30,12 @@
 - 把 LLM API key、本地文件操作、向量库句柄等敏感资源严格限制在 main
 - renderer 哪怕被 XSS 也无法直接访问敏感能力（必须通过有限的 IPC 接口）
 
+**外部产品边界（VSCodium）**：内嵌工作台是第三方 HTTP 服务（只绑 `127.0.0.1`，随机令牌留在 main，WebContentsView 加载）。它直读写工作区磁盘，**不经过** `WORKSPACE_WRITE` / ToolHub。Agent 的 `read_file` / `write_file` 仍走原沙箱。渲染层只能拿 origin，拿不到令牌。
+
+> ⚠️ 2026-11-06：VSCodium 已整体剥离，`IDE_*` IPC 通道与 preload 接口退役；
+> 左区改为自研 `WorkspaceWorkbench`（编辑/写盘重新只经 Agent `write_file`
+> 门禁）。上文 VSCodium 边界描述仅作历史记录。
+
 ## 2. 进程拓扑
 
 ```mermaid

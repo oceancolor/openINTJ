@@ -32,7 +32,9 @@ describe("desktop RFC-006 Product Behavior regression", () => {
       enabled: true,
       cohort: "treatment",
     });
-    const positions = ["[Product Behavior", "[用户画像]", "[技能]", "[记忆参考]"].map((marker) =>
+    // RFC-014: dormant persona is imported into the profile, which owns the
+    // user-persona section — the persona marker is now [个人档案].
+    const positions = ["[Product Behavior", "[个人档案]", "[技能]", "[记忆参考]"].map((marker) =>
       systemPrompt.indexOf(marker),
     );
     expect(positions.every((position) => position >= 0)).toBe(true);

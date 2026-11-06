@@ -24,6 +24,10 @@
     { "path": "../../packages/storage/lance" },
     { "path": "../../packages/storage/sqlite" },
     { "path": "../../packages/taskpool" },
-    { "path": "../../packages/telemetry/otel" }
+    { "path": "../../packages/telemetry/otel" },
+    { "path": "../../packages/runtime" },
+    { "path": "../../packages/profile" },
+    { "path": "../../packages/scheduler" },
+    { "path": "../../packages/connectors" }
   ]
 }

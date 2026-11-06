@@ -233,21 +233,21 @@ export const SettingsPanel: React.FC = () => {
   return (
     <div className="flex flex-col h-full overflow-y-auto text-xs">
       {error ? (
-        <div className="mx-3 mt-2 px-2 py-1 bg-red-900/50 text-red-200 rounded">{error}</div>
+        <div className="mx-3 mt-2 px-2 py-1 bg-signaltint text-signaldeep rounded">{error}</div>
       ) : null}
       {saved ? (
-        <div className="mx-3 mt-2 px-2 py-1 bg-green-900/40 text-green-200 rounded">
+        <div className="mx-3 mt-2 px-2 py-1 bg-mossmist text-moss rounded">
           已保存并立即生效
         </div>
       ) : null}
 
       {/* 工作区 */}
-      <section className="p-3 space-y-2 border-b border-gray-800">
-        <div className="text-gray-300 font-medium">工作区</div>
-        <div className="text-gray-400 break-all">
-          根目录：<code className="text-cyan-400">{wsInfo?.root ?? cfg.workspaceDir ?? "—"}</code>
+      <section className="p-3 space-y-2 border-b border-line">
+        <div className="text-muted font-medium">工作区</div>
+        <div className="text-muted break-all">
+          根目录：<code className="text-moss">{wsInfo?.root ?? cfg.workspaceDir ?? "—"}</code>
         </div>
-        <div className="text-gray-500">
+        <div className="text-muted">
           命令：{wsInfo?.enableCommands ? "允许" : "禁用"}
           {wsInfo?.allowedCommands?.length ? ` · 白名单 ${wsInfo.allowedCommands.join(", ")}` : ""}
         </div>
@@ -255,24 +255,32 @@ export const SettingsPanel: React.FC = () => {
           type="button"
           onClick={() => void pickDir()}
           disabled={busy}
-          className="px-2 py-1 rounded bg-purple-700 hover:bg-purple-600 disabled:bg-gray-700 text-white"
+          className="px-2 py-1 rounded bg-ink hover:bg-inksoft disabled:bg-rail text-white"
         >
           选择目录…
         </button>
       </section>
 
-      <section className="p-3 space-y-2 border-b border-gray-800">
-        <div className="text-gray-300 font-medium">模型 Profiles</div>
-        <div className="text-gray-500">API Key 使用系统安全存储加密，界面不会读取明文。</div>
+      <section className="space-y-2 border-b border-line p-3">
+        <div className="font-medium text-ink">模型 Profiles</div>
+        <div className="text-muted">API Key 使用系统安全存储加密，界面不会读取明文。</div>
         {profiles.map((profile) => {
           const needsKey = !["auto", "ollama", "mock"].includes(profile.provider);
+          const isActive = cfg.activeModelProfileId === profile.id;
           return (
-            <div key={profile.id} className="rounded border border-gray-800 p-2 space-y-1">
+            <div
+              key={profile.id}
+              className={`space-y-1 rounded-xl p-2.5 ${
+                isActive
+                  ? "border-2 border-moss bg-mosstint/50"
+                  : "border border-line bg-white"
+              }`}
+            >
               <div className="flex items-center justify-between gap-2">
                 <button
                   type="button"
-                  className={`text-left ${
-                    cfg.activeModelProfileId === profile.id ? "text-cyan-300" : "text-gray-200"
+                  className={`text-left font-medium ${
+                    isActive ? "text-mossdeep" : "text-ink"
                   }`}
                   onClick={() =>
                     void patch({
@@ -283,11 +291,18 @@ export const SettingsPanel: React.FC = () => {
                 >
                   {profile.name}
                 </button>
-                <span className={profile.hasCredential ? "text-green-400" : "text-amber-400"}>
-                  {profile.hasCredential ? "可用" : "需密钥"}
-                </span>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {isActive ? (
+                    <span className="text-[9px] font-bold uppercase tracking-[0.13em] text-moss">
+                      已选
+                    </span>
+                  ) : null}
+                  <span className={profile.hasCredential ? "text-moss" : "text-ambertext"}>
+                    {profile.hasCredential ? "可用" : "需密钥"}
+                  </span>
+                </div>
               </div>
-              <div className="text-gray-500">
+              <div className="font-mono text-[10px] text-muted">
                 {profile.provider} / {profile.model}
               </div>
               <div className="grid grid-cols-2 gap-1">
@@ -301,7 +316,7 @@ export const SettingsPanel: React.FC = () => {
                       ),
                     )
                   }
-                  className="bg-gray-800 rounded px-2 py-1"
+                  className="rounded-lg border border-line bg-white px-2 py-1 text-ink focus:outline-none focus:border-moss"
                 />
                 <input
                   aria-label={`${profile.name} base URL`}
@@ -316,7 +331,7 @@ export const SettingsPanel: React.FC = () => {
                       ),
                     )
                   }
-                  className="bg-gray-800 rounded px-2 py-1"
+                  className="rounded-lg border border-line bg-white px-2 py-1 text-ink focus:outline-none focus:border-moss"
                 />
               </div>
               <div className="flex items-center gap-2">
@@ -324,7 +339,7 @@ export const SettingsPanel: React.FC = () => {
                   type="button"
                   disabled={busy}
                   onClick={() => void persistProfile(profile)}
-                  className="px-2 py-0.5 rounded bg-cyan-900 hover:bg-cyan-800"
+                  className="rounded-lg bg-mosstint px-2 py-1 text-mossdeep hover:bg-mossmist"
                 >
                   保存 Profile
                 </button>
@@ -332,16 +347,16 @@ export const SettingsPanel: React.FC = () => {
                   type="button"
                   disabled={busy}
                   onClick={() => void testProfile(profile.id)}
-                  className="px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600"
+                  className="rounded-lg border border-line bg-white px-2 py-1 text-ink hover:border-linedark"
                 >
                   测试连接
                 </button>
-                <span className="text-gray-500">{profileTests[profile.id]}</span>
+                <span className="text-muted">{profileTests[profile.id]}</span>
                 {!DEFAULT_MODEL_PROFILES.some((item) => item.id === profile.id) ? (
                   <button
                     type="button"
                     onClick={() => void deleteProfile(profile)}
-                    className="ml-auto text-red-400"
+                    className="ml-auto text-signal"
                   >
                     删除
                   </button>
@@ -360,13 +375,13 @@ export const SettingsPanel: React.FC = () => {
                         [profile.id]: event.target.value,
                       }))
                     }
-                    className="min-w-0 flex-1 bg-gray-800 text-gray-200 rounded px-2 py-1"
+                    className="min-w-0 flex-1 bg-inset text-ink rounded px-2 py-1"
                   />
                   <button
                     type="button"
                     disabled={busy || !credentialDrafts[profile.id]?.trim()}
                     onClick={() => void saveCredential(profile.id)}
-                    className="px-2 py-1 rounded bg-cyan-800 disabled:bg-gray-700"
+                    className="px-2 py-1 rounded bg-ink text-white disabled:bg-[#e8e9e3] disabled:text-muted"
                   >
                     保存
                   </button>
@@ -375,8 +390,8 @@ export const SettingsPanel: React.FC = () => {
             </div>
           );
         })}
-        <div className="rounded border border-dashed border-gray-700 p-2 space-y-1">
-          <div className="text-gray-400">添加自定义 Profile</div>
+        <div className="rounded border border-dashed border-linedark p-2 space-y-1">
+          <div className="text-muted">添加自定义 Profile</div>
           <div className="grid grid-cols-2 gap-1">
             <input
               placeholder="显示名称"
@@ -384,7 +399,7 @@ export const SettingsPanel: React.FC = () => {
               onChange={(event) =>
                 setNewProfile((current) => ({ ...current, name: event.target.value }))
               }
-              className="bg-gray-800 rounded px-2 py-1"
+              className="bg-inset rounded px-2 py-1"
             />
             <select
               value={newProfile.provider}
@@ -394,7 +409,7 @@ export const SettingsPanel: React.FC = () => {
                   provider: event.target.value as ModelProvider,
                 }))
               }
-              className="bg-gray-800 rounded px-2 py-1"
+              className="bg-inset rounded px-2 py-1"
             >
               {PROVIDERS.filter((provider) => !["auto", "mock"].includes(provider)).map(
                 (provider) => (
@@ -410,7 +425,7 @@ export const SettingsPanel: React.FC = () => {
               onChange={(event) =>
                 setNewProfile((current) => ({ ...current, model: event.target.value }))
               }
-              className="bg-gray-800 rounded px-2 py-1"
+              className="bg-inset rounded px-2 py-1"
             />
             <input
               placeholder="Base URL"
@@ -418,14 +433,14 @@ export const SettingsPanel: React.FC = () => {
               onChange={(event) =>
                 setNewProfile((current) => ({ ...current, baseUrl: event.target.value }))
               }
-              className="bg-gray-800 rounded px-2 py-1"
+              className="bg-inset rounded px-2 py-1"
             />
           </div>
           <button
             type="button"
             disabled={busy || !newProfile.name.trim() || !newProfile.model.trim()}
             onClick={() => void addProfile()}
-            className="px-2 py-1 rounded bg-purple-800 disabled:bg-gray-700"
+            className="px-2 py-1 rounded bg-ink text-white disabled:bg-[#e8e9e3] disabled:text-muted"
           >
             添加 Profile
           </button>
@@ -433,26 +448,26 @@ export const SettingsPanel: React.FC = () => {
       </section>
 
       {/* 应用配置 */}
-      <section className="p-3 space-y-3 border-b border-gray-800">
-        <div className="text-gray-300 font-medium">应用配置</div>
+      <section className="p-3 space-y-3 border-b border-line">
+        <div className="text-muted font-medium">应用配置</div>
         <button
           type="button"
           onClick={() => void restart()}
           disabled={busy}
-          className="px-2 py-1 rounded bg-orange-700 hover:bg-orange-600 disabled:bg-gray-700 text-white"
+          className="rounded-lg border border-signalborder bg-white px-2.5 py-1.5 font-medium text-signaldeep hover:bg-signalwash disabled:opacity-50"
         >
           重启 OpenINTJ
         </button>
 
         <label className="flex items-center gap-2">
-          <span className="w-24 text-gray-400">LLM 提供方</span>
+          <span className="w-24 text-muted">LLM 提供方</span>
           <select
             value={cfg.llmProvider ?? "auto"}
             disabled={busy}
             onChange={(e) =>
               void patch({ llmProvider: e.target.value as AppConfig["llmProvider"] })
             }
-            className="bg-gray-800 text-gray-200 rounded px-1 py-0.5"
+            className="bg-inset text-ink rounded px-1 py-0.5"
           >
             {PROVIDERS.map((p) => (
               <option key={p} value={p}>
@@ -463,14 +478,14 @@ export const SettingsPanel: React.FC = () => {
         </label>
 
         <label className="flex items-center gap-2">
-          <span className="w-24 text-gray-400">Embed 提供方</span>
+          <span className="w-24 text-muted">Embed 提供方</span>
           <select
             value={cfg.embedProvider ?? "auto"}
             disabled={busy}
             onChange={(e) =>
               void patch({ embedProvider: e.target.value as AppConfig["embedProvider"] })
             }
-            className="bg-gray-800 text-gray-200 rounded px-1 py-0.5"
+            className="bg-inset text-ink rounded px-1 py-0.5"
           >
             {EMBED_PROVIDERS.map((p) => (
               <option key={p} value={p}>
@@ -481,7 +496,7 @@ export const SettingsPanel: React.FC = () => {
         </label>
 
         <label className="flex flex-col gap-1">
-          <span className="text-gray-400">Ollama</span>
+          <span className="text-muted">Ollama</span>
           <input
             type="text"
             placeholder="OLLAMA_BASE_URL"
@@ -491,7 +506,7 @@ export const SettingsPanel: React.FC = () => {
               setConfig((c) => ({ ...(c ?? {}), ollamaBaseUrl: e.target.value || undefined }))
             }
             onBlur={(e) => void patch({ ollamaBaseUrl: e.target.value.trim() || undefined })}
-            className="bg-gray-800 text-gray-200 rounded px-2 py-1"
+            className="bg-inset text-ink rounded px-2 py-1"
           />
           <input
             type="text"
@@ -502,7 +517,7 @@ export const SettingsPanel: React.FC = () => {
               setConfig((c) => ({ ...(c ?? {}), ollamaModel: e.target.value || undefined }))
             }
             onBlur={(e) => void patch({ ollamaModel: e.target.value.trim() || undefined })}
-            className="bg-gray-800 text-gray-200 rounded px-2 py-1"
+            className="bg-inset text-ink rounded px-2 py-1"
           />
           <input
             type="text"
@@ -513,19 +528,19 @@ export const SettingsPanel: React.FC = () => {
               setConfig((c) => ({ ...(c ?? {}), ollamaEmbedModel: e.target.value || undefined }))
             }
             onBlur={(e) => void patch({ ollamaEmbedModel: e.target.value.trim() || undefined })}
-            className="bg-gray-800 text-gray-200 rounded px-2 py-1"
+            className="bg-inset text-ink rounded px-2 py-1"
           />
         </label>
 
         <label className="flex items-center gap-2">
-          <span className="w-24 text-gray-400">检索模式</span>
+          <span className="w-24 text-muted">检索模式</span>
           <select
             value={cfg.retrievalMode ?? "vector"}
             disabled={busy}
             onChange={(e) =>
               void patch({ retrievalMode: e.target.value as AppConfig["retrievalMode"] })
             }
-            className="bg-gray-800 text-gray-200 rounded px-1 py-0.5"
+            className="bg-inset text-ink rounded px-1 py-0.5"
           >
             {RETRIEVAL.map((m) => (
               <option key={m} value={m}>
@@ -567,8 +582,8 @@ export const SettingsPanel: React.FC = () => {
               className="mt-0.5"
             />
             <span>
-              <span className="text-gray-300">{t.label}</span>
-              <span className="ml-1 text-gray-500">— {t.hint}</span>
+              <span className="text-muted">{t.label}</span>
+              <span className="ml-1 text-muted">— {t.hint}</span>
             </span>
           </label>
         ))}
@@ -576,15 +591,15 @@ export const SettingsPanel: React.FC = () => {
 
       {/* 工作区实时变更 */}
       <section className="p-3 space-y-1 flex-1 min-h-0">
-        <div className="text-gray-300 font-medium">工作区变更（实时）</div>
+        <div className="text-muted font-medium">工作区变更（实时）</div>
         {changes.length === 0 ? (
-          <div className="text-gray-500">暂无变更 — 在工作区目录里增删改文件试试</div>
+          <div className="text-muted">暂无变更 — 在工作区目录里增删改文件试试</div>
         ) : (
           <div className="space-y-0.5">
             {changes.map((c, i) => (
-              <div key={`${c.ts}-${i}`} className="text-gray-400 flex gap-2">
-                <span className="text-gray-600">{c.event}</span>
-                <code className="text-cyan-400 truncate">{c.path || "(未知)"}</code>
+              <div key={`${c.ts}-${i}`} className="text-muted flex gap-2">
+                <span className="text-muted">{c.event}</span>
+                <code className="text-moss truncate">{c.path || "(未知)"}</code>
               </div>
             ))}
           </div>

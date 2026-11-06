@@ -43,10 +43,10 @@ export const UpdateBanner: React.FC = () => {
 
   const tone =
     status === "error"
-      ? "bg-red-900/60 text-red-200 border-red-700"
+      ? "bg-signaltint text-signaldeep border-signalborder"
       : status === "downloaded"
-        ? "bg-emerald-900/60 text-emerald-100 border-emerald-700"
-        : "bg-blue-900/50 text-blue-100 border-blue-700";
+        ? "bg-mossmist text-mossdeep border-moss"
+        : "bg-mosstint text-mossdeep border-moss";
 
   return (
     <div className={`shrink-0 px-4 py-1.5 text-xs flex items-center gap-3 border-b ${tone}`}>
@@ -55,7 +55,7 @@ export const UpdateBanner: React.FC = () => {
         <button
           type="button"
           onClick={install}
-          className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[11px]"
+          className="px-2 py-0.5 rounded bg-moss hover:bg-mossdeep text-white text-[11px]"
         >
           重启安装
         </button>

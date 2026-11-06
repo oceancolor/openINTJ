@@ -1,7 +1,94 @@
 # 下一次工作交接备忘
 
 > 本文件用于工作中断 / 多日离开后快速恢复上下文。
-> 上次更新：2026-10-25（规划顾问：已知/未知标注、Dijkstra/SA 路径、下一轮目标；代码仓 GitHub：https://github.com/oceancolor/openINTJ）。
+> 上次更新：2026-11-06（Miora 设计系统已落地桌面端。代码仓 GitHub：https://github.com/oceancolor/openINTJ）。
+
+---
+
+## 🎨 Miora UI 落地（2026-11-06）
+
+- 设计源：`docs/design/miora/`（自 miora.qq.com 画布逐屏下载的 9 个 HTML：
+  components/home/settings/runtime/agents/main/session-states/welcome/
+  history/completion）。取其设计语言与组件模式，不机械照搬三栏结构——
+  保留本产品「左 WorkspaceWorkbench + 右 380px Agent rail」布局。
+- 令牌在 `ts/apps/desktop/tailwind.config.js`（ink/panel/canvas/moss/
+  signal/amber + shadow-card/raise/composer/pop），基座在
+  `src/renderer/styles.css`；字体栈 Manrope/IBM Plex Mono 优先、离线回退。
+- 已改造：TitleBar（Ink 窗框）、App 标签分段控件、工作台文件树
+  （Signal 内嵌条选中态）、ChatPanel（头像行/hero/悬浮 composer/计划卡）、
+  ApprovalBanner（许可卡）、TaskSidebar（任务卡状态点）、SettingsPanel
+  （模型 Profile Moss 选中卡）、MarkdownView（深色代码面）、StatusBar。
+- 验证：typecheck ✅、桌面单测 109 passed/2 skipped ✅、生产构建 ✅、
+  Playwright 真机五屏截图 ✅（空状态/对话/设置/身份/任务）。
+- 后续可选：把 session-states 的深色工具卡/完成摘要卡做成真实组件
+  （需先有结构化 tool 事件渲染）、welcome 分屏式首次引导。
+
+---
+
+## 🎯 当前工作队列（2026-11-03 更新）
+
+1. ~~**RFC-009 Session Journal**~~：✅ 2026-11-03。`@openintj/core` journal + Tao/ReAct
+   fail-soft sink；Desktop `journal_events`（`user_version=4`）backfill/双写/投影；
+   `/clear` → `session.cleared`；CLI/server 内存 journal。不引入 Cordis / JSONL。
+2. ~~**RFC-010 斜杠命令 + AgentHandle**~~：✅ 2026-11-03。命令表 `/clear` `/compact`（占位）；
+   活句柄 followup/steer/inject/cancel；循环消费 HookBus replace/cancel；
+   `event.ASSISTANT_DELTA` + 桌面 IPC。
+3. ~~**RFC-011 统一 Runtime + PromptSections**~~：✅ 2026-11-05。新包 `@openintj/runtime`
+   （段注册表 + 三端共用 `prepareRunPrelude`）；plan-advice 改为 system 段。三端装配的
+   profile 差异（持久化/TaskPool/多模型）仍留在宿主。后续顺序（2026-11-05 定）：
+   交互审批+能力授权 → 个人档案 → Scheduler → 连接器/MCP → RFC-012 第一段（/compact）。
+   其中 ~~交互审批+能力授权（RFC-013）~~ ✅ 2026-11-05：治理第二道门 + CapabilityGrant +
+   桌面 ApprovalBanner；~~个人档案（RFC-014）~~ ✅ 2026-11-05：新包 `@openintj/profile`
+   接管 user-persona 段（用户条目胜推断、删除推断不回潮）+ 桌面「档案」页 + server
+   `/api/profile`；~~Scheduler + 持久任务 + 通知（RFC-015）~~ ✅ 2026-11-05：新包
+   `@openintj/scheduler`（补跑合并/安静时段/退避重试）+ 桌面「定时」页 + server
+   `/api/schedules`；~~连接器框架 + MCP + 只读连接器（RFC-016）~~ ✅ 2026-11-05：
+   新包 `@openintj/connectors`（notes/ICS/mbox 手写解析 + MCP stdio 客户端，
+   工具统一进 ToolHub 走治理；MCP 默认 write 风险）；~~RFC-012 第一段：真实
+   /compact + 任务检查点~~ ✅ 2026-11-05：journal `session.compacted` 投影 +
+   runtime Compactor（pressure/command 双触发）+ TaskPool 检查点
+   （listRuns/resumeRun/cancelRun + server 路由 + 桌面 IPC）。P2 整批 ✅ 2026-11-05：
+   ~~可写连接器~~（RFC-017：notes/calendar/mail 本地写面，opt-in + write 风险审批；
+   mail 只写草稿不发送）；   ~~Subagent~~（RFC-012 §3 经单独评审后落地：深度 1/并发 2/
+   超时 120s，默认关 `OPENINTJ_SUBAGENTS=1`；子工具面 2026-11-06 已收窄为默认
+   只读上限，见 RFC-012 落地记录）；
+   ~~消息/移动通道~~（RFC-018：新包 `@openintj/channels`，调度事件 → webhook 出站
+   通知，仅出站）；~~语音 + 跨端同步~~（RFC-019：新包 `@openintj/voice` STT 提供者
+   + `@openintj/sync` Bundle v1；渲染层录音 UI 未做）。后续补齐（2026-11-06）：
+   compaction overflow 触发（RFC-012，循环内回调+双层分类+重试一次）、grants
+   持久化（RFC-013 两级：显式落盘/审批派生会话内）、桌面「系统」运维聚合页
+   （连接器/检查点/通道/子智能体，IPC 之上补渲染层）。已知遗留：server 2 个
+   e2e 失败为本机 Ollama 异步 embedder 环境问题（与本批无关，用户已知并搁置）。
+   2026-11-06 新批次：~~剥离内嵌 VSCodium IDE~~ ✅：删除 reh-web 宿主/覆盖层/
+   vendor/`IDE_*` IPC，左区回到自研 `WorkspaceWorkbench`；~~身份打通
+   （RFC-020）~~ ✅：新包 `@openintj/identity`（邮箱→Gravatar 公开面；手机/
+   微信仅本机语料关联 + 手动登记；提案-确认入图，冲突不静默搬家）+ server
+   `/api/identity/*` + 桌面「身份」tab。同日续批（用户决策）：~~剥离 IDE 后的
+   左区细化~~ ✅ 自研工作台只读强化（快速打开过滤/最近文件/Markdown 渲染
+   预览/图片缩放，写盘仍只走 Agent 门禁）；~~主身份回写档案 + identity 纳入
+   同步 bundle~~ ✅。RFC-020 剩余遗留（后续独立 RFC）：各平台 OAuth 授权抓取、
+   Gravatar 之外的公开面。Ollama e2e 环境问题继续搁置（用户已知）。
+   - [RFC-012 压缩 / Fs-Shell 缝 / 进程内 Subagent](../rfcs/RFC-012-compaction-seams-and-subagents.md) — **§1、§3 已实现；§2 Fs/Shell 缝仍 Deferred，确认前不动手**
+   明确不抄：Cordis、dsh agent-loop、默认 function-calling、ACP/Electron 托管 dsh。
+4. **签名正式发布**：未签名 `v0.3.0` / `v0.3.1` 已发出。真正签名仍阻塞于仓库 secrets。
+5. **后续独立 RFC**（不混入 011）：动态 LLM 拆图、默认多 Agent（见 RFC-012 子 Agent）、
+   streaming 完整 provider（RFC-010 只定 `ASSISTANT_DELTA` 钩子）、更完整 OpenAI-compatible
+   provider、embedding migration。
+
+本机启用工作台：在 `ts/apps/desktop` 跑 `pnpm vscodium:fetch`（约 94MB，不入库）。
+
+---
+
+## 🎯 当前工作队列（2026-10-27 更新）
+
+1. ~~**桌面 IDE/UI 重构（VSCodium）**~~：✅ 2026-10-27。未 merge `origin/UI-and-IDE`
+   （该分支会删掉 `ts/`）。只把 IDE 切片移植进现有 `ts/apps/desktop`：主进程直启
+   reh-web（`127.0.0.1` + 随机令牌不出 renderer），`WebContentsView` 盖在左侧洞区；
+   右侧 380px Agent 栏。Agent / 四平面 / RFC-004 IPC 不动。未 `pnpm vscodium:fetch`
+   时显示未安装，不影响对话。CI 不拉 ~94MB vendor。
+2. **签名正式发布**：未签名 `v0.3.0` / `v0.3.1` 已发出。真正签名仍阻塞于仓库 secrets。
+3. **后续独立 RFC**（不混入本轮）：动态 LLM 拆图、默认多 Agent、streaming /
+   更完整 OpenAI-compatible provider、embedding migration。
 
 ---
 
@@ -206,7 +293,7 @@ py scripts/python-parity/generate_fixtures.py            # 重写 4 份 fixture 
 
 1. 本文文首“当前工作队列”——当前唯一权威待办入口
 2. [`CHANGELOG.md`](../../CHANGELOG.md) —— 当前 `[Unreleased]` 与最近落地记录
-3. [`docs/rfcs/`](../rfcs/) —— RFC-001..007 及其边界
+3. [`docs/rfcs/`](../rfcs/) —— RFC-001..012 及其边界（009–010 Accepted；011 Draft；012 Deferred）
 4. [`docs/architecture/phase2-complete.md`](./phase2-complete.md) —— 历史阶段快照，不再作为当前路线图
 5. [`docs/architecture/python-reference.md`](./python-reference.md) —— Python v2 冻结说明 + 已知遗留清单
 6. [`docs/agent-architecture-research_20260422.md`](../agent-architecture-research_20260422.md) —— 最初的架构论证底稿

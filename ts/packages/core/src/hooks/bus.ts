@@ -91,9 +91,18 @@ export class HookBus {
     payload: HookEventMap[E],
     opts?: { traceId?: string },
   ): Promise<HookEventMap[E]> {
+    const outcome = await this.emitOutcome(event, payload, opts);
+    return outcome.payload;
+  }
+
+  async emitOutcome<E extends keyof HookEventMap>(
+    event: E,
+    payload: HookEventMap[E],
+    opts?: { traceId?: string },
+  ): Promise<{ payload: HookEventMap[E]; cancelled: boolean }> {
     const list = this.handlers.get(event as string);
     if (!list || list.length === 0) {
-      return payload;
+      return { payload, cancelled: false };
     }
 
     const traceId = opts?.traceId ?? "anon";
@@ -185,7 +194,7 @@ export class HookBus {
         }
       }
 
-      return currentPayload;
+      return { payload: currentPayload, cancelled };
     } finally {
       const newDepth = (this.stackPerTrace.get(traceId) ?? 1) - 1;
       if (newDepth <= 0) {

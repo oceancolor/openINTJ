@@ -488,4 +488,47 @@ describe("TaoLoop.run (single iteration)", () => {
     await tao.run("x");
     expect(fn).not.toHaveBeenCalled();
   });
+
+  it("optional journal sink records a turn and deriveHistory matches the next run input", async () => {
+    const { createInMemoryJournal, deriveHistory } = await import("../src/index.js");
+    const hooks = new HookBus({ logger: silent });
+    const journal = createInMemoryJournal();
+    const tao = new TaoLoop({
+      config: { ...DEFAULT_TAO_CONFIG, maxTaoIterations: 1 },
+      hooks,
+      react: new ReactStateMachine({
+        config: DEFAULT_REACT_CONFIG,
+        hooks,
+        llm: makeLlm(["Thought: go\nAction: search\nAction-Input: {}\n", "FINAL: found"]),
+        toolRunner: passingRunner,
+      }),
+      availableTools: () => tools,
+    });
+    const ctx = { conversationId: "c1", turnId: "turn-1", sink: journal };
+    await tao.run("look up", { journal: ctx });
+    const events = journal.list("c1");
+    expect(events.map((event) => event.type)).toEqual([
+      "turn.start",
+      "user",
+      "react.thought",
+      "tool.call",
+      "tool.result",
+      "react.thought",
+      "assistant",
+      "turn.end",
+    ]);
+    const history = deriveHistory(events);
+    expect(history).toEqual([
+      { role: "user", content: "look up" },
+      { role: "assistant", content: "found", metadata: { messageKind: "answer" } },
+    ]);
+    const throwingSink = {
+      append: () => {
+        throw new Error("journal down");
+      },
+    };
+    await expect(
+      tao.run("again", { history, journal: { conversationId: "c1", turnId: "turn-2", sink: throwingSink } }),
+    ).resolves.toMatchObject({ finalAnswer: "found" });
+  });
 });

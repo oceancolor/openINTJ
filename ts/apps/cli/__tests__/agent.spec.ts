@@ -1,6 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type LlmClient, deriveHistory } from "@openintj/core";
+import { JsonGrantStore } from "@openintj/plane-governance";
 import { afterAll, describe, expect, it } from "vitest";
 import { assembleAgent } from "../src/agent.js";
 
@@ -36,6 +38,190 @@ describe("assembleAgent E2E (mock LLM)", () => {
       enabled: true,
       cohort: "treatment",
     });
+    expect(agent.journal.list("cli").map((event) => event.type)).toEqual(
+      expect.arrayContaining(["turn.start", "user", "assistant", "turn.end"]),
+    );
+  });
+
+  it("intercepts /clear before the model and writes session.cleared", async () => {
+    const agent = assembleAgent({ llmProvider: "mock", maxTaoIterations: 2 });
+    let thoughts = 0;
+    agent.hooks.on("react.beforeThought", () => {
+      thoughts += 1;
+    });
+    const result = await agent.run("/clear");
+    expect(result.finalAnswer).toBe("对话已清空。");
+    expect(result.metrics.slashCommand).toBe(1);
+    expect(thoughts).toBe(0);
+    expect(agent.journal.list("cli").at(-1)).toMatchObject({ type: "session.cleared" });
+    const unknown = await agent.run("/foo not a command");
+    expect(unknown.metrics.slashCommand).toBeUndefined();
+  });
+
+  it("compacts completed turns through /compact and records the journal projection", async () => {
+    const agent = assembleAgent({ llmProvider: "mock", maxTaoIterations: 1 });
+    for (let i = 1; i <= 5; i++) await agent.run(`第 ${i} 个问题`);
+
+    const result = await agent.run("/compact");
+
+    expect(result.finalAnswer).toContain("已把此前 2 轮对话压缩为摘要");
+    expect(result.metrics.slashCommand).toBe(1);
+    expect(agent.journal.list("cli")).toContainEqual(
+      expect.objectContaining({ type: "session.compacted", coveredTurns: 2, trigger: "command" }),
+    );
+    const history = deriveHistory(agent.journal.list("cli"));
+    expect(history).toHaveLength(7);
+    expect(history[0]?.content).toContain("[历史摘要]（此前 2 轮对话已压缩");
+  });
+
+  it("pressure-compacts before a run when the configured threshold is exceeded", async () => {
+    const agent = assembleAgent({
+      llmProvider: "mock",
+      maxTaoIterations: 1,
+      compaction: { pressureTokens: 1 },
+    });
+    for (let i = 1; i <= 5; i++) await agent.run(`压力问题 ${i}`);
+
+    const result = await agent.run("压力问题 6");
+
+    expect(result.metrics.compacted).toBe(1);
+    expect(agent.journal.list("cli")).toContainEqual(
+      expect.objectContaining({ type: "session.compacted", coveredTurns: 2, trigger: "pressure" }),
+    );
+  });
+
+  it("recovers from a provider context overflow by compacting and retrying once (RFC-012)", async () => {
+    const agent = assembleAgent({ llmProvider: "mock", maxTaoIterations: 1 });
+    for (let i = 1; i <= 5; i++) await agent.run(`溢出问题 ${i}`);
+
+    let overflows = 0;
+    const overflowLlm: LlmClient = {
+      async chat(messages) {
+        if (messages.length > 11) {
+          overflows += 1;
+          throw new Error("This model's maximum context length is 8192 tokens");
+        }
+        return "Thought: ok\nFINAL: 恢复后的回答";
+      },
+      async visionChat() {
+        return "Thought: ok\nFINAL: 恢复后的回答";
+      },
+      getStatus() {
+        return {
+          provider: "test",
+          model: "mock",
+          available: true,
+          mode: "live",
+          status: "connected",
+          visionSupported: false,
+        };
+      },
+    };
+    const history = deriveHistory(agent.journal.list("cli"));
+    const result = await agent.run("溢出问题 6", { llm: overflowLlm, history });
+
+    expect(result.finalAnswer).toContain("恢复后的回答");
+    expect(result.metrics.overflowRecovered).toBe(1);
+    expect(overflows).toBe(1); // exactly one rejection, then the compacted retry fits
+    expect(agent.journal.list("cli")).toContainEqual(
+      expect.objectContaining({ type: "session.compacted", trigger: "overflow" }),
+    );
+  });
+
+  it("spawns an isolated subagent conversation and records it (RFC-012 §3)", async () => {
+    const agent = assembleAgent({
+      llmProvider: "mock",
+      maxTaoIterations: 1,
+      enableSubagents: true,
+    });
+    const record = await agent.subagents.spawn({ task: "独立调研子任务", label: "research" });
+    expect(record.status).toBe("completed");
+    expect(record.finalAnswer).toBeTruthy();
+    expect(agent.subagents.list()).toHaveLength(1);
+    const childEvents = agent.journal.list(record.childConversationId);
+    expect(childEvents.map((e) => e.type)).toEqual(
+      expect.arrayContaining(["turn.start", "user", "assistant", "turn.end"]),
+    );
+    expect(agent.journal.list("cli")).toEqual([]);
+  });
+
+  it("caps child tools at read-risk by default and honors a raised ceiling (RFC-012 §3)", async () => {
+    const agent = assembleAgent({
+      llmProvider: "mock",
+      maxTaoIterations: 1,
+      enableSubagents: true,
+    });
+    const record = await agent.subagents.spawn({ task: "只读调研" });
+    expect(record.tools).toContain("read_file");
+    expect(record.tools).not.toContain("write_file");
+    expect(record.tools).not.toContain("execute_command");
+    expect(record.tools).not.toContain("delegate_task");
+
+    const writer = assembleAgent({
+      llmProvider: "mock",
+      maxTaoIterations: 1,
+      enableSubagents: true,
+      subagentMaxRisk: "write",
+    });
+    const writable = await writer.subagents.spawn({ task: "可写子任务" });
+    expect(writable.tools).toContain("write_file");
+    expect(writable.tools).not.toContain("execute_command");
+  });
+
+  it("exports and imports a sync bundle across agents (RFC-019)", async () => {
+    const a = assembleAgent({ llmProvider: "mock" });
+    a.profile.upsert({ section: "identity", key: "name", value: "Ben" });
+    const bundle = a.exportSyncBundle();
+    expect(bundle.version).toBe(1);
+    const b = assembleAgent({ llmProvider: "mock" });
+    const report = b.importSyncBundle(bundle);
+    expect(report.profileUpserted).toBe(1);
+    expect(b.profile.get("identity", "name")?.value).toBe("Ben");
+    expect(() => b.importSyncBundle({ version: 9 })).toThrow();
+    expect(a.stt).toBeUndefined();
+  });
+
+  it("honors an injected grant store (RFC-013)", async () => {
+    const file = join(mkdtempSync(join(tmpdir(), "openintj-cli-grants-")), "grants.json");
+    const grants = new JsonGrantStore(file);
+    const agent = assembleAgent({ llmProvider: "mock", grants });
+    expect(agent.grants).toBe(grants);
+    const grant = agent.grants.grant({ tool: "write_file", risk: "write" });
+    expect(new JsonGrantStore(file).list().map((g) => g.id)).toEqual([grant.id]);
+  });
+
+  it("exposes an identity service that links asserted accounts (RFC-020)", async () => {
+    const agent = assembleAgent({ llmProvider: "mock" });
+    const person = agent.identity.assertAccount({
+      platform: "wechat",
+      kind: "wechat",
+      value: "ben_dev_01",
+    });
+    expect(person.accounts[0]?.source).toBe("manual");
+    expect(agent.identity.listPersons()).toHaveLength(1);
+    // Phone seeds resolve offline (Gravatar is email-only, corpus empty here).
+    const resolved = await agent.identity.resolve({ kind: "phone", value: "13800138000" });
+    expect(resolved.proposals).toEqual([]);
+
+    // Primary identity mirrors into the profile identity section.
+    agent.identity.assertAccount({
+      personId: person.id,
+      platform: "gravatar",
+      kind: "email",
+      value: "ben@example.com",
+    });
+    const mirrored = agent.profile.get("identity", "email");
+    expect(mirrored?.value).toBe("ben@example.com");
+    expect(mirrored?.provenance).toBe("identity-graph");
+    // A hand-written profile entry is never overwritten by the graph.
+    agent.profile.upsert({ section: "identity", key: "email", value: "me@mine.dev" });
+    agent.identity.assertAccount({
+      personId: person.id,
+      platform: "workmail",
+      kind: "email",
+      value: "ben@work.dev",
+    });
+    expect(agent.profile.get("identity", "email")?.value).toBe("me@mine.dev");
   });
 
   it("structures complex input adaptively and keeps original query in memory", async () => {
@@ -141,7 +327,9 @@ describe("assembleAgent E2E (mock LLM)", () => {
 
     await agent.run("规划 TypeScript CLI 三阶段迁移计划");
 
-    const markers = ["[Product Behavior", "[用户画像]", "[技能]", "[记忆参考]"];
+    // RFC-014: dormant fields are imported into the profile, which owns the
+    // user-persona section — the persona marker is now [个人档案].
+    const markers = ["[Product Behavior", "[个人档案]", "[技能]", "[记忆参考]"];
     const positions = markers.map((marker) => systemPrompt.indexOf(marker));
     expect(positions.every((position) => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
@@ -233,6 +421,120 @@ describe("assembleAgent E2E (mock LLM)", () => {
     expect(result.status).toBe("completed");
   });
 
+  it("RFC-013: write_file is blocked when approval is denied and passes with a grant", async () => {
+    const { fixedApprovalBroker } = await import("@openintj/plane-governance");
+    const denied = assembleAgent({
+      llmProvider: "mock",
+      approvalRisks: ["write"],
+      approvalBroker: fixedApprovalBroker({ decision: "denied", reason: "test" }),
+    });
+    const blocked = await denied.execution.toolHub.call("write_file", {
+      path: "a.md",
+      content: "x",
+    });
+    expect(blocked.success).toBe(false);
+    expect(blocked.error).toContain("需要审批");
+
+    const granted = assembleAgent({
+      llmProvider: "mock",
+      approvalRisks: ["write"],
+      approvalBroker: fixedApprovalBroker({ decision: "denied", reason: "test" }),
+      workspaceDir: process.cwd(),
+    });
+    granted.grants.grant({ tool: "write_file", risk: "write" });
+    const allowed = await granted.execution.toolHub.call("write_file", {
+      path: "rfc013-grant-probe.md",
+      content: "probe",
+    });
+    expect(allowed.success).toBe(true);
+    const { rmSync } = await import("node:fs");
+    rmSync("rfc013-grant-probe.md", { force: true });
+  });
+
+  it("RFC-011: plan advice is a system section, not spliced into the user query", async () => {
+    const agent = assembleAgent({
+      llmProvider: "mock",
+      maxTaoIterations: 1,
+      inputStructuring: "off",
+    });
+    let systemPrompt = "";
+    agent.hooks.on("react.beforeThought", (ctx) => {
+      systemPrompt = ctx.payload.context.systemPrompt;
+    });
+    await agent.run("规划 TypeScript CLI 三阶段迁移方案，并列出每阶段交付物");
+    expect(systemPrompt).toContain("【规划】");
+    expect(agent.prompt.list().map((s) => s.id)).toContain("plan-advice");
+    const userEvents = agent.journal
+      .list("cli")
+      .filter((e) => e.type === "user")
+      .map((e) => ("content" in e ? String(e.content) : ""));
+    expect(userEvents.some((c) => c.includes("【规划】"))).toBe(false);
+  });
+
+  it("RFC-016: connector tools register into ToolHub and answer calls", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "openintj-cli-notes-"));
+    tmpDirs.push(dir);
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(join(dir, "plan.md"), "迁移计划：三阶段交付 TypeScript CLI");
+    const { createNotesConnector } = await import("@openintj/connectors");
+    const agent = assembleAgent({
+      llmProvider: "mock",
+      connectors: [createNotesConnector({ rootDir: dir })],
+    });
+    expect(agent.execution.toolHub.list().map((t) => t.name)).toContain("notes_search");
+    const result = await agent.execution.toolHub.call("notes_search", { query: "三阶段" });
+    expect(result.success).toBe(true);
+    expect(JSON.stringify(result.output)).toContain("plan.md");
+    expect(agent.connectors.statuses()).toEqual([
+      expect.objectContaining({ id: "notes", ok: true, toolCount: 3 }),
+    ]);
+    const descriptor = agent.execution.toolHub.get("notes_search")!;
+    expect(descriptor.permissions).toContain("filesystem.read");
+  });
+
+  it("RFC-015: a due scheduled job runs through the handle and is marked completed", async () => {
+    const agent = assembleAgent({ llmProvider: "mock", maxTaoIterations: 1 });
+    const events: string[] = [];
+    agent.scheduler.on((e) => events.push(e.kind));
+    const job = agent.scheduler.add({
+      title: "测试提醒",
+      prompt: "定时任务：汇报一句你好",
+      trigger: { kind: "once", at: Date.now() - 1 },
+    });
+    await agent.scheduler.tick();
+    const saved = agent.scheduler.get(job.id)!;
+    expect(saved.lastStatus).toBe("completed");
+    expect(saved.runCount).toBe(1);
+    expect(saved.enabled).toBe(false);
+    expect(events).toEqual(["fired", "completed"]);
+    const userEvents = agent.journal
+      .list("cli")
+      .filter((e) => e.type === "user")
+      .map((e) => ("content" in e ? String(e.content) : ""));
+    expect(userEvents.some((c) => c.includes("定时任务"))).toBe(true);
+  });
+
+  it("RFC-014: profile entries render into the persona section and vanish after removal", async () => {
+    const agent = assembleAgent({ llmProvider: "mock", maxTaoIterations: 1 });
+    const prompts: string[] = [];
+    agent.hooks.on("react.beforeThought", (ctx) => {
+      prompts.push(ctx.payload.context.systemPrompt);
+    });
+    const entry = agent.profile.upsert({
+      section: "identity",
+      key: "call-me",
+      value: "老Ben",
+    })!;
+    await agent.run("你好");
+    expect(prompts.at(-1)).toContain("[个人档案]");
+    expect(prompts.at(-1)).toContain("call-me=老Ben");
+    expect(agent.prompt.list().map((s) => s.id)).toContain("user-persona");
+
+    expect(agent.profile.remove(entry.id)).toBe(true);
+    await agent.run("你好");
+    expect(prompts.at(-1)).not.toContain("call-me=老Ben");
+  });
+
   it("TaskPool is inert when disabled and orchestrates eligible planning when enabled", async () => {
     const query = "帮我规划一个 TypeScript CLI 迁移方案";
     const disabled = assembleAgent({
@@ -321,8 +623,11 @@ describe("assembleAgent E2E (mock LLM)", () => {
       sysPrompt = (ctx.payload as { context: { systemPrompt: string } }).context.systemPrompt;
     });
     await agent.run("推荐点喝的");
-    expect(sysPrompt).toContain("[用户画像]");
-    expect(sysPrompt).toContain("偏好喝绿茶");
+    // RFC-014: the approved persona is imported into the profile and rendered
+    // from the memory control plane instead of the raw [用户画像] block.
+    expect(sysPrompt).toContain("[个人档案]");
+    expect(sysPrompt).toContain("drink=偏好喝绿茶");
+    expect(agent.profile.get("preferences", "drink")?.source).toBe("dormant");
   });
 
   it("钝化记忆 A/B 杠杆：enablePersona=false 时不注入（无 persona 基线，§3.6 #3）", async () => {

@@ -26,9 +26,9 @@ const STATUS_TABS: Array<{ key: StatusFilter; label: string }> = [
 ];
 
 const STATUS_BADGE: Record<SkillProposalDto["status"], string> = {
-  pending: "bg-yellow-900 text-yellow-200",
-  approved: "bg-green-900 text-green-200",
-  rejected: "bg-red-900 text-red-200",
+  pending: "bg-ambertint text-amberdeep",
+  approved: "bg-mossmist text-moss",
+  rejected: "bg-[#f8e9e4] text-signal",
   revoked: "bg-zinc-700 text-zinc-300",
 };
 
@@ -229,24 +229,24 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ skillsEnabled, learningE
           type="button"
           onClick={() => void handleEnable(false)}
           disabled={busy === "enable"}
-          className="px-2 py-1 text-xs rounded bg-cyan-800 hover:bg-cyan-700 disabled:bg-gray-700 text-white"
+          className="px-2 py-1 text-xs rounded bg-ink hover:bg-inksoft disabled:bg-rail text-white"
         >
           {busy === "enable" ? "启用中…" : "启用技能系统"}
         </button>
       ) : (
-        <span className="text-[11px] text-green-400">技能系统已开</span>
+        <span className="text-[11px] text-moss">技能系统已开</span>
       )}
       {!learningEnabled ? (
         <button
           type="button"
           onClick={() => void handleEnable(true)}
           disabled={busy === "enable"}
-          className="px-2 py-1 text-xs rounded bg-purple-700 hover:bg-purple-600 disabled:bg-gray-700 text-white"
+          className="px-2 py-1 text-xs rounded bg-ink hover:bg-inksoft disabled:bg-rail text-white"
         >
           {busy === "enable" ? "启用中…" : "开启自学习"}
         </button>
       ) : (
-        <span className="text-[11px] text-green-400">自学习已开</span>
+        <span className="text-[11px] text-moss">自学习已开</span>
       )}
     </div>
   );
@@ -257,11 +257,11 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ skillsEnabled, learningE
         className="h-full flex items-center justify-center p-6 text-center"
         data-testid="skill-panel"
       >
-        <div className="text-sm text-gray-400 space-y-3">
-          <div className="text-base text-gray-300">技能系统未启用</div>
+        <div className="text-sm text-muted space-y-3">
+          <div className="text-base text-muted">技能系统未启用</div>
           <div>开启后把作者能力包按需注入对话；自学习会从成功轨迹蒸馏候选技能，批准后才生效。</div>
           {enableControls}
-          <div className="text-xs text-gray-500">也可在「设置」里开关技能系统 / 技能自学习。</div>
+          <div className="text-xs text-muted">也可在「设置」里开关技能系统 / 技能自学习。</div>
         </div>
       </div>
     );
@@ -269,20 +269,20 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ skillsEnabled, learningE
 
   return (
     <div className="flex flex-col h-full min-h-0" data-testid="skill-panel">
-      <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-gray-800">
+      <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-line">
         <div className="flex items-center gap-1 text-xs">
           <button
             type="button"
             onClick={() => setView("catalog")}
             className={
               view === "catalog"
-                ? "px-2 py-0.5 rounded bg-gray-700 text-gray-100"
-                : "px-2 py-0.5 rounded text-gray-400 hover:text-gray-200"
+                ? "px-2 py-0.5 rounded bg-rail text-ink"
+                : "px-2 py-0.5 rounded text-muted hover:text-ink"
             }
           >
             目录
             {catalog.length > 0 ? (
-              <span className="ml-1 text-gray-500">{catalog.length}</span>
+              <span className="ml-1 text-muted">{catalog.length}</span>
             ) : null}
           </button>
           <button
@@ -290,8 +290,8 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ skillsEnabled, learningE
             onClick={() => setView("learning")}
             className={
               view === "learning"
-                ? "px-2 py-0.5 rounded bg-gray-700 text-gray-100"
-                : "px-2 py-0.5 rounded text-gray-400 hover:text-gray-200"
+                ? "px-2 py-0.5 rounded bg-rail text-ink"
+                : "px-2 py-0.5 rounded text-muted hover:text-ink"
             }
           >
             自学习
@@ -304,7 +304,7 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ skillsEnabled, learningE
               type="button"
               onClick={() => void handleDistill()}
               disabled={busy === "distill"}
-              className="px-2 py-1 text-xs rounded bg-purple-700 hover:bg-purple-600 disabled:bg-gray-700 text-white"
+              className="px-2 py-1 text-xs rounded bg-ink hover:bg-inksoft disabled:bg-rail text-white"
             >
               {busy === "distill" ? "蒸馏中…" : "蒸馏"}
             </button>
@@ -313,7 +313,7 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ skillsEnabled, learningE
       </div>
 
       {error ? (
-        <div className="mx-3 mt-2 px-2 py-1 text-xs bg-red-900/50 text-red-200 rounded">
+        <div className="mx-3 mt-2 px-2 py-1 text-xs bg-signaltint text-signaldeep rounded">
           {error}
         </div>
       ) : null}
@@ -321,42 +321,42 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ skillsEnabled, learningE
       {view === "catalog" ? (
         <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2 text-xs">
           {catalog.length === 0 ? (
-            <div className="text-gray-500">暂无已装技能</div>
+            <div className="text-muted">暂无已装技能</div>
           ) : (
             catalog.map((s) => (
-              <div key={s.id} className="border border-gray-800 rounded p-2 space-y-1 bg-[#181825]">
+              <div key={s.id} className="border border-line rounded p-2 space-y-1 bg-white">
                 <div className="flex items-center gap-2">
                   <span
                     className={`px-1.5 py-0.5 rounded text-[10px] ${
                       s.origin === "learned"
-                        ? "bg-purple-900 text-purple-200"
-                        : "bg-cyan-900 text-cyan-200"
+                        ? "bg-mosstint text-mossdeep"
+                        : "bg-mosstint text-mossdeep"
                     }`}
                   >
                     {s.origin === "learned" ? "学习" : "作者"}
                   </span>
-                  <span className="text-gray-200 font-medium">{s.name}</span>
-                  <span className="ml-auto text-gray-500 text-[10px]">v{s.version}</span>
+                  <span className="text-ink font-medium">{s.name}</span>
+                  <span className="ml-auto text-muted text-[10px]">v{s.version}</span>
                 </div>
-                <div className="text-gray-300">{s.description}</div>
-                <div className="text-gray-500 text-[11px]">
-                  <code className="text-cyan-400">{s.id}</code>
+                <div className="text-muted">{s.description}</div>
+                <div className="text-muted text-[11px]">
+                  <code className="text-moss">{s.id}</code>
                   {s.tools.length > 0 ? (
                     <>
-                      <span className="mx-1 text-gray-600">·</span>
+                      <span className="mx-1 text-muted">·</span>
                       <span>工具 {s.tools.join(", ")}</span>
                     </>
                   ) : null}
                 </div>
                 {s.triggers.length > 0 ? (
-                  <div className="text-gray-500 text-[10px]">触发：{s.triggers.join(" / ")}</div>
+                  <div className="text-muted text-[10px]">触发：{s.triggers.join(" / ")}</div>
                 ) : null}
               </div>
             ))
           )}
         </div>
       ) : !learningEnabled ? (
-        <div className="flex-1 flex items-center justify-center p-6 text-center text-sm text-gray-400">
+        <div className="flex-1 flex items-center justify-center p-6 text-center text-sm text-muted">
           <div className="space-y-3">
             <div>自学习未启用。蒸馏候选技能需要人工批准后才会注入。</div>
             {enableControls}
@@ -364,7 +364,7 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ skillsEnabled, learningE
         </div>
       ) : (
         <>
-          <div className="shrink-0 flex items-center gap-1 px-3 py-1 border-b border-gray-800 text-xs">
+          <div className="shrink-0 flex items-center gap-1 px-3 py-1 border-b border-line text-xs">
             {STATUS_TABS.map((t) => (
               <button
                 key={t.key}
@@ -372,23 +372,23 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ skillsEnabled, learningE
                 onClick={() => setFilter(t.key)}
                 className={
                   filter === t.key
-                    ? "px-2 py-0.5 rounded bg-gray-700 text-gray-100"
-                    : "px-2 py-0.5 rounded text-gray-400 hover:text-gray-200"
+                    ? "px-2 py-0.5 rounded bg-rail text-ink"
+                    : "px-2 py-0.5 rounded text-muted hover:text-ink"
                 }
               >
                 {t.label}
               </button>
             ))}
-            <span className="ml-auto text-gray-500">{proposals.length} 条</span>
+            <span className="ml-auto text-muted">{proposals.length} 条</span>
           </div>
           {lastDistillSummary ? (
-            <div className="mx-3 mt-2 px-2 py-1 text-xs text-gray-400 bg-gray-800/40 rounded">
+            <div className="mx-3 mt-2 px-2 py-1 text-xs text-muted bg-inset/40 rounded">
               {lastDistillSummary}
             </div>
           ) : null}
           <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2 text-xs">
             {proposals.length === 0 ? (
-              <div className="text-gray-500">
+              <div className="text-muted">
                 {filter === "pending"
                   ? "暂无待审批提案 — 点击蒸馏从成功轨迹提炼候选技能"
                   : "暂无数据"}
@@ -397,7 +397,7 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ skillsEnabled, learningE
               proposals.map((p) => (
                 <div
                   key={p.proposalId}
-                  className="border border-gray-800 rounded p-2 space-y-1 bg-[#181825]"
+                  className="border border-line rounded p-2 space-y-1 bg-white"
                 >
                   <div className="flex items-center gap-2">
                     <span
@@ -405,23 +405,23 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ skillsEnabled, learningE
                     >
                       {p.status}
                     </span>
-                    <span className="text-gray-200 font-medium">{p.name}</span>
-                    <span className="ml-auto text-gray-500 text-[11px]">{formatTime(p.ts)}</span>
+                    <span className="text-ink font-medium">{p.name}</span>
+                    <span className="ml-auto text-muted text-[11px]">{formatTime(p.ts)}</span>
                   </div>
-                  <div className="text-gray-300">{p.description}</div>
-                  <div className="text-gray-400 text-[11px]">
-                    <code className="text-cyan-400">{p.skillId}</code>
-                    <span className="mx-1 text-gray-600">·</span>
+                  <div className="text-muted">{p.description}</div>
+                  <div className="text-muted text-[11px]">
+                    <code className="text-moss">{p.skillId}</code>
+                    <span className="mx-1 text-muted">·</span>
                     <span>命中 {p.evidence.count} 次</span>
                     {p.evidence.taskType ? (
                       <>
-                        <span className="mx-1 text-gray-600">·</span>
+                        <span className="mx-1 text-muted">·</span>
                         <span>{p.evidence.taskType}</span>
                       </>
                     ) : null}
                   </div>
                   {p.evidence.queries.length > 0 ? (
-                    <div className="text-gray-500 text-[10px] truncate">
+                    <div className="text-muted text-[10px] truncate">
                       例：{p.evidence.queries.slice(0, 3).join(" / ")}
                     </div>
                   ) : null}
@@ -431,7 +431,7 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ skillsEnabled, learningE
                         type="button"
                         onClick={() => void handleDecision(p.proposalId, "approve")}
                         disabled={busy === `approve:${p.proposalId}`}
-                        className="px-2 py-0.5 text-xs rounded bg-green-700 hover:bg-green-600 disabled:bg-gray-700 text-white"
+                        className="px-2 py-0.5 text-xs rounded bg-moss hover:bg-mossdeep disabled:bg-rail text-white"
                       >
                         ✓ 批准
                       </button>
@@ -439,7 +439,7 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ skillsEnabled, learningE
                         type="button"
                         onClick={() => void handleDecision(p.proposalId, "reject")}
                         disabled={busy === `reject:${p.proposalId}`}
-                        className="px-2 py-0.5 text-xs rounded bg-red-700 hover:bg-red-600 disabled:bg-gray-700 text-white"
+                        className="px-2 py-0.5 text-xs rounded bg-signal hover:bg-signaldeep disabled:bg-rail text-white"
                       >
                         ✗ 拒绝
                       </button>
@@ -450,18 +450,18 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ skillsEnabled, learningE
                         type="button"
                         onClick={() => void handleDecision(p.proposalId, "revoke")}
                         disabled={busy === `revoke:${p.proposalId}`}
-                        className="px-2 py-0.5 text-xs rounded bg-orange-800 hover:bg-orange-700 disabled:bg-gray-700 text-white"
+                        className="rounded-lg border border-signalborder bg-white px-2 py-1 text-xs font-medium text-signaldeep hover:bg-signalwash disabled:opacity-50"
                       >
                         撤销
                       </button>
                       {p.decidedAt ? (
-                        <span className="text-gray-500 text-[10px]">
+                        <span className="text-muted text-[10px]">
                           批准于 {formatTime(p.decidedAt)}
                         </span>
                       ) : null}
                     </div>
                   ) : p.decidedAt ? (
-                    <div className="text-gray-500 text-[10px]">
+                    <div className="text-muted text-[10px]">
                       决策于 {formatTime(p.decidedAt)}
                     </div>
                   ) : null}
@@ -469,27 +469,27 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ skillsEnabled, learningE
               ))
             )}
           </div>
-          <div className="shrink-0 border-t border-gray-800">
+          <div className="shrink-0 border-t border-line">
             <button
               type="button"
               onClick={() => setShowActive((v) => !v)}
-              className="w-full px-3 py-1.5 text-xs text-left text-gray-300 hover:bg-gray-800"
+              className="w-full px-3 py-1.5 text-xs text-left text-muted hover:bg-rail"
             >
               {showActive ? "▼" : "▶"} 生效学习技能
               {active.length > 0 ? (
-                <span className="ml-2 text-gray-500">{active.length} 个</span>
+                <span className="ml-2 text-muted">{active.length} 个</span>
               ) : null}
             </button>
             {showActive ? (
               <div className="max-h-40 overflow-y-auto px-3 pb-2 space-y-1 text-[11px]">
                 {active.length === 0 ? (
-                  <div className="text-gray-500">暂无生效的学习技能</div>
+                  <div className="text-muted">暂无生效的学习技能</div>
                 ) : (
                   active.map((s) => (
-                    <div key={s.id} className="flex items-center gap-2 text-gray-400">
-                      <span className="text-gray-200">{s.name}</span>
-                      {s.source ? <span className="text-gray-600">[{s.source}]</span> : null}
-                      <span className="ml-auto text-cyan-400">w={s.weight.toFixed(2)}</span>
+                    <div key={s.id} className="flex items-center gap-2 text-muted">
+                      <span className="text-ink">{s.name}</span>
+                      {s.source ? <span className="text-muted">[{s.source}]</span> : null}
+                      <span className="ml-auto text-moss">w={s.weight.toFixed(2)}</span>
                     </div>
                   ))
                 )}
@@ -500,7 +500,7 @@ export const SkillPanel: React.FC<SkillPanelProps> = ({ skillsEnabled, learningE
       )}
 
       {recentHits.length > 0 ? (
-        <div className="shrink-0 border-t border-gray-800 px-3 py-1.5 text-[11px] text-gray-400">
+        <div className="shrink-0 border-t border-line px-3 py-1.5 text-[11px] text-muted">
           本轮命中：{recentHits.map((h) => `${h.id} (${h.score.toFixed(2)})`).join(" · ")}
         </div>
       ) : null}

@@ -292,3 +292,4 @@ audit trail 集成由 `@openintj/plane-governance` 自动注册一个 priority=+
 - **R1**：handler 死锁（A 监听 X 事件、B 监听 Y 事件，A 在处理 X 时触发 Y）→ 通过同 traceId 内的事件栈深度限制（默认 16）防御
 - **Q1**：是否需要"事件路径通配符"（如 `tao.*`）？倾向**不支持**，避免歧义；用户用多个明确订阅替代
 - **Q2**：跨进程钩子（如 desktop 的 main process 钩子转发到 renderer）需 RFC-004 IPC 协议配合，本 RFC 不展开
+- **Q3（2026-11-02）**：§5 规定 `tao.beforeThink` / `react.beforeAction` 的改写「被框架读取」，实现侧多数 `await emit` 丢掉返回值。闭合见 [RFC-010 §3](./RFC-010-agent-handle-and-commands.md)，不在本 RFC 另开里程碑。

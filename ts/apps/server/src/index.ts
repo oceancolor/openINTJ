@@ -36,6 +36,27 @@ const main = async (): Promise<void> => {
   );
   const app = buildApp(agent);
 
+  // RFC-015: start the scheduler (no-op when OPENINTJ_SCHEDULER=0) and log fires.
+  agent.scheduler.on((event) => {
+    if (event.kind === "fired" || event.kind === "failed") {
+      console.log(
+        `[OpenINTJ server] schedule ${event.kind}: ${event.job.title} (${event.job.id})${event.error ? ` — ${event.error}` : ""}`,
+      );
+    }
+  });
+  agent.scheduler.start();
+
+  // RFC-016: initialize async connectors (MCP) in the background; failures
+  // surface via /api/connectors and must not block startup.
+  void agent.initConnectors().then(() => {
+    const failed = agent.connectors.statuses().filter((s) => !s.ok);
+    for (const status of failed) {
+      console.warn(
+        `[OpenINTJ server] connector ${status.id} failed: ${status.detail ?? "unknown"}`,
+      );
+    }
+  });
+
   serve({ fetch: app.fetch, hostname: HOST, port: PORT }, (info) => {
     console.log(
       `OpenINTJ server listening on http://${info.address}:${info.port} (provider=${provider}, productBehavior=${status.productBehavior.cohort})`,

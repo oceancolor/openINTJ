@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveInRoot } from "@openintj/plane-execution";
 import type { WorkspaceEntry } from "../shared/workspace-view.js";

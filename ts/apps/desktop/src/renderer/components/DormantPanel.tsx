@@ -26,10 +26,10 @@ const STATUS_TABS: Array<{ key: StatusFilter; label: string }> = [
 ];
 
 const STATUS_BADGE: Record<DormantProposalDto["status"], string> = {
-  pending: "bg-yellow-900 text-yellow-200",
-  applied: "bg-green-900 text-green-200",
-  rejected: "bg-red-900 text-red-200",
-  approved: "bg-blue-900 text-blue-200",
+  pending: "bg-ambertint text-amberdeep",
+  applied: "bg-mossmist text-moss",
+  rejected: "bg-[#f8e9e4] text-signal",
+  approved: "bg-mosstint text-mossdeep",
   revoked: "bg-zinc-700 text-zinc-300",
 };
 
@@ -165,20 +165,20 @@ export const DormantPanel: React.FC<DormantPanelProps> = ({ enabled }) => {
   if (!enabled) {
     return (
       <div className="h-full flex items-center justify-center p-6 text-center">
-        <div className="text-sm text-gray-400 space-y-3">
-          <div className="text-base text-gray-300">Dormant 子系统未启用</div>
+        <div className="text-sm text-muted space-y-3">
+          <div className="text-base text-muted">Dormant 子系统未启用</div>
           <div>
             启动桌面端时设置环境变量
-            <code className="mx-1 px-1.5 py-0.5 bg-gray-800 rounded text-xs">
+            <code className="mx-1 px-1.5 py-0.5 bg-inset rounded text-xs">
               OPENINTJ_DORMANT=1
             </code>
             或在装配时传入
-            <code className="mx-1 px-1.5 py-0.5 bg-gray-800 rounded text-xs">
+            <code className="mx-1 px-1.5 py-0.5 bg-inset rounded text-xs">
               enableDormant: true
             </code>
             。
           </div>
-          <div className="text-xs text-gray-500">详见 RFC-003 方向 3 / Phase 3.4 文档。</div>
+          <div className="text-xs text-muted">详见 RFC-003 方向 3 / Phase 3.4 文档。</div>
         </div>
       </div>
     );
@@ -186,18 +186,18 @@ export const DormantPanel: React.FC<DormantPanelProps> = ({ enabled }) => {
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="shrink-0 flex items-center justify-end px-3 py-2 border-b border-gray-800">
+      <div className="shrink-0 flex items-center justify-end px-3 py-2 border-b border-line">
         <button
           type="button"
           onClick={() => void handleMine()}
           disabled={busy === "mine"}
-          className="px-2 py-1 text-xs rounded bg-purple-700 hover:bg-purple-600 disabled:bg-gray-700 text-white"
+          className="px-2 py-1 text-xs rounded bg-ink hover:bg-inksoft disabled:bg-rail text-white"
         >
           {busy === "mine" ? "分析中…" : "Mine"}
         </button>
       </div>
 
-      <div className="shrink-0 flex items-center gap-1 px-3 py-1 border-b border-gray-800 text-xs">
+      <div className="shrink-0 flex items-center gap-1 px-3 py-1 border-b border-line text-xs">
         {STATUS_TABS.map((t) => (
           <button
             key={t.key}
@@ -205,37 +205,37 @@ export const DormantPanel: React.FC<DormantPanelProps> = ({ enabled }) => {
             onClick={() => setFilter(t.key)}
             className={
               filter === t.key
-                ? "px-2 py-0.5 rounded bg-gray-700 text-gray-100"
-                : "px-2 py-0.5 rounded text-gray-400 hover:text-gray-200"
+                ? "px-2 py-0.5 rounded bg-rail text-ink"
+                : "px-2 py-0.5 rounded text-muted hover:text-ink"
             }
           >
             {t.label}
           </button>
         ))}
-        <span className="ml-auto text-gray-500">{proposals.length} 条</span>
+        <span className="ml-auto text-muted">{proposals.length} 条</span>
       </div>
 
       {error ? (
-        <div className="mx-3 mt-2 px-2 py-1 text-xs bg-red-900/50 text-red-200 rounded">
+        <div className="mx-3 mt-2 px-2 py-1 text-xs bg-signaltint text-signaldeep rounded">
           {error}
         </div>
       ) : null}
       {lastMineSummary ? (
-        <div className="mx-3 mt-2 px-2 py-1 text-xs text-gray-400 bg-gray-800/40 rounded">
+        <div className="mx-3 mt-2 px-2 py-1 text-xs text-muted bg-inset/40 rounded">
           {lastMineSummary}
         </div>
       ) : null}
 
       <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2 text-xs">
         {proposals.length === 0 ? (
-          <div className="text-gray-500">
+          <div className="text-muted">
             {filter === "pending" ? "暂无待审批 proposal — 点击 Mine 触发分析" : "暂无数据"}
           </div>
         ) : (
           proposals.map((p) => (
             <div
               key={p.proposalId}
-              className="border border-gray-800 rounded p-2 space-y-1 bg-[#181825]"
+              className="border border-line rounded p-2 space-y-1 bg-white"
             >
               <div className="flex items-center gap-2">
                 <span
@@ -243,16 +243,16 @@ export const DormantPanel: React.FC<DormantPanelProps> = ({ enabled }) => {
                 >
                   {p.status}
                 </span>
-                <span className="text-gray-400 text-[11px]">
+                <span className="text-muted text-[11px]">
                   freq {p.frequency} · conf {(p.confidence * 100).toFixed(0)}%
                 </span>
-                <span className="ml-auto text-gray-500 text-[11px]">{formatTime(p.ts)}</span>
+                <span className="ml-auto text-muted text-[11px]">{formatTime(p.ts)}</span>
               </div>
-              <div className="text-gray-200">{p.patternDescription}</div>
-              <div className="text-gray-400 text-[11px]">
-                <code className="text-cyan-400">{p.targetField}</code>
-                <span className="mx-1 text-gray-600">←</span>
-                <span className="text-gray-300">{formatValue(p.value)}</span>
+              <div className="text-ink">{p.patternDescription}</div>
+              <div className="text-muted text-[11px]">
+                <code className="text-moss">{p.targetField}</code>
+                <span className="mx-1 text-muted">←</span>
+                <span className="text-muted">{formatValue(p.value)}</span>
               </div>
               {p.status === "pending" ? (
                 <div className="flex items-center gap-2 pt-1">
@@ -260,7 +260,7 @@ export const DormantPanel: React.FC<DormantPanelProps> = ({ enabled }) => {
                     type="button"
                     onClick={() => void handleDecision(p.proposalId, "approve")}
                     disabled={busy === `approve:${p.proposalId}`}
-                    className="px-2 py-0.5 text-xs rounded bg-green-700 hover:bg-green-600 disabled:bg-gray-700 text-white"
+                    className="px-2 py-0.5 text-xs rounded bg-moss hover:bg-mossdeep disabled:bg-rail text-white"
                   >
                     ✓ 应用
                   </button>
@@ -268,7 +268,7 @@ export const DormantPanel: React.FC<DormantPanelProps> = ({ enabled }) => {
                     type="button"
                     onClick={() => void handleDecision(p.proposalId, "reject")}
                     disabled={busy === `reject:${p.proposalId}`}
-                    className="px-2 py-0.5 text-xs rounded bg-red-700 hover:bg-red-600 disabled:bg-gray-700 text-white"
+                    className="px-2 py-0.5 text-xs rounded bg-signal hover:bg-signaldeep disabled:bg-rail text-white"
                   >
                     ✗ 拒绝
                   </button>
@@ -279,39 +279,39 @@ export const DormantPanel: React.FC<DormantPanelProps> = ({ enabled }) => {
                     type="button"
                     onClick={() => void handleDecision(p.proposalId, "revoke")}
                     disabled={busy === `revoke:${p.proposalId}`}
-                    className="px-2 py-0.5 text-xs rounded bg-orange-800 hover:bg-orange-700 disabled:bg-gray-700 text-white"
+                    className="rounded-lg border border-signalborder bg-white px-2 py-1 text-xs font-medium text-signaldeep hover:bg-signalwash disabled:opacity-50"
                   >
                     撤销
                   </button>
                   {p.decidedAt ? (
-                    <span className="text-gray-500 text-[10px]">
+                    <span className="text-muted text-[10px]">
                       应用于 {formatTime(p.decidedAt)}
                     </span>
                   ) : null}
                 </div>
               ) : p.decidedAt ? (
-                <div className="text-gray-500 text-[10px]">决策于 {formatTime(p.decidedAt)}</div>
+                <div className="text-muted text-[10px]">决策于 {formatTime(p.decidedAt)}</div>
               ) : null}
             </div>
           ))
         )}
       </div>
 
-      <div className="shrink-0 border-t border-gray-800">
+      <div className="shrink-0 border-t border-line">
         <button
           type="button"
           onClick={() => setShowPersona((v) => !v)}
-          className="w-full px-3 py-1.5 text-xs text-left text-gray-300 hover:bg-gray-800"
+          className="w-full px-3 py-1.5 text-xs text-left text-muted hover:bg-rail"
         >
           {showPersona ? "▼" : "▶"} 当前 Persona
           {persona ? (
-            <span className="ml-2 text-gray-500">
+            <span className="ml-2 text-muted">
               v{persona.meta.version} · {Object.keys(persona.preferences).length} 偏好
             </span>
           ) : null}
         </button>
         {showPersona && persona ? (
-          <pre className="max-h-40 overflow-y-auto px-3 pb-2 text-[11px] text-gray-400 whitespace-pre-wrap break-all">
+          <pre className="max-h-40 overflow-y-auto px-3 pb-2 text-[11px] text-muted whitespace-pre-wrap break-all">
             {JSON.stringify(persona, null, 2)}
           </pre>
         ) : null}

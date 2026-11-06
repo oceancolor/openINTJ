@@ -20,6 +20,10 @@
     { "path": "../../packages/taskpool" },
     { "path": "../../packages/classifier" },
     { "path": "../../packages/dormant" },
+    { "path": "../../packages/connectors" },
+    { "path": "../../packages/runtime" },
+    { "path": "../../packages/profile" },
+    { "path": "../../packages/scheduler" },
     { "path": "../../packages/skills" }
   ]
 }

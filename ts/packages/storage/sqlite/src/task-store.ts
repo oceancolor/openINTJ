@@ -1,4 +1,4 @@
-import type { StoredTaskRun, TaskStore } from "@openintj/taskpool";
+import { type StoredTaskRun, type TaskStore, normalizeTaskRunListLimit } from "@openintj/taskpool";
 
 interface Statement {
   run(...params: unknown[]): unknown;
@@ -74,6 +74,15 @@ export class SqliteTaskStore implements TaskStore {
         "SELECT snapshot_json FROM task_runs WHERE status = 'running' ORDER BY created_at, run_id",
       )
       .all() as Array<{ snapshot_json: string }>;
+    return rows.map((row) => JSON.parse(row.snapshot_json) as StoredTaskRun);
+  }
+
+  async listRuns(limit = 50): Promise<readonly StoredTaskRun[]> {
+    const rows = this.requireDb()
+      .prepare(
+        "SELECT snapshot_json FROM task_runs ORDER BY updated_at DESC, created_at DESC, run_id LIMIT ?",
+      )
+      .all(normalizeTaskRunListLimit(limit)) as Array<{ snapshot_json: string }>;
     return rows.map((row) => JSON.parse(row.snapshot_json) as StoredTaskRun);
   }
 

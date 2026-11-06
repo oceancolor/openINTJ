@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  type ChatMessage,
   DEFAULT_REACT_CONFIG,
   HookBus,
   type HookLogger,
@@ -439,6 +440,31 @@ describe("ReactStateMachine.run", () => {
     expect(captured["modified"]).toBe(true);
   });
 
+  it("emits event.ASSISTANT_DELTA after parseLlmThought", async () => {
+    const hooks = new HookBus({ logger: silentLogger });
+    const deltas: Array<{ text: string; channel: string; step: number }> = [];
+    hooks.on("event.ASSISTANT_DELTA", (ctx) => {
+      deltas.push({
+        text: ctx.payload.text,
+        channel: ctx.payload.channel,
+        step: ctx.payload.step,
+      });
+    });
+    const sm = new ReactStateMachine({
+      config: baseConfig,
+      hooks,
+      llm: makeLlm(["Thought: 结论\nFINAL: 完成"]),
+      toolRunner: makeToolRunner({}),
+    });
+    await sm.run({
+      messages: [{ role: "user", content: "hi" }],
+      availableTools: tools,
+      taoIteration: 1,
+      systemPrompt: "",
+    });
+    expect(deltas).toEqual([{ text: "完成", channel: "answer", step: 1 }]);
+  });
+
   it("runSingle removes leaked ReAct scaffolding", async () => {
     const sm = new ReactStateMachine({
       config: baseConfig,
@@ -507,4 +533,142 @@ describe("ReactStateMachine.run", () => {
       expect(receivedSignal).toBe(controller.signal);
     },
   );
+});
+
+describe("RFC-012 overflow recovery", () => {
+  const baseConfig: ReactConfig = { ...DEFAULT_REACT_CONFIG, maxIterations: 6 };
+  const overflowError = () =>
+    new Error(
+      "This model's maximum context length is 8192 tokens, your messages resulted in 9000 tokens",
+    );
+
+  const makeOverflowLlm = (
+    failures: number,
+    then: string,
+  ): { llm: LlmClient; calls: ChatMessage[][] } => {
+    const calls: ChatMessage[][] = [];
+    let n = 0;
+    const llm: LlmClient = {
+      async chat(messages) {
+        calls.push([...messages]);
+        n++;
+        if (n <= failures) throw overflowError();
+        return then;
+      },
+      async visionChat() {
+        return then;
+      },
+      getStatus() {
+        return {
+          provider: "test",
+          model: "mock",
+          available: true,
+          mode: "live",
+          status: "connected",
+          visionSupported: false,
+        };
+      },
+    };
+    return { llm, calls };
+  };
+
+  const historyMessages: ChatMessage[] = [
+    { role: "user", content: "旧问题1" },
+    { role: "assistant", content: "旧回答1" },
+    { role: "user", content: "当前问题" },
+  ];
+
+  it("replaces the history segment via callback and retries once", async () => {
+    const { llm, calls } = makeOverflowLlm(1, "Thought: ok\nFINAL: 恢复成功");
+    const sm = new ReactStateMachine({
+      config: baseConfig,
+      hooks: new HookBus({ logger: silentLogger }),
+      llm,
+      toolRunner: makeToolRunner({}),
+    });
+    const seen: readonly ChatMessage[][] = [];
+    const out = await sm.run(
+      { messages: historyMessages, availableTools: [], taoIteration: 1, systemPrompt: "" },
+      {
+        onContextOverflow: async (history) => {
+          seen.push(history);
+          return [{ role: "user", content: "[历史摘要] 要点" }];
+        },
+      },
+    );
+    expect(out.finalAnswer).toBe("恢复成功");
+    // Callback receives history without the trailing current query.
+    expect(seen[0]?.map((m) => m.content)).toEqual(["旧问题1", "旧回答1"]);
+    // Second call: system + summary + current query (old history gone).
+    const second = calls[1]!.map((m) => m.content as string);
+    expect(second.some((c) => c.includes("[历史摘要]"))).toBe(true);
+    expect(second).toContain("当前问题");
+    expect(second).not.toContain("旧问题1");
+  });
+
+  it("rethrows when the callback gives up, and on a second overflow", async () => {
+    const { llm } = makeOverflowLlm(1, "unused");
+    const sm = new ReactStateMachine({
+      config: baseConfig,
+      hooks: new HookBus({ logger: silentLogger }),
+      llm,
+      toolRunner: makeToolRunner({}),
+    });
+    await expect(
+      sm.run(
+        { messages: historyMessages, availableTools: [], taoIteration: 1, systemPrompt: "" },
+        { onContextOverflow: async () => undefined },
+      ),
+    ).rejects.toThrow(/maximum context length/);
+
+    const always = makeOverflowLlm(99, "unused");
+    const sm2 = new ReactStateMachine({
+      config: baseConfig,
+      hooks: new HookBus({ logger: silentLogger }),
+      llm: always.llm,
+      toolRunner: makeToolRunner({}),
+    });
+    await expect(
+      sm2.run(
+        { messages: historyMessages, availableTools: [], taoIteration: 1, systemPrompt: "" },
+        { onContextOverflow: async () => [{ role: "user", content: "摘要" }] },
+      ),
+    ).rejects.toThrow(/maximum context length/);
+    expect(always.calls.length).toBe(2); // original + exactly one retry
+  });
+
+  it("does not invoke the callback for non-overflow errors", async () => {
+    const llm: LlmClient = {
+      async chat() {
+        throw new Error("provider 500 boom");
+      },
+      async visionChat() {
+        return "";
+      },
+      getStatus() {
+        return {
+          provider: "test",
+          model: "mock",
+          available: true,
+          mode: "live",
+          status: "connected",
+          visionSupported: false,
+        };
+      },
+    };
+    const sm = new ReactStateMachine({
+      config: baseConfig,
+      hooks: new HookBus({ logger: silentLogger }),
+      llm,
+      toolRunner: makeToolRunner({}),
+    });
+    const callback = vi.fn(async () => [{ role: "user" as const, content: "摘要" }]);
+    await expect(
+      sm.run(
+        { messages: historyMessages, availableTools: [], taoIteration: 1, systemPrompt: "" },
+        { onContextOverflow: callback },
+      ),
+    ).rejects.toThrow("provider 500 boom");
+    expect(callback).not.toHaveBeenCalled();
+  });
 });

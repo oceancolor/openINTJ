@@ -80,7 +80,7 @@ export interface WorkspaceChangeEventLike {
 
 export interface HookEventMap {
   // -------- TAO 宏循环 --------
-  "tao.beforeThink": { query: string; iteration: number };
+  "tao.beforeThink": { query: string; iteration: number; injectBlock?: string };
   "tao.afterThink": { plan: PlanGraphLike; iteration: number };
   "tao.beforeAct": {
     plan: PlanGraphLike;
@@ -99,6 +99,7 @@ export interface HookEventMap {
     context: ContextWindowLike;
     reactIter: number;
     taoIter: number;
+    steerMessages?: string[];
   };
   "react.afterThought": {
     thought: string;
@@ -361,6 +362,29 @@ export interface HookEventMap {
     version: string;
     enabled: boolean;
   };
+  /** RFC-013: a tool call is parked waiting for human approval. */
+  "event.APPROVAL_REQUESTED": {
+    id: string;
+    tool: string;
+    risk: "read" | "write" | "execute" | "external";
+  };
+  /** RFC-013: an approval request was decided (or cancelled → denied). */
+  "event.APPROVAL_DECIDED": {
+    id: string;
+    tool: string;
+    decision: "approved" | "denied";
+  };
+  /**
+   * RFC-010 streaming hook. Token-level deltas when the provider supports them;
+   * otherwise one full-text event after parseLlmThought. Not a source of truth.
+   */
+  "event.ASSISTANT_DELTA": {
+    traceId: string;
+    turnId: string;
+    step: number;
+    text: string;
+    channel: "thought" | "answer";
+  };
   /**
    * RFC-006 trait signal derived from deterministic framework evidence.
    * It records an observed lifecycle/tool fact, never inferred model intent.
@@ -375,6 +399,8 @@ export interface HookEventMap {
 
 /** 哪些事件允许 handler 调用 ctx.cancel()。 */
 export const CANCELLABLE_EVENTS: ReadonlySet<keyof HookEventMap> = new Set<keyof HookEventMap>([
+  "tao.beforeThink",
+  "react.beforeThought",
   "react.beforeAction",
   "tool.beforeCall",
   "policy.beforeCheck",

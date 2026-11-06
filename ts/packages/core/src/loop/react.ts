@@ -1,5 +1,12 @@
 import type { HookBus } from "../hooks/bus.js";
-import { AgentError, ErrorCode } from "../types/errors.js";
+import {
+  journalThought,
+  journalToolCall,
+  journalToolResult,
+  journalUser,
+} from "../journal/sink.js";
+import type { JournalTurnContext } from "../journal/types.js";
+import { AgentError, ErrorCode, isContextOverflowError } from "../types/errors.js";
 import { estimateTokens } from "../types/memory-fragment.js";
 import type { ToolCallResult, ToolDescriptor } from "../types/tool.js";
 import type {
@@ -36,6 +43,18 @@ export interface ReactRunOptions {
   signal?: AbortSignal;
   /** Per-run client override used by conversation-scoped model selection. */
   llm?: LlmClient;
+  /** RFC-009 optional journal; missing or throwing sink never fails the loop. */
+  journal?: JournalTurnContext;
+  /**
+   * RFC-012 overflow recovery (at most once per run): invoked when the
+   * provider rejects the conversation as too long. Receives the history
+   * segment (`input.messages` without the trailing current query) and
+   * returns a compacted replacement, or undefined to rethrow the original
+   * error. Messages appended during this turn are always preserved.
+   */
+  onContextOverflow?: (
+    history: readonly ChatMessage[],
+  ) => Promise<readonly ChatMessage[] | undefined>;
 }
 
 /**
@@ -157,10 +176,7 @@ const stopConditionKey = (cond: ReactStopCondition): string => cond.kind;
 
 /** 策略拒绝、工具不存在：继续 ReAct，让模型换工具。真正的执行崩溃仍 failFast。 */
 export const isRecoverableToolError = (error: string | undefined): boolean =>
-  Boolean(
-    error &&
-      /未启用|白名单|工具未注册|unknown tool|not in (the )?allowlist/i.test(error),
-  );
+  Boolean(error && /未启用|白名单|工具未注册|unknown tool|not in (the )?allowlist/i.test(error));
 
 const checkDuplicate = (trajectory: TrajectoryEntry[], threshold: number): boolean => {
   const actions: Array<{ tool: string; key: string }> = [];
@@ -190,6 +206,45 @@ export class ReactStateMachine {
     this._toolRunner = deps.toolRunner;
   }
 
+  /**
+   * One LLM call with single-shot RFC-012 overflow recovery: on a classified
+   * context-overflow error, ask the host callback for a compacted history,
+   * splice it over the history segment of `conversation` (system prompt,
+   * current query, and this turn's appended steps stay), and retry once.
+   * A second overflow — or no replacement — rethrows the original error.
+   */
+  private async chatWithOverflowRecovery(args: {
+    llm: LlmClient;
+    conversation: ChatMessage[];
+    input: ReactInput;
+    opts: ReactRunOptions;
+    state: { recovered: boolean };
+  }): Promise<string> {
+    const { llm, conversation, input, opts, state } = args;
+    const chatOpts = {
+      temperature: 0.4,
+      maxTokens: 1024,
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    };
+    try {
+      return await llm.chat(conversation, chatOpts);
+    } catch (err) {
+      if (state.recovered || !opts.onContextOverflow || !isContextOverflowError(err)) {
+        throw err;
+      }
+      state.recovered = true;
+      let replacement: readonly ChatMessage[] | undefined;
+      try {
+        replacement = await opts.onContextOverflow(input.messages.slice(0, -1));
+      } catch {
+        replacement = undefined;
+      }
+      if (!replacement) throw err;
+      conversation.splice(1, Math.max(0, input.messages.length - 1), ...replacement);
+      return llm.chat(conversation, chatOpts);
+    }
+  }
+
   async run(input: ReactInput, opts: ReactRunOptions = {}): Promise<ReactOutput> {
     opts.signal?.throwIfAborted();
     const llm = opts.llm ?? this._llm;
@@ -205,6 +260,7 @@ export class ReactStateMachine {
     let status: ReactStatus = "ok";
     let failedTool: { tool: string; error: string } | undefined;
     let iter = 0;
+    const overflowState = { recovered: false };
 
     while (iter < this._config.maxIterations) {
       opts.signal?.throwIfAborted();
@@ -215,7 +271,7 @@ export class ReactStateMachine {
       // ============================================================
       if (this._hooks) {
         const beforeOpts = traceId ? { traceId } : undefined;
-        await this._hooks.emit(
+        const thoughtHook = await this._hooks.emitOutcome(
           "react.beforeThought",
           {
             context: { systemPrompt: input.systemPrompt },
@@ -224,16 +280,38 @@ export class ReactStateMachine {
           },
           beforeOpts,
         );
+        if (thoughtHook.cancelled) {
+          continue;
+        }
+        for (const message of thoughtHook.payload.steerMessages ?? []) {
+          conversation.push({ role: "user", content: message });
+          journalUser(opts.journal, message, { source: "steer" });
+        }
       }
 
       const t0 = Date.now();
-      const llmText = await llm.chat(conversation, {
-        temperature: 0.4,
-        maxTokens: 1024,
-        ...(opts.signal ? { signal: opts.signal } : {}),
+      const llmText = await this.chatWithOverflowRecovery({
+        llm,
+        conversation,
+        input,
+        opts,
+        state: overflowState,
       });
       const parsed = parseLlmThought(llmText);
       totalTokens += estimateTokens(llmText);
+      journalThought(opts.journal, iter, parsed.thought);
+      const afterOpts = traceId ? { traceId } : undefined;
+      await this._hooks.emit(
+        "event.ASSISTANT_DELTA",
+        {
+          traceId: traceId ?? "",
+          turnId: opts.journal?.turnId ?? "ephemeral",
+          step: iter,
+          text: parsed.isFinal ? (parsed.finalAnswer ?? parsed.thought) : parsed.thought,
+          channel: parsed.isFinal ? "answer" : "thought",
+        },
+        afterOpts,
+      );
 
       const thoughtState: ReactState = {
         type: "thought",
@@ -245,8 +323,6 @@ export class ReactStateMachine {
         state: thoughtState,
         durationMs: Date.now() - t0,
       });
-
-      const afterOpts = traceId ? { traceId } : undefined;
       await this._hooks.emit(
         "react.afterThought",
         {
@@ -344,7 +420,7 @@ export class ReactStateMachine {
       }
 
       const beforeActionOpts = traceId ? { traceId } : undefined;
-      const actionPayload = await this._hooks.emit(
+      const actionHook = await this._hooks.emitOutcome(
         "react.beforeAction",
         {
           tool: parsed.action.tool,
@@ -354,16 +430,40 @@ export class ReactStateMachine {
         },
         beforeActionOpts,
       );
+      if (actionHook.cancelled) {
+        conversation.push({
+          role: "tool",
+          name: parsed.action.tool,
+          content: "[cancelled by hook]",
+        });
+        continue;
+      }
+      const actionPayload = actionHook.payload;
 
       const callOpts: { traceId?: string; timeoutMs: number; signal?: AbortSignal } = {
         timeoutMs: this._config.stepTimeoutMs,
       };
       if (traceId) callOpts.traceId = traceId;
       if (opts.signal) callOpts.signal = opts.signal;
+      journalToolCall(
+        opts.journal,
+        iter,
+        actionPayload.tool,
+        (actionPayload.params as Record<string, unknown>) ?? parsed.action.params,
+      );
       const toolResult = await this._toolRunner(
         actionPayload.tool,
         (actionPayload.params as Record<string, unknown>) ?? parsed.action.params,
         callOpts,
+      );
+      const observation = this.truncateObservation(this.formatObservation(toolResult));
+      journalToolResult(
+        opts.journal,
+        iter,
+        toolResult.toolName,
+        toolResult.success,
+        observation,
+        !toolResult.success && isRecoverableToolError(toolResult.error),
       );
 
       const obsState: ReactState = {
@@ -413,13 +513,12 @@ export class ReactStateMachine {
       }
 
       // 把观察结果回灌给 LLM
-      const obsText = this.formatObservation(toolResult);
-      totalTokens += estimateTokens(obsText);
+      totalTokens += estimateTokens(observation);
       conversation.push({
         role: "tool",
         name: toolResult.toolName,
         toolCallId: toolResult.callId,
-        content: this.truncateObservation(obsText),
+        content: observation,
       });
     }
 
@@ -460,25 +559,47 @@ export class ReactStateMachine {
     const traceId = opts.traceId;
     const hookOpts = traceId ? { traceId } : undefined;
 
-    await this._hooks.emit(
+    const thoughtHook = await this._hooks.emitOutcome(
       "react.beforeThought",
       { context: { systemPrompt: input.systemPrompt }, reactIter: 1, taoIter: input.taoIteration },
       hookOpts,
     );
 
+    const steerMessages = thoughtHook.payload.steerMessages ?? [];
+    for (const content of steerMessages) {
+      journalUser(opts.journal, content, { source: "steer" });
+    }
     const conversation: ChatMessage[] = [
       { role: "system", content: input.systemPrompt },
       ...input.messages,
+      ...steerMessages.map((content) => ({
+        role: "user" as const,
+        content,
+      })),
     ];
     const t0 = Date.now();
-    const llmText = await llm.chat(conversation, {
-      temperature: 0.4,
-      maxTokens: 1024,
-      ...(opts.signal ? { signal: opts.signal } : {}),
+    const llmText = await this.chatWithOverflowRecovery({
+      llm,
+      conversation,
+      input,
+      opts,
+      state: { recovered: false },
     });
     opts.signal?.throwIfAborted();
     const parsed = parseLlmThought(llmText);
+    journalThought(opts.journal, 1, parsed.thought);
     const answer = (parsed.finalAnswer ?? parsed.thought).trim();
+    await this._hooks.emit(
+      "event.ASSISTANT_DELTA",
+      {
+        traceId: traceId ?? "",
+        turnId: opts.journal?.turnId ?? "ephemeral",
+        step: 1,
+        text: answer,
+        channel: "answer",
+      },
+      hookOpts,
+    );
     if (!answer) {
       throw new AgentError({
         code: ErrorCode.INTERNAL_ERROR,

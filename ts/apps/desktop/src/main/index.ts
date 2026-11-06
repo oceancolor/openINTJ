@@ -11,12 +11,14 @@ import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadOpenintjEnv, summarizeLlmEnv } from "@openintj/shared";
-import { BrowserWindow, app, dialog, safeStorage } from "electron";
+import { BrowserWindow, Menu, app, dialog, nativeTheme, safeStorage, session } from "electron";
+import { CHROME_BG } from "../shared/chrome.js";
 import {
   type AppConfig,
   DEFAULT_DESKTOP_MODEL_PROFILE_ID,
   MODEL_DEFAULTS_VERSION,
   type ModelProvider,
+  TITLE_BAR_HEIGHT,
 } from "../shared/ipc-protocol.js";
 import { type DesktopAgent, assembleDesktopAgent } from "./agent.js";
 import { type ConfigService, createConfigService } from "./config-store.js";
@@ -181,6 +183,11 @@ const assembleFromSavedConfig = async (
     ...(savedConfig.enableTaskPool !== undefined
       ? { enableTaskPool: savedConfig.enableTaskPool }
       : {}),
+    // RFC-013: desktop is the host that can actually ask a human — write/execute
+    // tool calls require approval (or a capability grant) unless opted out.
+    ...(process.env["OPENINTJ_APPROVAL"] === "0"
+      ? {}
+      : { approvalRisks: ["write", "execute"] as ("write" | "execute")[] }),
   });
 };
 
@@ -246,10 +253,21 @@ const createWindow = (): BrowserWindow => {
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    title: "OpenINTJ",
-    backgroundColor: "#1e1e2e",
-    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    title: `OpenINTJ v${app.getVersion()}`,
+    backgroundColor: CHROME_BG,
     show: false,
+    ...(process.platform === "darwin"
+      ? { titleBarStyle: "hiddenInset" as const }
+      : process.platform === "win32"
+        ? {
+            titleBarStyle: "hidden" as const,
+            titleBarOverlay: {
+              color: CHROME_BG,
+              symbolColor: "#18181b",
+              height: TITLE_BAR_HEIGHT,
+            },
+          }
+        : { titleBarStyle: "hidden" as const }),
     ...(existsSync(iconPath) ? { icon: iconPath } : {}),
     webPreferences: {
       contextIsolation: true,
@@ -284,9 +302,28 @@ const createWindow = (): BrowserWindow => {
   return win;
 };
 
+/**
+ * RFC-019 microphone access for voice input: grant `media` only to the main
+ * window's own renderer; every other permission (and any embedded IDE view)
+ * is denied. Installing a handler replaces Electron's defaults, so the
+ * deny-everything-else branch is explicit.
+ */
+const installPermissionPolicy = (): void => {
+  const isOwnWindow = (webContents: Electron.WebContents | null): boolean =>
+    webContents !== null && mainWindow !== undefined && webContents === mainWindow.webContents;
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    callback(isOwnWindow(webContents) && permission === "media");
+  });
+  session.defaultSession.setPermissionCheckHandler(
+    (webContents, permission) => isOwnWindow(webContents) && permission === "media",
+  );
+};
+
 void app
   .whenReady()
   .then(async () => {
+    installPermissionPolicy();
+    nativeTheme.themeSource = "light";
     // 持久化的应用配置（用户在 UI 里改的偏好）。优先级：显式 env > 已存配置 > 默认。
     config = createConfigService(path.join(app.getPath("userData"), "config.json"));
     const credentials = createCredentialStore(
@@ -387,6 +424,10 @@ void app
       agent = next;
       if (mainWindow && !mainWindow.isDestroyed()) {
         ipcRegistration = registerIpcHandlers(agent, mainWindow.webContents, undefined, ipcDeps);
+        // RFC-015: restart the scheduler for the fresh agent (old one stopped in close()).
+        agent.scheduler.start();
+        // RFC-016: initialize async connectors (MCP) for the fresh agent.
+        void agent.initConnectors();
       }
       console.log(
         `[OpenINTJ desktop] agent reloaded persistence=${agent.persistenceInfo.mode} dataDir=${agent.persistenceInfo.dataDir ?? "<in-memory>"}`,
@@ -411,6 +452,32 @@ void app
       app.relaunch();
       app.quit();
     };
+    // Windows/Linux：系统标题栏与菜单合成 renderer 一行；macOS 菜单仍在系统栏。
+    if (process.platform === "darwin") {
+      Menu.setApplicationMenu(
+        Menu.buildFromTemplate([
+          { role: "appMenu" },
+          {
+            label: "File",
+            submenu: [
+              {
+                label: "重启",
+                click: () => {
+                  void restart();
+                },
+              },
+              { type: "separator" },
+              { role: "quit", label: "退出" },
+            ],
+          },
+          { role: "editMenu" },
+          { role: "viewMenu" },
+          { role: "windowMenu" },
+        ]),
+      );
+    } else {
+      Menu.setApplicationMenu(null);
+    }
     const ipcDeps: IpcDeps = {
       pickDirectory,
       restart,
@@ -427,6 +494,10 @@ void app
       ...(config ? { config } : {}),
     };
     ipcRegistration = registerIpcHandlers(agent, mainWindow.webContents, undefined, ipcDeps);
+    // RFC-015: start the scheduler (catch-up pass fires anything missed offline).
+    agent.scheduler.start();
+    // RFC-016: initialize async connectors (MCP) in the background.
+    void agent.initConnectors();
     loadRenderer(mainWindow);
 
     // #6 自动更新：仅打包后真正生效；dev/测试为 no-op。

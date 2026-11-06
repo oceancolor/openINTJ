@@ -1,5 +1,9 @@
 # Desktop 多模型任务工作台
 
+> ⚠️ 2026-11-06：内嵌 VSCodium IDE 已整体剥离（基于使用体验与场景判断，IDE 非
+> 优先设施）。左区回到自研 `WorkspaceWorkbench`（文件树 + 预览）；本文中涉及
+> VSCodium reh-web 的描述均已失效，仅余任务/对话容器模型仍有效。
+
 ## 目标
 
 桌面端以“任务”为一级容器：一个任务属于一个工作区，包含多个对话，并可记录一个
@@ -11,18 +15,24 @@ TaskPool run。对话独立保存模型 Profile 与消息历史，切换模型�
 Workspace(rootPath, dataDir?)
   └─ Task(status, taskPoolRunId?)
        └─ Conversation(modelProfileId)
-            └─ Message(role, content, messageKind?, inputStructure?, traceId?, tokens?, status)
+            └─ Conversation journal（`journal_events`，追加写）
+                 投影 → ChatPanel / Tao history / Trajectory
+            └─ Message 缓存（双写期仍 INSERT；`listMessages` 以 journal 投影为准）
 ```
 
 - `workbench.sqlite` 位于 Electron `userData`；开发用
   `OPENINTJ_DESKTOP_NO_PERSIST=1` 时使用内存库。
 - 首次启动从当前 `workspaceDir` 创建“默认工作区 / Inbox / 新对话”，不移动旧 memory
   与 TaskPool 数据。
-- 消息查询有界；执行时把既有 user/assistant 消息作为 Tao/ReAct history。
+- RFC-009：会话事实源是 `journal_events`。`listMessages` 从 `deriveChatMessages` 投影；
+  下一轮 Tao / ContextEngine 共用 `deriveHistory(journal)`。`/clear` 追加
+  `session.cleared`，兼容期同时 `DELETE FROM messages`。
+- 消息查询有界；旧库无 journal 时从 `messages` 一次性 backfill 成 turn 事件。
 - memory preflight 通过 `workspace:* / task:* / conversation:*` 标签限定上下文。
 - RFC-008：CHAT 在 classifier 前做自适应输入结构化。消息可带
   `messageKind=clarification|answer` 与 `inputStructure`（任务理解卡）；原始用户文本不改写。
-  schema `user_version=2` 对旧库做 `message_kind` / `input_structure_json` 列迁移。
+  schema `user_version=4`：`journal_events` 表；此前 `user_version=3` 含
+  `message_kind` / `input_structure_json` / `workspaces.closed_at`。
 
 ## 模型 Profile
 

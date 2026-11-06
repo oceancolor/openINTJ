@@ -6,8 +6,35 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **桌面 UI 落地 Miora 设计系统**（设计源归档于 `docs/design/miora/`）：暖中性
+  令牌（Ink `#20231F` / Panel `#FBFBF8` / Canvas `#F6F6F1`）+ 三语义色
+  （Moss 健康·选中 / Signal 注意·破坏 / Amber 运行·等待），Manrope/IBM Plex
+  Mono 字体栈（离线回退系统字体）。墨黑窗框标题栏、右侧标签分段控件、
+  工作台导航式文件树（选中项 Signal 内嵌条）、对话头像行 + IN 徽标 +
+  流式"工作中"脉冲、空状态 hero 与建议卡、悬浮 composer 卡、理解卡改
+  计划卡式样、审批改许可卡（Signal wash + 批准一次/授权/拒绝）、任务卡
+  状态点、设置模型 Profile 改 Moss 2px 选中卡、Markdown 代码块改深色
+  工具面。保留全部 IPC 边界、`data-testid` 与业务行为；桌面单测 109 通过。
+
 ### Fixed
 
+- **桌面 UI 整体重做（统一浅色现代风）**：删除 `styles.css` 里旧的「暗色类名
+  强行覆盖成浅色」`!important` hack（只盖住部分类名，是界面半深半浅、黑块
+  遮挡的根源），全渲染层（外壳/标题栏/标签页/对话/工作台/全部面板）类名
+  本体改为浅色令牌：白卡片 + `#fafafa` 底 + 细边框 + 蓝色单一强调色；
+  真机截图验收通过。
+- **身份面板看不见字/布局溢出**：输入框漏了文字颜色（深底黑字），表单行在
+  380px 右栏溢出遮挡。现全面对齐既有面板配色、改纵向堆叠；解析为空时给出
+  每个解析源的明确结论（Gravatar 无公开资料 ≠ 没有账号）与一键认领入口。
+- **桌面同步导入丢失身份图谱**：`SyncBundleViewSchema` 缺 `identity` 段，
+  Zod 校验把整段剥掉。已补 schema 与报告计数字段，并加回归测试。
+- **身份图谱启动不回写档案**：重启后已持久化图谱不触发镜像，现三端装配时
+  先镜像一次；Gravatar 请求加 8 秒超时。
+- **窗口标题版本号丢失**：静态 HTML 标题会把主进程设置的 `OpenINTJ v<版本>`
+  盖掉。渲染层启动时用构建注入的包版本同步 `document.title`（版本单一来源
+  为 `package.json`），桌面 e2e smoke 恢复 10/10。
 - **封面/生图不再误走 Hy4 对话**：分类器只分任务类型，不会把请求切到生图模型。封面图、海报、配图
   现在在进入 Hy4 ReAct 之前识别，改调 TokenHub `hy-image-v3`；未开通或失败则落盘 SVG，不再空耗 180s。
   TokenHub 402（未开通后付费）会把控制台开通链接写进回复，不再误报「当前对话模型不是生图模型」。
@@ -28,15 +55,140 @@
 
 ### Changed
 
+- **剥离内嵌 VSCodium IDE**：基于使用体验与后续场景判断，IDE 不是桌面端最重要的
+  设施，本批整体移除：删除主进程 `VscodiumHost` / reh-web 覆盖层、`vendor/vscodium-server`
+  与下载脚本、`IDE_*` IPC 通道与 preload 接口；左区回到自研 `WorkspaceWorkbench`
+  （文件树 + 预览），右栏 Agent 不变。`pnpm vscodium:fetch` 脚本同步下线。
+- **分割线统一 1px**：外壳与 VSCodium sash / part 边框都限制为 1 像素。
+- **IDE 状态栏并入工作台标题栏**：工作台就绪后不再叠一层「工作台已就绪」条，只保留 VSCodium 导航栏。
+- **桌面改为 VSCodium 工作台 + 右栏 Agent**：左侧是 VSCodium reh-web（`WebContentsView`，令牌不出渲染层）；右侧 380px 为工作区开关、对话、任务与设置。去掉内嵌 Monaco。工作台直读写工作区磁盘，不经过 Agent `write_file` 门禁（外部产品边界）。未 `pnpm vscodium:fetch` 时显示未安装，不影响对话。
 - 桌面默认对话模型改为腾讯混元 **Hy4 Preview**（`hy4-preview`）；Hy3 仍可在模型列表中选择。
   配置 `modelDefaultsVersion` 升到 2。混元 API 密钥可在 Hy3 / Hy4 配置档之间复用。
 
 ### Added
 
+- **工作台只读强化（剥离 IDE 后的左区细化）**：资源管理器加过滤/快速打开
+  （文件名前缀 > 名称 > 路径排序，回车打开首个匹配）；工作台加「最近打开」
+  文件条快速切换；文件预览加 Markdown 渲染（安全子集解析器，原始 HTML 只
+  作字面文本、`javascript:` 链接降级）与源码切换、图片适应/1:1 缩放切换。
+  写文件继续只走 Agent `write_file` 门禁，本面不做任何编辑。
+- **身份深化（RFC-020）**：主身份（第一位规范人）的主邮箱/姓名自动回写个人
+  档案 identity 段（provenance `identity-graph`，用户手写条目永不被覆盖）；
+  `identity.json` 图谱纳入 RFC-019 跨端同步 bundle（按人员/账号 id 并集合并，
+  旧 bundle 无 identity 段仍可导入）。
+- **身份打通（RFC-020）**：新增 `@openintj/identity` 包。用一个邮箱 / 手机号 /
+  微信号作种子拉起本人分散在各应用、社区、工具的账号：邮箱查 Gravatar 公开
+  资料（只发邮箱哈希），手机号/微信号没有合法公开反查、只能命中本机邮件/
+  日历/笔记语料，另可手动登记。全部走「候选 → 勾选确认 → 入图」流程，已被
+  他人占用的账号值不能静默搬家（冲突报错）；图谱存 `<dataDir>/identity.json`。
+  server 新增 `/api/identity/*`，桌面右栏新增「身份」tab。
+- **桌面语音输入（RFC-019 收尾）**：对话输入框加麦克风按钮，点击开始/停止
+  录音（单次上限 120 秒），转写文本回填输入框待检查修改后再发送，绝不自动
+  发送。主进程新增权限策略：只放行主窗口的麦克风请求，其余权限一律拒绝。
+  未配置 STT 时给内联提示（`OPENINTJ_STT_URL` / `OPENINTJ_STT=mock`）。
+- **Subagent 子会话工具收窄（RFC-012 §3）**：子智能体不再继承父级全部工具：
+  默认只能用只读工具（读文件/搜索/只读连接器/网页搜索等），写文件、执行命令、
+  外发全部不可见也不可调用；宿主可经 `subagentMaxRisk` /
+  `OPENINTJ_SUBAGENT_MAX_RISK` 调高上限，模型也可在上限内用 `delegate_task`
+  的 `tools` 参数再收窄。ToolHub 新增硬上限 cap（子会话内选技能不能突破），
+  有效工具名单记入子智能体运行记录。
+- **桌面「系统」运维聚合页**：右栏新增 tab，集中展示此前只有 IPC 的四块面：
+  连接器状态（名称/健康/工具数）、TaskPool 任务检查点（节点进度，running 时可
+  直接恢复/取消）、通知通道（状态/已发送数 + 测试发送）、子智能体运行记录
+  （任务/状态/结果摘要）。检查点与子智能体在本页可见时每 5 秒自动刷新，切走
+  tab 即停止；其余靠打开拉取与手动刷新。
+- **RFC-013 grants 持久化**：显式创建的能力授权现落盘到 `<dataDir>/grants.json`
+  （server/desktop real 模式自动启用），重启后仍有效；审批时顺带铸造的授权
+  只留会话内，不会因点过一次「允许」就跨重启变永久授权。损坏的 grants 文件
+  不阻塞启动（起空），过期授权加载/写入时自动清理。
+- **RFC-012 overflow 触发（自动压缩恢复）**：LLM 在对话中途报上下文超限时，
+  ReAct 经宿主回调自动把旧历史压成摘要、就地替换后重试一次（本轮已执行的
+  工具步骤不重跑），恢复成功打 `metrics.overflowRecovered = 1` 并在 journal
+  留下 `trigger: "overflow"` 的 `session.compacted` 事件；压不动或二次超限则
+  抛出原始错误。错误识别为双层：Hunyuan/Ollama 适配器抛结构化
+  `CONTEXT_OVERFLOW`，Core 正则分类兜底未知 provider。仅覆盖三端主对话路径。
+- **RFC-019 语音输入 + 跨端同步**：新包 `@openintj/voice`（OpenAI 兼容
+  `/audio/transcriptions` HTTP 提供者 + mock，env `OPENINTJ_STT_URL/KEY/MODEL`
+  或 `OPENINTJ_STT=mock`；未配置时 server 返回 503、桌面 IPC 返回
+  `stt_not_configured`，不假装可用）与 `@openintj/sync`（Bundle v1 纯 JSON：
+  档案按 (section,key) 后写胜 + user 条目不被覆盖 + dismissed 墓碑并集删条目，
+  定时任务按 id 并集、已有任务保留本地）。三端暴露 `stt` 与
+  `exportSyncBundle()/importSyncBundle()`；server `GET /api/sync/export`、
+  `POST /api/sync/import`、`POST /api/voice/transcribe`；桌面 `sync.*` /
+  `voice.transcribe` IPC + preload。渲染层录音 UI 未做（另行设计）。
+- **RFC-018 消息/移动通道**：新包 `@openintj/channels`（零依赖）把 Scheduler
+  生命周期事件扇出到出站通知通道：webhook 通道（POST JSON + 可选 Bearer，
+  移动端经 ntfy 等推送网关接入）+ 内存通道；通道级 kinds 过滤与失败隔离，
+  坏通道不拖垮调度。配置只走 `OPENINTJ_CHANNELS`（JSON），三端暴露
+  `channels`；server `GET /api/channels`、`POST /api/channels/:id/test`；
+  桌面 `channels.*` IPC + preload。仅出站通知，不做入站命令面。
+- **RFC-012 §3 进程内 Subagent**：`@openintj/runtime` 新增 SubagentSpawner
+  （深度 1、并发 2、超时 120s，AsyncLocalStorage 防嵌套），`delegate_task`
+  工具为 write 风险走审批；默认关闭（`OPENINTJ_SUBAGENTS=1` 启用），子会话
+  journal 独立 conversation，父会话只见摘要结果。server `GET /api/subagents`、
+  桌面 `subagents.list` IPC 可查运行记录（暂无面板）。工具白名单收窄为后续项。
+- **RFC-017 可写连接器（第一批，本地文件后端）**：在 RFC-016 只读面之上加写工具，
+  默认不存在、显式 opt-in（`OPENINTJ_CONNECTORS_WRITE=1`）后才出现，且
+  `filesystem.write` + `idempotent: false` 经 RFC-013 归类为 write 风险、首次调用走
+  审批：笔记新建（拒覆盖）/追加/删除（移入 `.trash` 可恢复，日历 ICS 新建/按 UID
+  删除（同目录临时文件原子重写 + `.bak` 备份）、邮件只写独立草稿 mbox
+  （`OPENINTJ_MAIL_DRAFT_MBOX`，只存不发）。沙箱、扩展名白名单、写大小上限与读面一致。
+- **RFC-012 第一段：真实 /compact + 任务检查点**：journal 新增 `session.compacted`
+  投影事件，`deriveHistory` 把旧轮次折叠为一条 `[历史摘要]`（事件永不改写、UI 视图
+  不变）；`@openintj/runtime` 新增 Compactor，`pressure`（token 估算超阈值，默认 24k）
+  与 `command`（真实 `/compact`）双触发，摘要失败 fail-soft 不阻塞对话。三端默认开启
+  （`OPENINTJ_COMPACT=0` 可关），`compaction: { pressureTokens, keepRecentTurns }` 可调。
+  TaskPool 检查点：`TaskStore.listRuns` + `TaskPool.listCheckpoints / resumeRun /
+  cancelRun`（保留已完成节点续跑），server 提供 `GET /api/taskpool/checkpoints` 与
+  `POST /api/taskpool/runs/:id/resume|cancel`，桌面提供 `taskpool.*` IPC（暂无面板）。
+  RFC-012 的 Fs/Shell 缝（§2）仍为 Deferred；Subagent（§3）已随后落地（见下）。
+- **RFC-016 连接器框架 + MCP + 只读连接器**：新包 `@openintj/connectors` 把外部数据源
+  变成 ToolHub 工具（统一走治理门禁，无旁路）：笔记（本地目录 list/read/search）、
+  日历（.ics 解析 + RRULE 展开，近期日程/搜索）、邮件（mbox 列表/读取/搜索）三个只读
+  连接器，以及 MCP stdio 客户端（工具命名空间 `mcp_<server>_<tool>` 注册进 ToolHub，
+  未知语义默认 write 风险、首次调用走审批）。配置只走 `OPENINTJ_NOTES_DIR` /
+  `OPENINTJ_CALENDAR_ICS` / `OPENINTJ_MAIL_MBOX` / `OPENINTJ_MCP_SERVERS`，不落盘凭据；
+  三端统一暴露 `connectors`/`initConnectors()`，server 提供 `GET /api/connectors`，
+  桌面提供 `connectors.list` IPC。
+- **RFC-015 Scheduler + 持久任务 + 通知**：新包 `@openintj/scheduler` 让系统从反应式变
+  主动式：一次性/间隔/每日（本地时间）三类触发，任务持久化到 `<dataDir>/schedules.json`，
+  到点经 `AgentHandle.run()` 投递为普通对话轮次（走 Journal/治理/审批）；离线错过只补跑
+  一次、安静时段顺延、失败退避重试、成功次数上限自动停用。三端统一暴露 `scheduler`；
+  桌面新增「定时」页 + `schedule.*` IPC + `EVT_SCHEDULE` 事件，server 提供
+  `/api/schedules` CRUD，`OPENINTJ_SCHEDULER=0` 可关。
+- **RFC-014 个人档案（记忆控制面）**：新包 `@openintj/profile` 在 Dormant 推断画像之上加
+  结构化、可编辑层：身份/偏好/目标/项目/关系/约束/习惯/备注八个分区，条目带来源
+  （user/dormant/import）、出处与有效期；同 key 用户显式值永不被推断覆盖，删除推断条目后
+  不再重新导入。档案接管 RFC-011 的 user-persona 段渲染（排在推断之前），三端统一暴露
+  `profile`；桌面存 `<dataDir>/profile.json` 并提供「档案」页（新增/删除/导出），server 提供
+  `GET/POST/DELETE /api/profile` 与 `/api/profile/export`，`OPENINTJ_PROFILE=0` 可关。
+- **RFC-013 交互审批与能力授权**：治理平面加第二道门——工具按 permissions 分
+  read/write/execute/external 风险级，配置级需人工批准（无 broker 时 fail-closed），
+  批准可铸带 scope/有效期的 CapabilityGrant 免后续打扰，授权可随时撤销。桌面默认开启
+  write/execute 审批（`ApprovalBanner` + `approval.*`/`grants.*` IPC），server 提供
+  `/api/approvals`、`/api/grants`，三端统一暴露 `approvals`/`grants`。
+- **RFC-011 统一 Runtime 与提示词段**：新包 `@openintj/runtime` 提供 `PromptSectionRegistry`
+  （RFC-006 顺序锁：Product Behavior → Persona → Skills → plan-advice → Memory）与三端共用的
+  `prepareRunPrelude`（preflight → RFC-008 → 分类 → 规划顾问）。规划建议改为 system 段，
+  不再拼进用户 query 与 Journal 的 user 事件；三端 agent 统一暴露 `prompt`。
+- **RFC-010 斜杠命令 / AgentHandle / ASSISTANT_DELTA**：`/clear` 与 `/compact`（占位）走命令表，
+  三端 `run()` 在 RFC-008 结构化之前匹配，未注册的 `/foo` 仍进模型。活 `AgentHandle`
+  提供 followup / steer / inject / cancel；循环消费 `tao.beforeThink` 与 `react.beforeAction`
+  的 replace/cancel。桌面新增 `commands.invoke` / `agent.steer|inject|cancel` 与
+  `EVT_ASSISTANT_DELTA`（无 provider 流时发一条全量 delta）。
+- **RFC-009 Session Journal**：每个 conversation 一份追加写事件日志（`turn.*` / user / thought /
+  tool / assistant / `session.cleared`）。Tao/ReAct 可选 fail-soft sink；下一轮 history 只从
+  `deriveHistory` 投影，ChatPanel 从 `deriveChatMessages` 投影（用户句保留 originalInput）。
+  桌面 `workbench.sqlite` 新增 `journal_events`（`user_version=4`），旧 `messages` 一次性
+  backfill 后双写；`/clear` 追加 `session.cleared`。CLI/server 用内存 journal，不新建 SQLite。
+  不引入 Cordis、JSONL、多代 session 文件。
+- **RFC-012 Deferred**：压缩驱动、Fs/Shell 缝、进程内 subagent 确认前不动手。
+  不引入 Cordis、不替换 TAO/ReAct。
+- **`/clear` 清空当前对话**：走 RFC-010 命令表（`session.cleared`），renderer 只看 CHAT 返回的
+  `command` 字段，不再特判输入字符串。
 - **关闭工作区 / 同时只开一个**：侧栏可关闭当前工作区（归档，不删磁盘文件）。打开新目录会先关掉当前工作区；同一路径再打开会恢复原来的任务和对话。
-- **桌面 Monaco 编辑器**：聊天下方常驻编辑器（目录树 + 标签 + Monaco）。加载工作区后即可点文件查看
-  / 编辑文本（含 SVG）；Ctrl/Cmd+S 保存走 `WORKSPACE_WRITE` 沙箱，与 Agent `write_file` 同源。
-  栅格图仍用只读预览。
+- **桌面 VSCodium 工作台**：预拉 `reh-web` 到 `vendor/vscodium-server`（约 94MB，不入库），主进程直启
+  `node out/server-main.js`（127.0.0.1 + 随机令牌）。打开工作区即启动，关闭则杀掉进程树。
 - **工作区预览与目录**：桌面右侧「工作区」页可浏览沙箱文件树，对话里的产物路径可点开；
   图片/文本在聊天下方预览，左侧「打开工作区目录」调用系统文件管理器。Explorer / Preview
   组件经 `WorkspaceClient` 注入，后续 IDE 壳可原样复用。

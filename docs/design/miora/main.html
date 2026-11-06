@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="preconnect" href="https://unpkg.com" />
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <script src="https://unpkg.com/@fortawesome/fontawesome-free@6.7.2/js/all.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    * {
+      scrollbar-width: none;
+      scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+    }
+  </style>
+</head>
+
+<body class="h-screen overflow-hidden bg-[#111310] font-sans text-[#20231f] antialiased">
+<link rel="stylesheet" href="https://fonts.googleapis.cn/css2?family=IBM+Plex+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&display=swap" />
+<style type="text/tailwindcss">
+  @theme {
+    --font-sans: "Manrope", sans-serif;
+    --font-mono: "IBM Plex Mono", monospace;
+    --color-ink: #20231f;
+    --color-muted: #73796f;
+    --color-line: #e5e7df;
+    --color-canvas: #f6f6f1;
+    --color-panel: #fbfbf8;
+    --color-signal: #ca5b3f;
+    --color-moss: #425d48;
+  }
+</style>
+<style>
+  *{box-sizing:border-box} button{cursor:pointer}.scrollbar::-webkit-scrollbar{width:6px}.scrollbar::-webkit-scrollbar-thumb{background:#d8d9d1;border-radius:9px}
+  .dot-grid{background-image:radial-gradient(#d7d8d1 0.7px,transparent 0.7px);background-size:16px 16px}
+</style>
+<div class="flex h-screen min-w-[1180px] flex-col bg-[#efefe9] p-2">
+  <!-- Desktop window chrome -->
+  <div class="flex h-9 shrink-0 items-center rounded-t-[10px] bg-[#20231f] px-3 text-[11px] text-white/60">
+    <div class="flex gap-1.5"><span class="size-2.5 rounded-full bg-[#ef6a5a]"></span><span class="size-2.5 rounded-full bg-[#e5b34c]"></span><span class="size-2.5 rounded-full bg-[#72b36f]"></span></div>
+    <div class="ml-6 flex gap-5"><span>File</span><span>Edit</span><span>View</span><span>Window</span></div>
+    <div class="absolute left-1/2 -translate-x-1/2 font-medium tracking-wide text-white/70">openINTJ · Personal Agent</div>
+    <div class="ml-auto flex items-center gap-3"><i data-lucide="search" class="size-3.5"></i><i data-lucide="panel-right" class="size-3.5"></i></div>
+  </div>
+
+  <div class="flex min-h-0 flex-1 overflow-hidden rounded-b-[10px] border border-[#d7d8d1] bg-canvas shadow-[0_18px_60px_rgba(24,27,22,.16)]">
+    <!-- Navigation rail -->
+    <aside class="flex w-[250px] shrink-0 flex-col border-r border-line bg-[#f1f1eb]">
+      <div class="flex h-[62px] items-center border-b border-line px-4">
+        <div class="grid size-8 place-items-center rounded-lg bg-ink text-[12px] font-bold text-white">IN</div>
+        <div class="ml-3"><div class="text-[13px] font-bold tracking-tight">openINTJ</div><div class="text-[10px] text-muted">LOCAL WORKSPACE</div></div>
+        <button class="ml-auto grid size-8 place-items-center rounded-md hover:bg-black/5"><i data-lucide="settings-2" class="size-4"></i></button>
+      </div>
+      <div class="p-3">
+        <button class="flex h-10 w-full items-center gap-2.5 rounded-lg bg-ink px-3 text-[12px] font-semibold text-white shadow-sm"><i data-lucide="plus" class="size-4"></i> New task <span class="ml-auto font-mono text-[9px] text-white/45">⌘ N</span></button>
+      </div>
+      <nav class="px-3 text-[12px]">
+        <div class="mb-1 flex h-9 items-center gap-2.5 rounded-md bg-white/80 px-3 font-semibold text-ink shadow-[inset_3px_0_0_#ca5b3f]"><i data-lucide="message-square" class="size-4"></i> Sessions <span class="ml-auto text-[10px] text-muted">12</span></div>
+        <div class="flex h-9 items-center gap-2.5 rounded-md px-3 text-muted hover:bg-white/70"><i data-lucide="list-checks" class="size-4"></i> Tasks</div>
+        <div class="flex h-9 items-center gap-2.5 rounded-md px-3 text-muted hover:bg-white/70"><i data-lucide="boxes" class="size-4"></i> Artifacts</div>
+      </nav>
+      <div class="mt-5 flex items-center px-4 text-[10px] font-bold uppercase tracking-[.13em] text-muted">Recent <button class="ml-auto"><i data-lucide="chevron-down" class="size-3"></i></button></div>
+      <div class="mt-2 space-y-1 px-2">
+        <button class="w-full rounded-lg bg-white px-3 py-2.5 text-left shadow-[0_1px_2px_rgba(20,20,18,.04)]"><div class="truncate text-[11px] font-semibold">Optimize cover export pipeline</div><div class="mt-1 flex items-center text-[9px] text-muted"><span class="mr-1.5 size-1.5 rounded-full bg-[#d39b42]"></span>Running · 3m</div></button>
+        <button class="w-full rounded-lg px-3 py-2.5 text-left hover:bg-white/60"><div class="truncate text-[11px] font-medium">Review harness task orchestration</div><div class="mt-1 text-[9px] text-muted">Yesterday</div></button>
+        <button class="w-full rounded-lg px-3 py-2.5 text-left hover:bg-white/60"><div class="truncate text-[11px] font-medium">Prepare project structure notes</div><div class="mt-1 text-[9px] text-muted">Nov 4</div></button>
+      </div>
+      <div class="mt-auto border-t border-line p-3">
+        <div class="flex items-center gap-2.5 rounded-lg px-2 py-2"><div class="grid size-7 place-items-center rounded-full bg-[#dce2d9] text-[10px] font-bold">B</div><div><div class="text-[10px] font-semibold">Benjamin</div><div class="text-[9px] text-muted">Local workspace</div></div><i data-lucide="chevrons-up-down" class="ml-auto size-3 text-muted"></i></div>
+      </div>
+    </aside>
+
+    <!-- Main conversation -->
+    <main class="flex min-w-0 flex-1 flex-col bg-panel">
+      <header class="flex h-[62px] shrink-0 items-center border-b border-line px-6">
+        <div class="min-w-0"><div class="flex items-center gap-2"><h1 class="truncate text-[14px] font-bold tracking-tight">Optimize cover export pipeline</h1><span class="rounded border border-[#cdd4c9] bg-[#edf1eb] px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider text-moss">Active</span></div><p class="mt-0.5 text-[10px] text-muted">Workspace / OpenINTJ · started 3 minutes ago</p></div>
+        <div class="ml-auto flex items-center gap-1"><button class="grid size-8 place-items-center rounded-md border border-line bg-white hover:border-[#bdc0b7]"><i data-lucide="bookmark" class="size-3.5"></i></button><button class="grid size-8 place-items-center rounded-md hover:bg-black/5"><i data-lucide="more-horizontal" class="size-4"></i></button></div>
+      </header>
+      <div class="scrollbar min-h-0 flex-1 overflow-y-auto">
+        <div class="mx-auto max-w-[790px] px-8 pb-36 pt-8">
+          <section class="mb-7 flex gap-4"><div class="grid size-7 shrink-0 place-items-center rounded-full border border-line bg-white text-[10px] font-bold">B</div><div class="min-w-0"><div class="mb-1 text-[10px] font-bold text-muted">YOU <span class="ml-2 font-normal">10:42</span></div><p class="text-[14px] leading-6 text-ink">Review the current cover export flow. Keep the SVG source, generate PNG and preview variants, then verify the output files in the artifact directory.</p></div></section>
+          <section class="flex gap-4"><div class="grid size-7 shrink-0 place-items-center rounded-[9px] bg-ink text-[9px] font-bold text-white">IN</div><div class="min-w-0 flex-1"><div class="mb-3 flex items-center text-[10px] font-bold text-muted">OPENINTJ <span class="ml-2 font-normal">10:42</span><span class="ml-auto inline-flex items-center gap-1.5 font-medium text-moss"><span class="size-1.5 animate-pulse rounded-full bg-[#5e8a66]"></span>Working</span></div>
+            <div class="mb-4 rounded-xl border border-line bg-[#f5f5ef] p-3.5">
+              <div class="flex items-center gap-2 text-[11px] font-semibold"><i data-lucide="route" class="size-3.5 text-signal"></i>Execution plan <span class="ml-auto font-normal text-muted">3 of 4 steps</span></div>
+              <div class="mt-3 grid grid-cols-4 gap-2 text-[9px]">
+                <div class="rounded-md border border-[#cdd8cb] bg-white px-2 py-2 text-moss"><i data-lucide="check" class="mb-1 size-3"></i>Inspect source</div>
+                <div class="rounded-md border border-[#cdd8cb] bg-white px-2 py-2 text-moss"><i data-lucide="check" class="mb-1 size-3"></i>Render SVG</div>
+                <div class="rounded-md border border-[#e4c6ad] bg-[#fffaf5] px-2 py-2 text-[#955432]"><span class="mb-1 block size-2.5 animate-pulse rounded-full border-2 border-signal border-t-transparent"></span>Create PNG</div>
+                <div class="rounded-md border border-line bg-transparent px-2 py-2 text-muted"><i data-lucide="circle" class="mb-1 size-3"></i>Verify output</div>
+              </div>
+            </div>
+            <div class="mb-4 overflow-hidden rounded-xl border border-line bg-[#22251f] text-[#d9dfd4] shadow-sm">
+              <div class="flex h-9 items-center border-b border-white/10 px-3 font-mono text-[9px] text-white/55"><i data-lucide="terminal" class="mr-2 size-3"></i>TOOL · SHELL <span class="ml-auto text-[#d6a65b]">running · 8s</span></div>
+              <div class="space-y-1 px-4 py-3 font-mono text-[10px] leading-5"><p><span class="text-[#88a98d]">$</span> node scripts/export-cover.js --all</p><p class="text-white/45">Reading artifacts/3128030c.../cover.svg</p><p class="text-white/45">Rendered <span class="text-white/80">cover.png</span> · 1600×900</p><p><span class="inline-block h-3 w-1.5 animate-pulse bg-[#d6a65b]"></span></p></div>
+            </div>
+            <div class="rounded-xl border border-line bg-white p-5 shadow-[0_2px_10px_rgba(30,32,27,.04)]">
+              <div class="mb-3 flex items-center gap-2"><div class="size-1.5 rounded-full bg-moss"></div><span class="text-[10px] font-bold uppercase tracking-[.12em] text-moss">Current finding</span></div>
+              <p class="text-[14px] leading-6">The source SVG is valid and the first PNG export completed successfully. I’m generating the lightweight preview next, then I’ll compare dimensions and report the final artifact paths.</p>
+            </div>
+          </div></section>
+        </div>
+      </div>
+      <!-- composer -->
+      <div class="absolute bottom-[22px] left-[282px] right-[330px] z-10">
+        <div class="mx-auto max-w-[790px] rounded-[14px] border border-[#cfd1c9] bg-white p-2 shadow-[0_14px_40px_rgba(35,37,32,.14)]">
+          <textarea aria-label="Message openINTJ" class="h-12 w-full resize-none bg-transparent px-3 py-2 text-[12px] outline-none placeholder:text-[#9b9e96]" placeholder="Ask openINTJ or type / for actions…"></textarea>
+          <div class="flex items-center px-1 pb-1"><button class="grid size-8 place-items-center rounded-md text-muted hover:bg-black/5"><i data-lucide="paperclip" class="size-4"></i></button><button class="flex h-8 items-center gap-1.5 rounded-md px-2 text-[10px] text-muted hover:bg-black/5"><i data-lucide="at-sign" class="size-3.5"></i>Context</button><div class="ml-auto mr-2 font-mono text-[9px] text-muted">⌘ ↵</div><button class="grid size-8 place-items-center rounded-lg bg-ink text-white"><i data-lucide="arrow-up" class="size-4"></i></button></div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Context inspector -->
+    <aside class="w-[320px] shrink-0 border-l border-line bg-[#f4f4ee]">
+      <div class="flex h-[62px] items-center border-b border-line px-4"><span class="text-[11px] font-bold">Task context</span><button class="ml-auto grid size-7 place-items-center rounded-md hover:bg-black/5"><i data-lucide="panel-right-close" class="size-3.5"></i></button></div>
+      <div class="scrollbar h-[calc(100%-62px)] overflow-y-auto p-4">
+        <div class="rounded-xl border border-line bg-white p-4"><div class="flex items-center justify-between"><span class="text-[9px] font-bold uppercase tracking-[.13em] text-muted">Agent status</span><span class="rounded-full bg-[#edf3eb] px-2 py-1 text-[9px] font-semibold text-moss">Executing</span></div><div class="mt-4 flex items-end gap-2"><span class="text-[24px] font-semibold tracking-tight">03:18</span><span class="mb-1 text-[9px] text-muted">elapsed</span></div><div class="mt-3 h-1 overflow-hidden rounded-full bg-[#e8e9e3]"><div class="h-full w-3/4 rounded-full bg-moss"></div></div><div class="mt-3 flex justify-between text-[9px] text-muted"><span>Step 3 / 4</span><span>1 tool active</span></div></div>
+        <div class="mt-5 flex items-center"><h2 class="text-[10px] font-bold uppercase tracking-[.13em] text-muted">Artifacts</h2><button class="ml-auto text-[9px] text-muted">Open folder</button></div>
+        <div class="mt-2 overflow-hidden rounded-xl border border-line bg-white">
+          <div class="flex items-center gap-3 border-b border-line p-3"><div class="grid size-8 place-items-center rounded-md bg-[#f1e9e4] text-signal"><i data-lucide="file-code-2" class="size-4"></i></div><div class="min-w-0"><div class="truncate text-[10px] font-semibold">cover.svg</div><div class="mt-0.5 font-mono text-[8px] text-muted">18 KB · source</div></div><i data-lucide="check" class="ml-auto size-3.5 text-moss"></i></div>
+          <div class="flex items-center gap-3 border-b border-line p-3"><div class="grid size-8 place-items-center rounded-md bg-[#e9eee7] text-moss"><i data-lucide="image" class="size-4"></i></div><div class="min-w-0"><div class="truncate text-[10px] font-semibold">cover.png</div><div class="mt-0.5 font-mono text-[8px] text-muted">1.2 MB · 1600×900</div></div><i data-lucide="check" class="ml-auto size-3.5 text-moss"></i></div>
+          <div class="flex items-center gap-3 p-3"><div class="grid size-8 place-items-center rounded-md bg-[#f4eee2] text-[#a26a28]"><i data-lucide="image" class="size-4"></i></div><div class="min-w-0"><div class="truncate text-[10px] font-semibold">cover_preview.svg</div><div class="mt-0.5 font-mono text-[8px] text-muted">Generating…</div></div><span class="size-3 animate-spin rounded-full border border-[#a26a28] border-t-transparent"></span></div>
+        </div>
+        <div class="mt-5"><h2 class="text-[10px] font-bold uppercase tracking-[.13em] text-muted">Runtime</h2><div class="mt-2 rounded-xl border border-line bg-white px-3 py-2 text-[9px]"><div class="flex justify-between border-b border-line py-2"><span class="text-muted">Model</span><span class="font-mono">hunyuan / hy3</span></div><div class="flex justify-between border-b border-line py-2"><span class="text-muted">Context</span><span class="font-mono">21.4k / 64k</span></div><div class="flex justify-between py-2"><span class="text-muted">Task pool</span><span class="font-mono">Enabled · 1</span></div></div></div>
+        <div class="mt-5 rounded-xl border border-dashed border-[#cfd1c9] p-3 text-[9px] leading-4 text-muted"><div class="mb-1 flex items-center gap-1.5 font-semibold text-ink"><i data-lucide="shield-check" class="size-3.5 text-moss"></i>Local-first execution</div>Files and tool output remain in this workspace unless you explicitly share them.</div>
+      </div>
+    </aside>
+  </div>
+</div>
+</body>
+<script>if (window.lucide) lucide.createIcons();</script>
+</html>

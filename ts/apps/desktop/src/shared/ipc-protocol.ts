@@ -18,6 +18,9 @@ export const ChatRequestSchema = z.object({
 });
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 
+export const isChatClearCommand = (text: string): boolean =>
+  /^\/clear(?:\s+history)?$/i.test(text.trim());
+
 export const StructuredTaskSchema = z.object({
   goal: z.string(),
   context: z.array(z.string()),
@@ -54,6 +57,384 @@ export const WorkspaceArtifactSchema = z.object({
 });
 export type WorkspaceArtifact = z.infer<typeof WorkspaceArtifactSchema>;
 
+export const SlashCommandResultSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("ok"), message: z.string().optional() }),
+  z.object({ kind: z.literal("error"), message: z.string() }),
+]);
+export type SlashCommandResultView = z.infer<typeof SlashCommandResultSchema>;
+
+export const CommandsInvokeRequestSchema = z.object({
+  text: z.string().min(1),
+  conversationId: z.string().min(1).optional(),
+});
+export type CommandsInvokeRequest = z.infer<typeof CommandsInvokeRequestSchema>;
+
+export const CommandsInvokeResponseSchema = z.object({
+  name: z.string(),
+  result: SlashCommandResultSchema,
+});
+export type CommandsInvokeResponse = z.infer<typeof CommandsInvokeResponseSchema>;
+
+export const AgentSteerRequestSchema = z.object({
+  conversationId: z.string().min(1),
+  message: z.string().min(1),
+});
+export type AgentSteerRequest = z.infer<typeof AgentSteerRequestSchema>;
+
+export const AgentCancelRequestSchema = z.object({
+  conversationId: z.string().min(1),
+  cause: z.enum(["user", "command", "dispose"]).default("user"),
+});
+export type AgentCancelRequest = z.infer<typeof AgentCancelRequestSchema>;
+
+// RFC-013 interactive approval + capability grants
+export const ToolRiskSchema = z.enum(["read", "write", "execute", "external"]);
+export type ToolRiskView = z.infer<typeof ToolRiskSchema>;
+
+export const ApprovalRequestViewSchema = z.object({
+  id: z.string(),
+  tool: z.string(),
+  risk: ToolRiskSchema,
+  params: z.record(z.string(), z.unknown()),
+  requestedAt: z.number(),
+});
+export type ApprovalRequestView = z.infer<typeof ApprovalRequestViewSchema>;
+
+export const ApprovalDecideRequestSchema = z.object({
+  id: z.string().min(1),
+  decision: z.enum(["approved", "denied"]),
+  reason: z.string().optional(),
+  grant: z
+    .object({ scope: z.string().optional(), ttlMs: z.number().positive().optional() })
+    .optional(),
+});
+export type ApprovalDecideRequest = z.infer<typeof ApprovalDecideRequestSchema>;
+
+export const CapabilityGrantViewSchema = z.object({
+  id: z.string(),
+  tool: z.string(),
+  risk: ToolRiskSchema,
+  scope: z.string().optional(),
+  expiresAt: z.number().optional(),
+  createdAt: z.number(),
+  label: z.string().optional(),
+});
+export type CapabilityGrantView = z.infer<typeof CapabilityGrantViewSchema>;
+
+export const GrantCreateRequestSchema = z.object({
+  tool: z.string().min(1),
+  risk: ToolRiskSchema,
+  scope: z.string().optional(),
+  ttlMs: z.number().positive().optional(),
+  label: z.string().optional(),
+});
+export type GrantCreateRequest = z.infer<typeof GrantCreateRequestSchema>;
+
+// RFC-014 personal profile (memory control plane)
+export const ProfileSectionSchema = z.enum([
+  "identity",
+  "preferences",
+  "goals",
+  "projects",
+  "relationships",
+  "constraints",
+  "habits",
+  "notes",
+]);
+export type ProfileSectionView = z.infer<typeof ProfileSectionSchema>;
+
+export const ProfileEntryViewSchema = z.object({
+  id: z.string(),
+  section: ProfileSectionSchema,
+  key: z.string(),
+  value: z.string(),
+  source: z.enum(["user", "dormant", "import"]),
+  provenance: z.string().optional(),
+  validUntil: z.number().optional(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type ProfileEntryView = z.infer<typeof ProfileEntryViewSchema>;
+
+export const ProfileUpsertRequestSchema = z.object({
+  section: ProfileSectionSchema,
+  key: z.string().min(1),
+  value: z.string(),
+  validUntil: z.number().positive().optional(),
+});
+export type ProfileUpsertRequest = z.infer<typeof ProfileUpsertRequestSchema>;
+
+// RFC-015 scheduler (persistent jobs + notifications)
+export const ScheduleTriggerSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("once"), at: z.number() }),
+  z.object({
+    kind: z.literal("interval"),
+    everyMs: z.number().int().min(1_000),
+    startAt: z.number().optional(),
+  }),
+  z.object({ kind: z.literal("daily"), time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/) }),
+]);
+export type ScheduleTriggerView = z.infer<typeof ScheduleTriggerSchema>;
+
+export const ScheduledJobViewSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  prompt: z.string(),
+  conversationId: z.string().optional(),
+  trigger: ScheduleTriggerSchema,
+  enabled: z.boolean(),
+  maxRuns: z.number().optional(),
+  createdAt: z.number(),
+  lastRunAt: z.number().optional(),
+  nextRunAt: z.number().optional(),
+  runCount: z.number(),
+  lastStatus: z.enum(["completed", "failed"]).optional(),
+  lastError: z.string().optional(),
+});
+export type ScheduledJobView = z.infer<typeof ScheduledJobViewSchema>;
+
+export const ScheduleAddRequestSchema = z.object({
+  title: z.string().min(1),
+  prompt: z.string().min(1),
+  conversationId: z.string().optional(),
+  trigger: ScheduleTriggerSchema,
+  enabled: z.boolean().optional(),
+  maxRuns: z.number().int().positive().optional(),
+});
+export type ScheduleAddRequest = z.infer<typeof ScheduleAddRequestSchema>;
+
+export const ScheduleUpdateRequestSchema = z.object({
+  title: z.string().min(1).optional(),
+  prompt: z.string().min(1).optional(),
+  conversationId: z.string().optional(),
+  trigger: ScheduleTriggerSchema.optional(),
+  enabled: z.boolean().optional(),
+  maxRuns: z.number().int().positive().optional(),
+});
+export type ScheduleUpdateRequest = z.infer<typeof ScheduleUpdateRequestSchema>;
+
+// RFC-020 identity graph (proposal-confirm account linking)
+export const IdentitySeedKindSchema = z.enum(["email", "phone", "wechat", "username", "url"]);
+export type IdentitySeedKindView = z.infer<typeof IdentitySeedKindSchema>;
+
+export const LinkedAccountViewSchema = z.object({
+  id: z.string(),
+  platform: z.string(),
+  kind: IdentitySeedKindSchema,
+  value: z.string(),
+  url: z.string().optional(),
+  source: z.enum(["gravatar", "mail", "calendar", "notes", "manual"]),
+  evidence: z.string(),
+  confidence: z.number(),
+  verifiedAt: z.number().nullable(),
+  createdAt: z.number(),
+});
+export type LinkedAccountView = z.infer<typeof LinkedAccountViewSchema>;
+
+export const IdentityPersonViewSchema = z.object({
+  id: z.string(),
+  displayName: z.string(),
+  accounts: z.array(LinkedAccountViewSchema),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type IdentityPersonView = z.infer<typeof IdentityPersonViewSchema>;
+
+export const IdentityProposalViewSchema = z.object({
+  id: z.string(),
+  personId: z.string().nullable(),
+  groupKey: z.string().optional(),
+  displayName: z.string().optional(),
+  account: z.object({
+    platform: z.string(),
+    kind: IdentitySeedKindSchema,
+    value: z.string(),
+    url: z.string().optional(),
+    source: z.enum(["gravatar", "mail", "calendar", "notes", "manual"]),
+    evidence: z.string(),
+    confidence: z.number(),
+    verifiedAt: z.number().nullable(),
+  }),
+});
+export type IdentityProposalView = z.infer<typeof IdentityProposalViewSchema>;
+
+export const IdentityResolveRequestSchema = z.object({
+  kind: IdentitySeedKindSchema.optional(),
+  value: z.string().min(1),
+});
+export type IdentityResolveRequest = z.infer<typeof IdentityResolveRequestSchema>;
+
+export const IdentityResolveResultViewSchema = z.object({
+  seed: z.object({ kind: IdentitySeedKindSchema, value: z.string() }),
+  proposals: z.array(IdentityProposalViewSchema),
+  reports: z.array(
+    z.object({
+      resolverId: z.string(),
+      ok: z.boolean(),
+      detail: z.string().optional(),
+      count: z.number(),
+    }),
+  ),
+});
+export type IdentityResolveResultView = z.infer<typeof IdentityResolveResultViewSchema>;
+
+export const IdentityConfirmRequestSchema = z.object({
+  proposals: z.array(IdentityProposalViewSchema).min(1),
+});
+export type IdentityConfirmRequest = z.infer<typeof IdentityConfirmRequestSchema>;
+
+export const IdentityAssertRequestSchema = z.object({
+  personId: z.string().nullable().optional(),
+  displayName: z.string().optional(),
+  platform: z.string().min(1),
+  kind: IdentitySeedKindSchema,
+  value: z.string().min(1),
+  url: z.string().optional(),
+  evidence: z.string().optional(),
+});
+export type IdentityAssertRequest = z.infer<typeof IdentityAssertRequestSchema>;
+
+export const IdentityUnlinkRequestSchema = z.object({
+  accountId: z.string().min(1),
+});
+export type IdentityUnlinkRequest = z.infer<typeof IdentityUnlinkRequestSchema>;
+
+export const SchedulerEventViewSchema = z.object({
+  kind: z.enum(["fired", "completed", "failed", "deferred"]),
+  job: ScheduledJobViewSchema,
+  at: z.number(),
+  lateMs: z.number().optional(),
+  error: z.string().optional(),
+  willRetry: z.boolean().optional(),
+});
+export type SchedulerEventView = z.infer<typeof SchedulerEventViewSchema>;
+
+// RFC-016 connectors (status surface; tools stay agent-internal)
+export const ConnectorStatusViewSchema = z.object({
+  id: z.string(),
+  displayName: z.string(),
+  ok: z.boolean(),
+  detail: z.string().optional(),
+  toolCount: z.number(),
+});
+export type ConnectorStatusView = z.infer<typeof ConnectorStatusViewSchema>;
+
+// RFC-012 TaskPool checkpoints (durable run snapshots + manual control)
+export const TaskRunStateSchema = z.enum([
+  "pending",
+  "ready",
+  "running",
+  "completed",
+  "failed",
+  "timed_out",
+  "cancelled",
+]);
+export type TaskRunStateView = z.infer<typeof TaskRunStateSchema>;
+
+export const TaskCheckpointNodeViewSchema = z.object({
+  taskId: z.string(),
+  state: TaskRunStateSchema,
+  attempt: z.number(),
+  result: z.unknown().optional(),
+  error: z.string().optional(),
+  updatedAt: z.number(),
+});
+export type TaskCheckpointNodeView = z.infer<typeof TaskCheckpointNodeViewSchema>;
+
+export const TaskCheckpointViewSchema = z.object({
+  runId: z.string(),
+  planId: z.string(),
+  status: z.enum(["running", "completed", "failed", "cancelled"]),
+  graph: z.object({
+    planId: z.string(),
+    goalIntent: z.string(),
+    goalInput: z.string().optional(),
+    nodes: z.array(
+      z.object({
+        id: z.string(),
+        deps: z.array(z.string()),
+        action: z.string(),
+        description: z.string(),
+        timeoutMs: z.number().optional(),
+      }),
+    ),
+  }),
+  nodes: z.array(TaskCheckpointNodeViewSchema),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type TaskCheckpointView = z.infer<typeof TaskCheckpointViewSchema>;
+
+export const TaskRunResultViewSchema = z.object({
+  runId: z.string(),
+  planId: z.string(),
+  status: z.enum(["completed", "failed", "cancelled"]),
+  results: z.record(z.string(), z.unknown()),
+  errors: z.record(z.string(), z.string()),
+  states: z.record(z.string(), TaskRunStateSchema),
+  attempts: z.record(z.string(), z.number()),
+});
+export type TaskRunResultView = z.infer<typeof TaskRunResultViewSchema>;
+
+// RFC-012 §3 subagents (records surface; spawning stays model-side)
+export const SubagentRecordViewSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  task: z.string(),
+  childConversationId: z.string(),
+  status: z.enum(["running", "completed", "failed", "cancelled"]),
+  startedAt: z.number(),
+  endedAt: z.number().optional(),
+  finalAnswer: z.string().optional(),
+  error: z.string().optional(),
+});
+export type SubagentRecordView = z.infer<typeof SubagentRecordViewSchema>;
+
+// RFC-018 outbound channels
+export const ChannelStatusViewSchema = z.object({
+  id: z.string(),
+  kind: z.string(),
+  ok: z.boolean(),
+  detail: z.string().optional(),
+  lastSentAt: z.number().optional(),
+  lastError: z.string().optional(),
+  sentCount: z.number(),
+});
+export type ChannelStatusView = z.infer<typeof ChannelStatusViewSchema>;
+
+// RFC-019 sync + voice (bundle is opaque JSON at the IPC boundary; the main
+// process validates structure via the sync package before applying)
+export const SyncBundleViewSchema = z.object({
+  version: z.literal(1),
+  exportedAt: z.string(),
+  profile: z.object({
+    entries: z.array(z.record(z.string(), z.unknown())),
+    dismissed: z.array(z.string()),
+  }),
+  schedules: z.array(z.record(z.string(), z.unknown())),
+  // RFC-020: identity graph section (main validates deeply via the sync pkg).
+  identity: z.object({ persons: z.array(z.record(z.string(), z.unknown())) }).optional(),
+});
+export type SyncBundleView = z.infer<typeof SyncBundleViewSchema>;
+
+export const SyncApplyReportViewSchema = z.object({
+  profileUpserted: z.number(),
+  profileSkipped: z.number(),
+  dismissedApplied: z.number(),
+  schedulesAdded: z.number(),
+  schedulesKept: z.number(),
+  identityPersonsAdded: z.number(),
+  identityAccountsAdded: z.number(),
+});
+export type SyncApplyReportView = z.infer<typeof SyncApplyReportViewSchema>;
+
+export const VoiceTranscribeRequestSchema = z.object({
+  audioBase64: z.string(),
+  mimeType: z.string(),
+  language: z.string().optional(),
+});
+export type VoiceTranscribeRequest = z.infer<typeof VoiceTranscribeRequestSchema>;
+
 export const ChatResponseSchema = z.object({
   finalAnswer: z.string(),
   iterations: z.number().int().nonnegative(),
@@ -64,6 +445,12 @@ export const ChatResponseSchema = z.object({
   inputStructure: InputStructureSchema.optional(),
   context: ContextUsageSchema.optional(),
   artifacts: z.array(WorkspaceArtifactSchema).optional(),
+  command: z
+    .object({
+      name: z.string(),
+      kind: z.enum(["ok", "error"]),
+    })
+    .optional(),
 });
 export type ChatResponse = z.infer<typeof ChatResponseSchema>;
 
@@ -653,6 +1040,21 @@ export const WorkbenchUpdateSchema = z.object({
   taskPoolRunId: z.string().optional(),
 });
 
+export const WindowChromeActionSchema = z.enum([
+  "quit",
+  "reload",
+  "toggleDevTools",
+  "toggleFullScreen",
+  "minimize",
+  "maximize",
+  "close",
+]);
+
+export type WindowChromeAction = z.infer<typeof WindowChromeActionSchema>;
+
+/** 与 titleBarOverlay.height 一致，自定义标题栏和原生窗口按钮同一行。 */
+export const TITLE_BAR_HEIGHT = 32;
+
 /**
  * ?????????????????updateConfig ?????? * ??????**????**??????????workspaceDir ????????fs.watch ?????? */
 export const AppConfigSchema = z.object({
@@ -770,6 +1172,7 @@ export const IPC = {
   MODEL_CREDENTIAL_DELETE: "openintj:model.credential.delete",
   MODEL_TEST: "openintj:model.test",
   APP_RESTART: "openintj:app.restart",
+  WINDOW_CHROME: "openintj:window.chrome",
   WORKBENCH_BOOTSTRAP: "openintj:workbench.bootstrap",
   WORKBENCH_WORKSPACE_CREATE: "openintj:workbench.workspace.create",
   WORKBENCH_WORKSPACE_CLOSE: "openintj:workbench.workspace.close",
@@ -778,6 +1181,39 @@ export const IPC = {
   WORKBENCH_CONVERSATION_CREATE: "openintj:workbench.conversation.create",
   WORKBENCH_CONVERSATION_UPDATE: "openintj:workbench.conversation.update",
   WORKBENCH_MESSAGES: "openintj:workbench.messages",
+  WORKBENCH_MESSAGES_CLEAR: "openintj:workbench.messages.clear",
+  COMMANDS_INVOKE: "openintj:commands.invoke",
+  AGENT_STEER: "openintj:agent.steer",
+  AGENT_INJECT: "openintj:agent.inject",
+  AGENT_CANCEL: "openintj:agent.cancel",
+  APPROVAL_LIST: "openintj:approval.list",
+  APPROVAL_DECIDE: "openintj:approval.decide",
+  GRANTS_LIST: "openintj:grants.list",
+  GRANTS_GRANT: "openintj:grants.grant",
+  GRANTS_REVOKE: "openintj:grants.revoke",
+  PROFILE_LIST: "openintj:profile.list",
+  PROFILE_UPSERT: "openintj:profile.upsert",
+  PROFILE_REMOVE: "openintj:profile.remove",
+  PROFILE_EXPORT: "openintj:profile.export",
+  SCHEDULE_LIST: "openintj:schedule.list",
+  SCHEDULE_ADD: "openintj:schedule.add",
+  SCHEDULE_UPDATE: "openintj:schedule.update",
+  SCHEDULE_REMOVE: "openintj:schedule.remove",
+  IDENTITY_PERSONS: "openintj:identity.persons",
+  IDENTITY_RESOLVE: "openintj:identity.resolve",
+  IDENTITY_CONFIRM: "openintj:identity.confirm",
+  IDENTITY_ASSERT: "openintj:identity.assert",
+  IDENTITY_UNLINK: "openintj:identity.unlink",
+  CONNECTORS_LIST: "openintj:connectors.list",
+  TASKPOOL_CHECKPOINTS: "openintj:taskpool.checkpoints",
+  TASKPOOL_RESUME: "openintj:taskpool.resume",
+  TASKPOOL_CANCEL: "openintj:taskpool.cancel",
+  SUBAGENTS_LIST: "openintj:subagents.list",
+  CHANNELS_LIST: "openintj:channels.list",
+  CHANNELS_TEST: "openintj:channels.test",
+  SYNC_EXPORT: "openintj:sync.export",
+  SYNC_IMPORT: "openintj:sync.import",
+  VOICE_TRANSCRIBE: "openintj:voice.transcribe",
   // server-push events
   EVT_TAO: "openintj:evt.tao",
   EVT_REACT: "openintj:evt.react",
@@ -785,6 +1221,9 @@ export const IPC = {
   EVT_UPDATE: "openintj:evt.update",
   EVT_WORKSPACE: "openintj:evt.workspace",
   EVT_SKILL: "openintj:evt.skill",
+  EVT_ASSISTANT_DELTA: "openintj:evt.assistant.delta",
+  EVT_APPROVAL: "openintj:evt.approval",
+  EVT_SCHEDULE: "openintj:evt.schedule",
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

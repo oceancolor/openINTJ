@@ -21,120 +21,138 @@ export const TaskSidebar: React.FC<{
   onRenameTask: (task: WorkbenchTask) => void;
   onArchiveTask: (task: WorkbenchTask) => void;
   onOpenWorkspaceDir?: (() => void) | undefined;
+  showWorkspace?: boolean | undefined;
 }> = (props) => {
   const current = props.workspaces.find((workspace) => workspace.id === props.activeWorkspaceId);
+  const showWorkspace = props.showWorkspace !== false;
   return (
-  <aside className="h-full min-h-0 bg-[#11111b] border-r border-gray-800 flex flex-col text-xs">
-    <div className="shrink-0 p-3 border-b border-gray-800">
-      <div className="flex justify-between text-gray-400 mb-1">
-        <span>工作区</span>
-      </div>
-      <div className="truncate text-gray-200 mb-2" title={current?.rootPath}>
-        {current?.name ?? "未打开工作区"}
-      </div>
-      <div className="flex gap-1">
-        <button
-          type="button"
-          className="flex-1 px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-200"
-          onClick={props.onCreateWorkspace}
-        >
-          打开工作区
-        </button>
-        <button
-          type="button"
-          className="flex-1 px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-200 disabled:opacity-40"
-          disabled={!props.activeWorkspaceId}
-          onClick={props.onCloseWorkspace}
-        >
-          关闭工作区
-        </button>
-      </div>
-      {props.onOpenWorkspaceDir && props.activeWorkspaceId ? (
-        <button
-          type="button"
-          className="mt-2 w-full px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-200"
-          onClick={props.onOpenWorkspaceDir}
-        >
-          打开工作区目录
-        </button>
-      ) : null}
-    </div>
-    <div className="shrink-0 p-2 flex items-center justify-between">
-      <span className="text-gray-400">任务</span>
-      <button
-        type="button"
-        className="px-2 py-0.5 rounded bg-purple-800 hover:bg-purple-700 disabled:opacity-40"
-        disabled={!props.activeWorkspaceId}
-        onClick={props.onCreateTask}
-      >
-        + 任务
-      </button>
-    </div>
-    <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2 space-y-1">
-      {props.tasks
-        .filter(
-          (task) => task.workspaceId === props.activeWorkspaceId && task.status !== "archived",
-        )
-        .map((task) => (
-          <div key={task.id}>
+    <aside className="flex h-full min-h-0 flex-col bg-panel text-xs">
+      {showWorkspace ? (
+        <div className="shrink-0 border-b border-line p-3">
+          <div className="mb-1 flex justify-between text-[10px] font-bold uppercase tracking-[0.13em] text-muted">
+            <span>工作区</span>
+          </div>
+          <div className="mb-2 truncate text-ink" title={current?.rootPath}>
+            {current?.name ?? "未打开工作区"}
+          </div>
+          <div className="flex gap-1">
             <button
               type="button"
-              className={`w-full text-left rounded px-2 py-1 ${
-                props.activeTaskId === task.id
-                  ? "bg-purple-900 text-purple-100"
-                  : "text-gray-300 hover:bg-gray-800"
-              }`}
-              onClick={() => props.onSelectTask(task.id)}
+              className="flex-1 rounded-lg bg-ink px-2 py-1.5 font-medium text-white hover:bg-inksoft"
+              onClick={props.onCreateWorkspace}
             >
-              <span className="block truncate">{task.title}</span>
-              <span className="text-[10px] text-gray-500">{task.status}</span>
+              打开工作区
             </button>
-            {props.activeTaskId === task.id ? (
-              <div className="ml-3 mt-1 space-y-0.5 border-l border-gray-800 pl-2">
-                <div className="flex gap-2 text-[10px]">
-                  <button
-                    type="button"
-                    className="text-gray-500 hover:text-gray-300"
-                    onClick={() => props.onRenameTask(task)}
-                  >
-                    重命名
-                  </button>
-                  <button
-                    type="button"
-                    className="text-gray-500 hover:text-red-300"
-                    onClick={() => props.onArchiveTask(task)}
-                  >
-                    归档
-                  </button>
-                </div>
-                {props.conversations
-                  .filter((conversation) => conversation.taskId === task.id)
-                  .map((conversation) => (
-                    <button
-                      type="button"
-                      key={conversation.id}
-                      className={`block w-full text-left truncate rounded px-1.5 py-1 ${
-                        props.activeConversationId === conversation.id
-                          ? "text-cyan-300 bg-gray-800"
-                          : "text-gray-500 hover:text-gray-300"
-                      }`}
-                      onClick={() => props.onSelectConversation(conversation.id)}
-                    >
-                      {conversation.title}
-                    </button>
-                  ))}
+            <button
+              type="button"
+              className="flex-1 rounded-lg border border-line bg-white px-2 py-1.5 font-medium text-ink hover:border-linedark disabled:opacity-40"
+              disabled={!props.activeWorkspaceId}
+              onClick={props.onCloseWorkspace}
+            >
+              关闭工作区
+            </button>
+          </div>
+          {props.onOpenWorkspaceDir && props.activeWorkspaceId ? (
+            <button
+              type="button"
+              className="mt-2 w-full rounded-lg border border-line bg-white px-2 py-1.5 font-medium text-ink hover:border-linedark"
+              onClick={props.onOpenWorkspaceDir}
+            >
+              打开工作区目录
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      <div className="flex shrink-0 items-center justify-between p-2">
+        <span className="text-[10px] font-bold uppercase tracking-[0.13em] text-muted">任务</span>
+        <button
+          type="button"
+          className="rounded-lg bg-ink px-2 py-1 font-medium text-white hover:bg-inksoft disabled:opacity-40"
+          disabled={!props.activeWorkspaceId}
+          onClick={props.onCreateTask}
+        >
+          + 新任务
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-2">
+        {props.tasks
+          .filter(
+            (task) => task.workspaceId === props.activeWorkspaceId && task.status !== "archived",
+          )
+          .map((task) => {
+            const isActive = props.activeTaskId === task.id;
+            const dot =
+              task.status === "active"
+                ? { cls: "bg-amberdot", label: "进行中" }
+                : task.status === "completed"
+                  ? { cls: "bg-[#62a36d]", label: "已完成" }
+                  : { cls: "bg-[#c4c7bf]", label: task.status };
+            return (
+              <div key={task.id}>
                 <button
                   type="button"
-                  className="text-gray-500 hover:text-gray-300 px-1.5 py-1"
-                  onClick={props.onCreateConversation}
+                  className={`w-full rounded-xl px-2.5 py-2 text-left ${
+                    isActive ? "bg-white shadow-card" : "hover:bg-white/60"
+                  }`}
+                  onClick={() => props.onSelectTask(task.id)}
                 >
-                  + 新对话
+                  <span
+                    className={`block truncate text-xs text-ink ${isActive ? "font-semibold" : ""}`}
+                  >
+                    {task.title}
+                  </span>
+                  <span className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted">
+                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot.cls}`} />
+                    {dot.label}
+                  </span>
                 </button>
+                {isActive ? (
+                  <div className="ml-3 mt-1 space-y-0.5 border-l border-line pl-2">
+                    <div className="flex gap-2 text-[10px]">
+                      <button
+                        type="button"
+                        className="text-muted hover:text-ink"
+                        onClick={() => props.onRenameTask(task)}
+                      >
+                        重命名
+                      </button>
+                      <button
+                        type="button"
+                        className="text-muted hover:text-signal"
+                        onClick={() => props.onArchiveTask(task)}
+                      >
+                        归档
+                      </button>
+                    </div>
+                    {props.conversations
+                      .filter((conversation) => conversation.taskId === task.id)
+                      .map((conversation) => (
+                        <button
+                          type="button"
+                          key={conversation.id}
+                          className={`block w-full truncate rounded-lg px-1.5 py-1 text-left ${
+                            props.activeConversationId === conversation.id
+                              ? "bg-mosstint text-mossdeep"
+                              : "text-muted hover:text-ink"
+                          }`}
+                          onClick={() => props.onSelectConversation(conversation.id)}
+                        >
+                          {conversation.title}
+                        </button>
+                      ))}
+                    <button
+                      type="button"
+                      className="px-1.5 py-1 text-muted hover:text-ink"
+                      onClick={props.onCreateConversation}
+                    >
+                      + 新对话
+                    </button>
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-          </div>
-        ))}
-    </div>
-  </aside>
+            );
+          })}
+      </div>
+    </aside>
   );
 };

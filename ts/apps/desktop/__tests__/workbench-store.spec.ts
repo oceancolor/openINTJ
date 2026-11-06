@@ -51,6 +51,18 @@ describe("WorkbenchStore", () => {
       { role: "user", content: "检查签名" },
       { role: "assistant", traceId: "trace-1", tokens: 12 },
     ]);
+    expect(store.listJournal(conversation.id).map((event) => event.type)).toEqual([
+      "turn.start",
+      "user",
+      "assistant",
+      "turn.end",
+    ]);
+    store.clearMessages(conversation.id);
+    expect(store.listMessages(conversation.id)).toEqual([]);
+    expect(store.listJournal(conversation.id).at(-1)).toMatchObject({
+      type: "session.cleared",
+      command: "/clear",
+    });
     expect(store.getConversation(conversation.id).workspace.id).toBe(seeded.workspaces[0]!.id);
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -171,7 +183,9 @@ describe("WorkbenchStore", () => {
     const originalId = store.bootstrap().workspaces[0]!.id;
     store.close();
 
-    const Database = require("better-sqlite3") as new (path: string) => {
+    const Database = require("better-sqlite3") as new (
+      path: string,
+    ) => {
       prepare(sql: string): { run(...params: unknown[]): unknown };
       close(): void;
     };

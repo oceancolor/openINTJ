@@ -6,28 +6,43 @@ import type {
   WorkbenchWorkspace,
 } from "../shared/ipc-protocol.js";
 import { DEFAULT_DESKTOP_MODEL_PROFILE_ID } from "../shared/ipc-protocol.js";
+import type { ApprovalRequestView } from "../shared/ipc-protocol.js";
 import {
   artifactsFromAnswer,
   extractWorkspaceArtifactPaths,
   preferredPreviewPath,
 } from "../shared/workspace-view.js";
+import { ApprovalBanner } from "./components/ApprovalBanner.js";
 import { type ChatMessage, ChatPanel } from "./components/ChatPanel.js";
 import { DormantPanel } from "./components/DormantPanel.js";
+import { IdentityPanel } from "./components/IdentityPanel.js";
 import { MemoryPanel } from "./components/MemoryPanel.js";
+import { ProfilePanel } from "./components/ProfilePanel.js";
+import { SchedulePanel } from "./components/SchedulePanel.js";
 import { SettingsPanel } from "./components/SettingsPanel.js";
 import { SkillPanel } from "./components/SkillPanel.js";
 import { StatusBar, type StatusSnapshot } from "./components/StatusBar.js";
+import { SystemPanel } from "./components/SystemPanel.js";
 import { TaskSidebar } from "./components/TaskSidebar.js";
+import { TitleBar } from "./components/TitleBar.js";
 import { type TrajectoryEntry, TrajectoryPanel } from "./components/TrajectoryPanel.js";
 import { UpdateBanner } from "./components/UpdateBanner.js";
-import {
-  EditorWorkbench,
-  WorkspaceWorkbench,
-  desktopWorkspaceClient,
-} from "./workspace/index.js";
+import { FilePreview, WorkspaceWorkbench, desktopWorkspaceClient } from "./workspace/index.js";
 import "./types.js";
 
-type RightTab = "workspace" | "trajectory" | "memory" | "dormant" | "skills" | "settings";
+type RightTab =
+  | "chat"
+  | "tasks"
+  | "trajectory"
+  | "memory"
+  | "profile"
+  | "identity"
+  | "schedule"
+  | "dormant"
+  | "skills"
+  | "system"
+  | "settings"
+  | "preview";
 
 const sameFsPath = (left: string, right: string): boolean =>
   left.replace(/\\/g, "/").toLowerCase() === right.replace(/\\/g, "/").toLowerCase();
@@ -37,7 +52,8 @@ export const App = (): JSX.Element => {
   const [trajectory, setTrajectory] = React.useState<TrajectoryEntry[]>([]);
   const [status, setStatus] = React.useState<StatusSnapshot | undefined>();
   const [pending, setPending] = React.useState(false);
-  const [rightTab, setRightTab] = React.useState<RightTab>("trajectory");
+  const [approvals, setApprovals] = React.useState<ApprovalRequestView[]>([]);
+  const [rightTab, setRightTab] = React.useState<RightTab>("chat");
   const [profiles, setProfiles] = React.useState<ModelProfile[]>([]);
   const [workspaces, setWorkspaces] = React.useState<WorkbenchWorkspace[]>([]);
   const [tasks, setTasks] = React.useState<WorkbenchTask[]>([]);
@@ -47,7 +63,6 @@ export const App = (): JSX.Element => {
   const [activeConversationId, setActiveConversationId] = React.useState<string>();
   const [selectedWorkspacePath, setSelectedWorkspacePath] = React.useState<string>();
   const [workspaceRoot, setWorkspaceRoot] = React.useState<string>();
-  const [workspaceRefresh, setWorkspaceRefresh] = React.useState(0);
   const workspaceClient = React.useMemo(() => desktopWorkspaceClient(), []);
 
   const refreshWorkbench = React.useCallback(async (): Promise<void> => {
@@ -114,9 +129,6 @@ export const App = (): JSX.Element => {
     if (!api) return;
     const offs: Array<() => void> = [];
     offs.push(
-      api.onWorkspaceEvent(() => setWorkspaceRefresh((value) => value + 1)),
-    );
-    offs.push(
       api.onTaoEvent((p) => {
         const payload = (p ?? {}) as Record<string, unknown> & {
           kind?: string;
@@ -152,6 +164,20 @@ export const App = (): JSX.Element => {
         ]),
       ),
     );
+    offs.push(
+      api.onAssistantDelta((p) => {
+        const payload = (p ?? {}) as { text?: string };
+        const text = typeof payload.text === "string" ? payload.text : "";
+        if (!text) return;
+        setMessages((current) => {
+          const last = current[current.length - 1];
+          if (last?.role === "assistant" && last.streaming) {
+            return [...current.slice(0, -1), { ...last, content: text }];
+          }
+          return current;
+        });
+      }),
+    );
     return () => {
       for (const o of offs) o();
     };
@@ -171,27 +197,91 @@ export const App = (): JSX.Element => {
     return () => window.clearInterval(id);
   }, []);
 
+  React.useEffect(() => {
+    const api = window.openintj;
+    if (!api?.approvalList) return;
+    let alive = true;
+    const refresh = async (): Promise<void> => {
+      try {
+        const list = await api.approvalList();
+        if (alive) setApprovals(list);
+      } catch {
+        // approval not enabled in this host build
+      }
+    };
+    void refresh();
+    const off = api.onApprovalEvent?.(() => void refresh());
+    const id = window.setInterval(() => void refresh(), 2_000);
+    return () => {
+      alive = false;
+      off?.();
+      window.clearInterval(id);
+    };
+  }, []);
+
+  const decideApproval = (
+    req: ApprovalRequestView,
+    decision: "approved" | "denied",
+    withGrant: boolean,
+  ): void => {
+    const path = typeof req.params["path"] === "string" ? (req.params["path"] as string) : "";
+    const scope = path.includes("/") ? path.slice(0, path.lastIndexOf("/") + 1) : path || undefined;
+    void window.openintj
+      .approvalDecide({
+        id: req.id,
+        decision,
+        ...(decision === "approved" && withGrant
+          ? { grant: { ...(scope ? { scope } : {}), ttlMs: 3_600_000 } }
+          : {}),
+      })
+      .then(() => window.openintj.approvalList())
+      .then(setApprovals)
+      .catch(() => {});
+  };
+
   const handleSend = async (text: string): Promise<void> => {
-    setMessages((m) => [...m, { role: "user", content: text }]);
     setPending(true);
+    const activeConversation = conversations.find(
+      (conversation) => conversation.id === activeConversationId,
+    );
+    const skipOptimistic = text.trim().startsWith("/");
+    if (!skipOptimistic) {
+      setMessages((current) => [
+        ...current,
+        { role: "user", content: text },
+        { role: "assistant", content: "", streaming: true },
+      ]);
+    }
     try {
-      const activeConversation = conversations.find(
-        (conversation) => conversation.id === activeConversationId,
-      );
       const res = await window.openintj.chat({
         query: text,
         ...(activeConversationId ? { conversationId: activeConversationId } : {}),
         ...(activeConversation ? { modelProfileId: activeConversation.modelProfileId } : {}),
       });
-      setMessages((m) => [
-        ...m,
-        {
-          role: "assistant",
-          content: res.finalAnswer,
-          messageKind: res.inputStructure?.action === "clarify" ? "clarification" : "answer",
-          ...(res.inputStructure ? { inputStructure: res.inputStructure } : {}),
-        },
-      ]);
+      if (res.command) {
+        if (res.command.name === "/clear" && res.command.kind === "ok") {
+          setMessages([{ role: "system", content: res.finalAnswer }]);
+          setTrajectory([]);
+          setSelectedWorkspacePath(undefined);
+        } else {
+          setMessages((current) => [
+            ...current.filter((message) => !message.streaming),
+            { role: "system", content: res.finalAnswer },
+          ]);
+        }
+        return;
+      }
+      const assistant: ChatMessage = {
+        role: "assistant",
+        content: res.finalAnswer,
+        messageKind: res.inputStructure?.action === "clarify" ? "clarification" : "answer",
+        ...(res.inputStructure ? { inputStructure: res.inputStructure } : {}),
+      };
+      setMessages((current) => {
+        const last = current[current.length - 1];
+        if (last?.streaming) return [...current.slice(0, -1), assistant];
+        return [...current, { role: "user", content: text }, assistant];
+      });
       if (res.context) {
         setStatus((current) => (current ? { ...current, context: res.context } : current));
       }
@@ -202,17 +292,15 @@ export const App = (): JSX.Element => {
         ]) ?? artifactsFromAnswer(res.finalAnswer)[0]?.path;
       if (artifactPath) {
         setSelectedWorkspacePath(artifactPath);
-        setRightTab("workspace");
-        setWorkspaceRefresh((value) => value + 1);
+        setRightTab("preview");
       }
     } catch (e) {
-      setMessages((m) => [
-        ...m,
-        {
-          role: "system",
-          content: `[错误] ${(e as Error).message}`,
-        },
-      ]);
+      const errorLine: ChatMessage = { role: "system", content: `[错误] ${(e as Error).message}` };
+      setMessages((current) => {
+        const last = current[current.length - 1];
+        if (last?.streaming) return [...current.slice(0, -1), errorLine];
+        return [...current, { role: "user", content: text }, errorLine];
+      });
     } finally {
       setPending(false);
     }
@@ -375,174 +463,179 @@ export const App = (): JSX.Element => {
   const skillsPending = status?.skills?.pendingProposals ?? 0;
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden text-gray-200">
-      <header className="shrink-0 px-4 py-2 border-b border-gray-800 bg-[#181825] flex items-center gap-2">
-        <span className="text-base font-semibold">OpenINTJ</span>
-        <span className="text-xs text-gray-500">v0.3.1</span>
-        <button
-          type="button"
-          onClick={() => void window.openintj.restartApp()}
-          className="ml-auto px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-xs"
-        >
-          重启
-        </button>
-      </header>
+    <div className="flex flex-col h-screen overflow-hidden bg-backdrop text-ink">
+      <TitleBar />
       <UpdateBanner />
-      <div
-        className="flex-1 grid min-h-0"
-        style={{ gridTemplateColumns: "240px minmax(0, 1fr) 380px" }}
-      >
-        <TaskSidebar
-          workspaces={workspaces}
-          tasks={tasks}
-          conversations={conversations}
-          activeWorkspaceId={activeWorkspaceId}
-          activeTaskId={activeTaskId}
-          activeConversationId={activeConversationId}
-          onCreateWorkspace={() => void createWorkspace()}
-          onCloseWorkspace={() => void closeWorkspace()}
-          onSelectTask={selectTask}
-          onSelectConversation={selectConversation}
-          onCreateTask={() => void createTask()}
-          onCreateConversation={() => void createConversation()}
-          onRenameTask={(task) => {
-            const title = window.prompt("任务名称", task.title)?.trim();
-            if (title) void updateTask(task, { title });
-          }}
-          onArchiveTask={(task) => void updateTask(task, { status: "archived" })}
-          onOpenWorkspaceDir={() => void workspaceClient.reveal()}
-        />
-        <div className="flex flex-col min-h-0 min-w-0">
-          <div className="flex-1 min-h-0">
-            <ChatPanel
-              messages={messages}
-              onSend={(t) => void handleSend(t)}
-              pending={pending}
-              profiles={profiles}
-              modelProfileId={
-                conversations.find((conversation) => conversation.id === activeConversationId)
-                  ?.modelProfileId
-              }
-              onModelChange={(id) => void changeConversationModel(id)}
-              context={status?.context}
-              onOpenWorkspacePath={(path) => {
-                setSelectedWorkspacePath(path);
-              }}
-            />
-          </div>
-          <div className="h-[46%] min-h-[260px] border-t border-gray-800">
-            <EditorWorkbench
-              key={activeWorkspaceId ?? "none"}
-              client={workspaceClient}
-              openPath={selectedWorkspacePath}
-              rootLabel={workspaceRoot}
-              refreshKey={workspaceRefresh}
-              workspaceOpen={Boolean(activeWorkspaceId)}
-              onActivePathChange={setSelectedWorkspacePath}
-            />
-          </div>
+      <div className="flex-1 min-h-0 flex">
+        <div className="flex-1 min-w-0 min-h-0">
+          <WorkspaceWorkbench
+            client={workspaceClient}
+            rootLabel={
+              workspaces.find((item) => item.id === activeWorkspaceId)?.rootPath ?? workspaceRoot
+            }
+            selectedPath={selectedWorkspacePath}
+            onSelectPath={(path) => setSelectedWorkspacePath(path)}
+            workspaceOpen={Boolean(activeWorkspaceId)}
+          />
         </div>
-        <div className="flex flex-col h-full min-h-0 bg-[#11111b] border-l border-gray-800">
-          <div className="shrink-0 flex items-center border-b border-gray-800 text-xs overflow-x-auto whitespace-nowrap">
-            <button
-              type="button"
-              onClick={() => setRightTab("workspace")}
-              className={
-                rightTab === "workspace"
-                  ? "shrink-0 px-3 py-2 text-gray-100 border-b-2 border-purple-500"
-                  : "shrink-0 px-3 py-2 text-gray-500 hover:text-gray-300"
-              }
-            >
+        <div className="w-[380px] shrink-0 flex flex-col h-full min-h-0 bg-panel border-l border-line">
+          <div className="shrink-0 px-4 py-3 border-b border-line text-xs bg-inspector/60">
+            <div className="text-[10px] font-bold uppercase tracking-[0.13em] text-muted">
               工作区
-            </button>
-            <button
-              type="button"
-              onClick={() => setRightTab("trajectory")}
-              className={
-                rightTab === "trajectory"
-                  ? "shrink-0 px-3 py-2 text-gray-100 border-b-2 border-purple-500"
-                  : "shrink-0 px-3 py-2 text-gray-500 hover:text-gray-300"
-              }
+            </div>
+            <div
+              className="truncate mt-1 text-[13px] font-semibold text-ink"
+              title={workspaces.find((item) => item.id === activeWorkspaceId)?.rootPath}
             >
-              推理轨迹
-              {trajectory.length > 0 ? (
-                <span className="ml-1.5 text-[10px] text-gray-500">{trajectory.length}</span>
-              ) : null}
-            </button>
-            <button
-              type="button"
-              onClick={() => setRightTab("memory")}
-              className={
-                rightTab === "memory"
-                  ? "shrink-0 px-3 py-2 text-gray-100 border-b-2 border-purple-500"
-                  : "shrink-0 px-3 py-2 text-gray-500 hover:text-gray-300"
-              }
-            >
-              记忆
-            </button>
-            <button
-              type="button"
-              onClick={() => setRightTab("dormant")}
-              className={
-                rightTab === "dormant"
-                  ? "shrink-0 px-3 py-2 text-gray-100 border-b-2 border-purple-500"
-                  : "shrink-0 px-3 py-2 text-gray-500 hover:text-gray-300"
-              }
-            >
-              Dormant
-              {dormantEnabled && dormantPending > 0 ? (
-                <span className="ml-1.5 px-1.5 py-0.5 rounded text-[10px] bg-yellow-700 text-yellow-100">
-                  {dormantPending}
-                </span>
-              ) : null}
-            </button>
-            <button
-              type="button"
-              onClick={() => setRightTab("skills")}
-              className={
-                rightTab === "skills"
-                  ? "shrink-0 px-3 py-2 text-gray-100 border-b-2 border-purple-500"
-                  : "shrink-0 px-3 py-2 text-gray-500 hover:text-gray-300"
-              }
-            >
-              技能
-              {learningEnabled && skillsPending > 0 ? (
-                <span className="ml-1.5 px-1.5 py-0.5 rounded text-[10px] bg-yellow-700 text-yellow-100">
-                  {skillsPending}
-                </span>
-              ) : null}
-            </button>
-            <button
-              type="button"
-              onClick={() => setRightTab("settings")}
-              className={
-                rightTab === "settings"
-                  ? "shrink-0 px-3 py-2 text-gray-100 border-b-2 border-purple-500"
-                  : "shrink-0 px-3 py-2 text-gray-500 hover:text-gray-300"
-              }
-            >
-              设置
-            </button>
+              {workspaces.find((item) => item.id === activeWorkspaceId)?.name ?? "未打开工作区"}
+            </div>
+            <div className="mt-2.5 flex gap-1.5">
+              <button
+                type="button"
+                className="flex-1 px-2 py-1.5 rounded-lg bg-ink text-white hover:bg-inksoft"
+                onClick={() => void createWorkspace()}
+              >
+                打开工作区
+              </button>
+              <button
+                type="button"
+                className="flex-1 px-2 py-1.5 rounded-lg border border-line bg-white hover:border-linedark text-ink disabled:opacity-40"
+                disabled={!activeWorkspaceId}
+                onClick={() => void closeWorkspace()}
+              >
+                关闭工作区
+              </button>
+            </div>
+            {activeWorkspaceId ? (
+              <button
+                type="button"
+                className="mt-1.5 w-full px-2 py-1.5 rounded-lg border border-line bg-white hover:border-linedark text-ink"
+                onClick={() => void workspaceClient.reveal()}
+              >
+                打开工作区目录
+              </button>
+            ) : null}
           </div>
+          <div className="shrink-0 flex items-center gap-1 border-b border-line bg-rail/50 px-2 py-1.5 text-xs overflow-x-auto whitespace-nowrap">
+            {(
+              [
+                ["chat", "对话"],
+                ["tasks", "任务"],
+                ["trajectory", "推理轨迹"],
+                ["memory", "记忆"],
+                ["profile", "档案"],
+                ["identity", "身份"],
+                ["schedule", "定时"],
+                ["dormant", "Dormant"],
+                ["skills", "技能"],
+                ["system", "系统"],
+                ["settings", "设置"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setRightTab(id)}
+                className={
+                  rightTab === id
+                    ? "shrink-0 rounded-lg bg-white px-3 py-1.5 font-semibold text-ink shadow-card"
+                    : "shrink-0 rounded-lg px-3 py-1.5 text-muted hover:bg-white/70 hover:text-ink"
+                }
+              >
+                {label}
+                {id === "trajectory" && trajectory.length > 0 ? (
+                  <span className="ml-1.5 font-mono text-[10px] text-faint">
+                    {trajectory.length}
+                  </span>
+                ) : null}
+                {id === "dormant" && dormantEnabled && dormantPending > 0 ? (
+                  <span className="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] bg-ambertint text-amberdeep">
+                    {dormantPending}
+                  </span>
+                ) : null}
+                {id === "skills" && learningEnabled && skillsPending > 0 ? (
+                  <span className="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] bg-ambertint text-amberdeep">
+                    {skillsPending}
+                  </span>
+                ) : null}
+              </button>
+            ))}
+            {selectedWorkspacePath ? (
+              <button
+                type="button"
+                onClick={() => setRightTab("preview")}
+                className={
+                  rightTab === "preview"
+                    ? "shrink-0 rounded-lg bg-white px-3 py-1.5 font-semibold text-ink shadow-card"
+                    : "shrink-0 rounded-lg px-3 py-1.5 text-muted hover:bg-white/70 hover:text-ink"
+                }
+              >
+                预览
+              </button>
+            ) : null}
+          </div>
+          <ApprovalBanner pending={approvals} onDecide={decideApproval} />
           <div className="flex-1 min-h-0">
-            {rightTab === "workspace" ? (
-              <WorkspaceWorkbench
-                client={workspaceClient}
-                rootLabel={workspaceRoot}
-                selectedPath={selectedWorkspacePath}
-                onSelectPath={(path) => setSelectedWorkspacePath(path)}
-                showPreview={false}
-                refreshKey={workspaceRefresh}
-                workspaceOpen={Boolean(activeWorkspaceId)}
+            {rightTab === "chat" ? (
+              <ChatPanel
+                messages={messages}
+                onSend={(t) => void handleSend(t)}
+                pending={pending}
+                profiles={profiles}
+                modelProfileId={
+                  conversations.find((conversation) => conversation.id === activeConversationId)
+                    ?.modelProfileId
+                }
+                onModelChange={(id) => void changeConversationModel(id)}
+                context={status?.context}
+                onOpenWorkspacePath={(path) => {
+                  setSelectedWorkspacePath(path);
+                  setRightTab("preview");
+                }}
+              />
+            ) : rightTab === "tasks" ? (
+              <TaskSidebar
+                showWorkspace={false}
+                workspaces={workspaces}
+                tasks={tasks}
+                conversations={conversations}
+                activeWorkspaceId={activeWorkspaceId}
+                activeTaskId={activeTaskId}
+                activeConversationId={activeConversationId}
+                onCreateWorkspace={() => void createWorkspace()}
+                onCloseWorkspace={() => void closeWorkspace()}
+                onSelectTask={selectTask}
+                onSelectConversation={selectConversation}
+                onCreateTask={() => void createTask()}
+                onCreateConversation={() => void createConversation()}
+                onRenameTask={(task) => {
+                  const title = window.prompt("任务名称", task.title)?.trim();
+                  if (title) void updateTask(task, { title });
+                }}
+                onArchiveTask={(task) => void updateTask(task, { status: "archived" })}
               />
             ) : rightTab === "trajectory" ? (
               <TrajectoryPanel entries={trajectory} />
             ) : rightTab === "memory" ? (
               <MemoryPanel />
+            ) : rightTab === "profile" ? (
+              <ProfilePanel />
+            ) : rightTab === "identity" ? (
+              <IdentityPanel />
+            ) : rightTab === "schedule" ? (
+              <SchedulePanel />
             ) : rightTab === "dormant" ? (
               <DormantPanel enabled={dormantEnabled} />
             ) : rightTab === "skills" ? (
               <SkillPanel skillsEnabled={skillsEnabled} learningEnabled={learningEnabled} />
+            ) : rightTab === "system" ? (
+              <SystemPanel />
+            ) : rightTab === "preview" && selectedWorkspacePath ? (
+              <FilePreview
+                client={workspaceClient}
+                path={selectedWorkspacePath}
+                onReveal={(path) => void workspaceClient.reveal(path)}
+              />
             ) : (
               <SettingsPanel />
             )}

@@ -1,0 +1,31 @@
+{
+  "name": "@openintj/runtime",
+  "version": "0.3.0-alpha.0",
+  "private": true,
+  "type": "module",
+  "description": "RFC-011 unified runtime: PromptSection registry + shared run prelude for CLI/server/desktop (bounded factory, not a plugin kernel)",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsc -b --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rimraf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@openintj/classifier": "workspace:*",
+    "@openintj/core": "workspace:*",
+    "@openintj/plane-control": "workspace:*",
+    "@openintj/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "rimraf": "^6.0.1",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5"
+  }
+}

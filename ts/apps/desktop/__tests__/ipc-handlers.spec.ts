@@ -24,7 +24,7 @@ vi.mock("electron", () => ({
   contextBridge: {},
   ipcRenderer: {},
   app: {},
-  BrowserWindow: class {},
+  BrowserWindow: Object.assign(class {}, { fromWebContents: () => null }),
   shell: {
     openPath: vi.fn(async () => ""),
     showItemInFolder: vi.fn(),
@@ -69,6 +69,40 @@ describe("IPC handler registration", () => {
     expect(calledChannels).toContain(IPC.CHAT);
     expect(calledChannels).toContain(IPC.MEMORY_QUERY);
     expect(calledChannels).toContain(IPC.AUDIT_RECENT);
+    expect(calledChannels).toContain(IPC.WINDOW_CHROME);
+    expect(calledChannels).toContain(IPC.WORKBENCH_MESSAGES_CLEAR);
+    expect(calledChannels).toContain(IPC.COMMANDS_INVOKE);
+    expect(calledChannels).toContain(IPC.AGENT_STEER);
+    expect(calledChannels).toContain(IPC.AGENT_INJECT);
+    expect(calledChannels).toContain(IPC.AGENT_CANCEL);
+    expect(calledChannels).toContain(IPC.APPROVAL_LIST);
+    expect(calledChannels).toContain(IPC.APPROVAL_DECIDE);
+    expect(calledChannels).toContain(IPC.GRANTS_LIST);
+    expect(calledChannels).toContain(IPC.GRANTS_GRANT);
+    expect(calledChannels).toContain(IPC.GRANTS_REVOKE);
+    expect(calledChannels).toContain(IPC.PROFILE_LIST);
+    expect(calledChannels).toContain(IPC.PROFILE_UPSERT);
+    expect(calledChannels).toContain(IPC.PROFILE_REMOVE);
+    expect(calledChannels).toContain(IPC.PROFILE_EXPORT);
+    expect(calledChannels).toContain(IPC.SCHEDULE_LIST);
+    expect(calledChannels).toContain(IPC.SCHEDULE_ADD);
+    expect(calledChannels).toContain(IPC.SCHEDULE_UPDATE);
+    expect(calledChannels).toContain(IPC.SCHEDULE_REMOVE);
+    expect(calledChannels).toContain(IPC.IDENTITY_PERSONS);
+    expect(calledChannels).toContain(IPC.IDENTITY_RESOLVE);
+    expect(calledChannels).toContain(IPC.IDENTITY_CONFIRM);
+    expect(calledChannels).toContain(IPC.IDENTITY_ASSERT);
+    expect(calledChannels).toContain(IPC.IDENTITY_UNLINK);
+    expect(calledChannels).toContain(IPC.CONNECTORS_LIST);
+    expect(calledChannels).toContain(IPC.TASKPOOL_CHECKPOINTS);
+    expect(calledChannels).toContain(IPC.TASKPOOL_RESUME);
+    expect(calledChannels).toContain(IPC.TASKPOOL_CANCEL);
+    expect(calledChannels).toContain(IPC.SUBAGENTS_LIST);
+    expect(calledChannels).toContain(IPC.CHANNELS_LIST);
+    expect(calledChannels).toContain(IPC.CHANNELS_TEST);
+    expect(calledChannels).toContain(IPC.SYNC_EXPORT);
+    expect(calledChannels).toContain(IPC.SYNC_IMPORT);
+    expect(calledChannels).toContain(IPC.VOICE_TRANSCRIBE);
 
     reg.unregister();
     expect(removeHandler.mock.calls.length).toBeGreaterThanOrEqual(5);
@@ -172,6 +206,9 @@ describe("IPC handler registration", () => {
       "user",
       "assistant",
     ]);
+    expect(workbench.listJournal(conversation.id).map((event) => event.type)).toEqual(
+      expect.arrayContaining(["turn.start", "user", "assistant", "turn.end"]),
+    );
     await handlers.get(IPC.CHAT)?.({}, { query: "再继续", conversationId: conversation.id });
     const secondCallMessages = selectedClient.chat.mock.calls.at(-1)?.[0] as Array<{
       role: string;
@@ -184,6 +221,354 @@ describe("IPC handler registration", () => {
       ]),
     );
     workbench.close();
+  });
+
+  it("WORKBENCH_MESSAGES_CLEAR deletes persisted conversation messages", async () => {
+    const handlers: Handlers = new Map();
+    const workbench = createWorkbenchStore({
+      dbPath: ":memory:",
+      defaultWorkspaceRoot: "F:\\workspace",
+    });
+    const conversation = workbench.bootstrap().conversations[0]!;
+    workbench.appendMessage({
+      conversationId: conversation.id,
+      role: "user",
+      content: "hello",
+    });
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers), { workbench });
+
+    const result = (await handlers.get(IPC.WORKBENCH_MESSAGES_CLEAR)?.({}, conversation.id)) as {
+      ok?: boolean;
+    };
+    expect(result.ok).toBe(true);
+    expect(workbench.listMessages(conversation.id)).toEqual([]);
+    expect(workbench.listJournal(conversation.id).at(-1)).toMatchObject({
+      type: "session.cleared",
+      command: "/clear",
+    });
+    workbench.close();
+  });
+
+  it("CHAT /clear deletes persisted messages without calling the model", async () => {
+    const handlers: Handlers = new Map();
+    const workbench = createWorkbenchStore({
+      dbPath: ":memory:",
+      defaultWorkspaceRoot: "F:\\workspace",
+    });
+    const conversation = workbench.bootstrap().conversations[0]!;
+    workbench.appendMessage({
+      conversationId: conversation.id,
+      role: "user",
+      content: "hello",
+    });
+    const selectedClient = {
+      chat: vi.fn(async () => "FINAL: should not run"),
+      visionChat: vi.fn(async () => "vision"),
+      getStatus: () => ({
+        provider: "glm",
+        model: "glm-5.2",
+        available: true,
+        mode: "live" as const,
+        status: "connected",
+        visionSupported: false,
+      }),
+    };
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers), {
+      workbench,
+      modelRegistry: {
+        list: () => [],
+        resolve: vi.fn(async () => selectedClient),
+        test: vi.fn(async () => ({ ok: true })),
+        clear: vi.fn(),
+      },
+    });
+
+    const result = (await handlers.get(IPC.CHAT)?.(
+      {},
+      { query: "/clear", conversationId: conversation.id },
+    )) as { finalAnswer?: string };
+    expect(result.finalAnswer).toBe("对话已清空。");
+    expect(result).toMatchObject({ command: { name: "/clear", kind: "ok" } });
+    expect(selectedClient.chat).not.toHaveBeenCalled();
+    expect(workbench.listMessages(conversation.id)).toEqual([]);
+    expect(workbench.listJournal(conversation.id).at(-1)?.type).toBe("session.cleared");
+    workbench.close();
+  });
+
+  it("COMMANDS_INVOKE runs /compact as a stub and rejects unknown commands", async () => {
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
+    const compact = (await handlers.get(IPC.COMMANDS_INVOKE)?.({}, { text: "/compact" })) as {
+      name?: string;
+      result?: { kind: string };
+    };
+    expect(compact.name).toBe("/compact");
+    expect(compact.result?.kind).toBe("error");
+    const unknown = (await handlers.get(IPC.COMMANDS_INVOKE)?.({}, { text: "/foo" })) as {
+      error?: string;
+    };
+    expect(unknown.error).toBe("unknown_command");
+  });
+
+  it("CHAT unknown /foo still calls the model", async () => {
+    const handlers: Handlers = new Map();
+    const workbench = createWorkbenchStore({
+      dbPath: ":memory:",
+      defaultWorkspaceRoot: "F:\\workspace",
+    });
+    const conversation = workbench.bootstrap().conversations[0]!;
+    const selectedClient = {
+      chat: vi.fn(async () => "FINAL: literal slash"),
+      visionChat: vi.fn(async () => "vision"),
+      getStatus: () => ({
+        provider: "glm",
+        model: "glm-5.2",
+        available: true,
+        mode: "live" as const,
+        status: "connected",
+        visionSupported: false,
+      }),
+    };
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers), {
+      workbench,
+      modelRegistry: {
+        list: () => [],
+        resolve: vi.fn(async () => selectedClient),
+        test: vi.fn(async () => ({ ok: true })),
+        clear: vi.fn(),
+      },
+    });
+
+    const result = (await handlers.get(IPC.CHAT)?.(
+      {},
+      { query: "/foo", conversationId: conversation.id },
+    )) as { command?: unknown; finalAnswer?: string };
+    expect(result.command).toBeUndefined();
+    expect(selectedClient.chat).toHaveBeenCalled();
+    expect(result.finalAnswer).toContain("literal slash");
+    workbench.close();
+  });
+
+  it("RFC-013 grants can be granted, listed and revoked over IPC", async () => {
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
+    const grant = (await handlers.get(IPC.GRANTS_GRANT)?.(
+      {},
+      { tool: "write_file", risk: "write", scope: "notes/", ttlMs: 60_000 },
+    )) as { id?: string; tool?: string };
+    expect(grant.tool).toBe("write_file");
+    const listed = (await handlers.get(IPC.GRANTS_LIST)?.({}, undefined)) as unknown[];
+    expect(listed).toHaveLength(1);
+    expect(await handlers.get(IPC.APPROVAL_LIST)?.({}, undefined)).toEqual([]);
+    const revoked = (await handlers.get(IPC.GRANTS_REVOKE)?.({}, grant.id)) as { ok?: boolean };
+    expect(revoked.ok).toBe(true);
+    expect(await handlers.get(IPC.GRANTS_LIST)?.({}, undefined)).toEqual([]);
+  });
+
+  it("RFC-014 profile entries can be upserted, listed, exported and removed over IPC", async () => {
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
+    const entry = (await handlers.get(IPC.PROFILE_UPSERT)?.(
+      {},
+      { section: "preferences", key: "editor", value: "VS Code" },
+    )) as { id?: string; value?: string; source?: string };
+    expect(entry.value).toBe("VS Code");
+    expect(entry.source).toBe("user");
+    const listed = (await handlers.get(IPC.PROFILE_LIST)?.({}, undefined)) as unknown[];
+    expect(listed).toHaveLength(1);
+    const exported = (await handlers.get(IPC.PROFILE_EXPORT)?.({}, undefined)) as {
+      profile?: string;
+    };
+    expect(exported.profile).toContain("VS Code");
+    const removed = (await handlers.get(IPC.PROFILE_REMOVE)?.({}, entry.id)) as { ok?: boolean };
+    expect(removed.ok).toBe(true);
+    expect(await handlers.get(IPC.PROFILE_LIST)?.({}, undefined)).toEqual([]);
+    const invalid = (await handlers.get(IPC.PROFILE_UPSERT)?.(
+      {},
+      { section: "bogus", key: "x", value: "y" },
+    )) as { error?: string };
+    expect(invalid.error).toBe("invalid_request");
+  });
+
+  it("RFC-015 schedule jobs can be added, listed, paused and removed over IPC", async () => {
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
+    const job = (await handlers.get(IPC.SCHEDULE_ADD)?.(
+      {},
+      { title: "晨报", prompt: "汇总昨夜动态", trigger: { kind: "daily", time: "09:00" } },
+    )) as { id?: string; enabled?: boolean; nextRunAt?: number };
+    expect(job.enabled).toBe(true);
+    expect(job.nextRunAt).toBeGreaterThan(Date.now());
+    const listed = (await handlers.get(IPC.SCHEDULE_LIST)?.({}, undefined)) as unknown[];
+    expect(listed).toHaveLength(1);
+    const paused = (await handlers.get(IPC.SCHEDULE_UPDATE)?.(
+      {},
+      { id: job.id, patch: { enabled: false } },
+    )) as { enabled?: boolean };
+    expect(paused.enabled).toBe(false);
+    const removed = (await handlers.get(IPC.SCHEDULE_REMOVE)?.({}, job.id)) as { ok?: boolean };
+    expect(removed.ok).toBe(true);
+    expect(await handlers.get(IPC.SCHEDULE_LIST)?.({}, undefined)).toEqual([]);
+    const invalid = (await handlers.get(IPC.SCHEDULE_ADD)?.(
+      {},
+      { title: "x", prompt: "y", trigger: { kind: "daily", time: "25:00" } },
+    )) as { error?: string };
+    expect(invalid.error).toBe("invalid_request");
+  });
+
+  it("RFC-016 connectors.list returns connector statuses over IPC", async () => {
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
+    const statuses = (await handlers.get(IPC.CONNECTORS_LIST)?.({}, undefined)) as Array<{
+      id: string;
+      ok: boolean;
+    }>;
+    expect(Array.isArray(statuses)).toBe(true);
+  });
+
+  it("RFC-012 taskpool checkpoint IPC returns empty list and rejects unknown runs", async () => {
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
+    expect(await handlers.get(IPC.TASKPOOL_CHECKPOINTS)?.({}, undefined)).toEqual([]);
+    expect(await handlers.get(IPC.TASKPOOL_RESUME)?.({}, "missing-run")).toEqual({
+      error: "not_found_or_not_resumable",
+    });
+    expect(await handlers.get(IPC.TASKPOOL_CANCEL)?.({}, "missing-run")).toEqual({
+      error: "not_found_or_not_cancellable",
+    });
+  });
+
+  it("RFC-012 §3 subagents.list returns run records over IPC", async () => {
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
+    expect(await handlers.get(IPC.SUBAGENTS_LIST)?.({}, undefined)).toEqual([]);
+  });
+
+  it("RFC-018 channels IPC lists statuses and rejects unknown test targets", async () => {
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
+    expect(await handlers.get(IPC.CHANNELS_LIST)?.({}, undefined)).toEqual([]);
+    expect(await handlers.get(IPC.CHANNELS_TEST)?.({}, "nope")).toEqual({
+      error: "channel_not_found",
+    });
+  });
+
+  it("RFC-020 identity IPC: assert → persons → unlink; resolve stays offline for phone seeds", async () => {
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
+    const person = (await handlers.get(IPC.IDENTITY_ASSERT)?.(
+      {},
+      { platform: "wechat", kind: "wechat", value: "ben_dev_01" },
+    )) as { id?: string; accounts?: Array<{ id: string; source: string }> };
+    expect(person.accounts?.[0]?.source).toBe("manual");
+    const persons = (await handlers.get(IPC.IDENTITY_PERSONS)?.({}, undefined)) as unknown[];
+    expect(persons).toHaveLength(1);
+    // Phone seeds never hit the network (Gravatar is email-only) and the
+    // corpus is empty in tests, so resolve must return zero proposals.
+    const resolved = (await handlers.get(IPC.IDENTITY_RESOLVE)?.(
+      {},
+      { kind: "phone", value: "13800138000" },
+    )) as { proposals?: unknown[]; reports?: Array<{ ok: boolean }> };
+    expect(resolved.proposals).toEqual([]);
+    expect(resolved.reports?.every((r) => r.ok)).toBe(true);
+    const unlinked = (await handlers.get(IPC.IDENTITY_UNLINK)?.(
+      {},
+      { accountId: person.accounts![0]!.id },
+    )) as { removed?: boolean; personRemoved?: boolean };
+    expect(unlinked).toEqual({ removed: true, personRemoved: true });
+    expect(await handlers.get(IPC.IDENTITY_PERSONS)?.({}, undefined)).toEqual([]);
+    const invalid = (await handlers.get(IPC.IDENTITY_RESOLVE)?.({}, { value: "" })) as {
+      error?: string;
+    };
+    expect(invalid.error).toBe("invalid_request");
+
+    // Writeback: a primary email asserted on a fresh agent mirrors into the
+    // profile identity section with identity-graph provenance.
+    const agent2 = await assembleDesktopAgent({ llmProvider: "mock" });
+    const handlers2: Handlers = new Map();
+    registerIpcHandlers(agent2, undefined, makeFakeIpc(handlers2));
+    await handlers2.get(IPC.IDENTITY_ASSERT)?.(
+      {},
+      { displayName: "Ben", platform: "gravatar", kind: "email", value: "ben@example.com" },
+    );
+    const profile = (await handlers2.get(IPC.PROFILE_LIST)?.({}, undefined)) as Array<{
+      section: string;
+      key: string;
+      value: string;
+      provenance?: string;
+    }>;
+    expect(profile).toContainEqual(
+      expect.objectContaining({
+        section: "identity",
+        key: "email",
+        value: "ben@example.com",
+        provenance: "identity-graph",
+      }),
+    );
+  });
+
+  it("RFC-020/019 sync IPC round-trips the identity graph (schema must not strip it)", async () => {
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
+    agent.identity.assertAccount({
+      platform: "gravatar",
+      kind: "email",
+      value: "ben@example.com",
+    });
+    const bundle = (await handlers.get(IPC.SYNC_EXPORT)?.({}, undefined)) as {
+      identity?: { persons: unknown[] };
+    };
+    expect(bundle.identity?.persons).toHaveLength(1);
+
+    const handlers2: Handlers = new Map();
+    const agent2 = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent2, undefined, makeFakeIpc(handlers2));
+    const imported = (await handlers2.get(IPC.SYNC_IMPORT)?.({}, bundle)) as {
+      report?: { identityPersonsAdded: number };
+      error?: string;
+    };
+    expect(imported.error).toBeUndefined();
+    expect(imported.report?.identityPersonsAdded).toBe(1);
+    expect(agent2.identity.listPersons()).toHaveLength(1);
+  });
+
+  it("RFC-019 sync IPC round-trips a bundle; voice reports unconfigured STT", async () => {
+    const handlers: Handlers = new Map();
+    const agent = await assembleDesktopAgent({ llmProvider: "mock" });
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers));
+    agent.profile.upsert({ section: "identity", key: "name", value: "Ben" });
+    const bundle = (await handlers.get(IPC.SYNC_EXPORT)?.({}, undefined)) as {
+      version: number;
+    };
+    expect(bundle.version).toBe(1);
+    const imported = (await handlers.get(IPC.SYNC_IMPORT)?.({}, bundle)) as {
+      report?: { profileSkipped: number };
+      error?: string;
+    };
+    expect(imported.error).toBeUndefined();
+    expect(imported.report?.profileSkipped).toBe(1);
+    expect(await handlers.get(IPC.SYNC_IMPORT)?.({}, { version: 9 })).toMatchObject({
+      error: "invalid_bundle",
+    });
+    expect(
+      await handlers.get(IPC.VOICE_TRANSCRIBE)?.(
+        {},
+        { audioBase64: "AA==", mimeType: "audio/wav" },
+      ),
+    ).toEqual({ error: "stt_not_configured" });
   });
 
   it("CHAT persists clarification understanding cards without auto-writing artifacts", async () => {
@@ -316,7 +701,9 @@ describe("IPC handler registration", () => {
     const svgPath = join(root, "artifacts", conversation.taskId, "cover.svg");
     expect(readFileSync(svgPath, "utf8")).toContain("大厂病");
     expect(result.finalAnswer).toMatch(/已写入工作区：`artifacts\/.+\/cover\.svg`/);
-    expect((result as { artifacts?: Array<{ path: string; kind: string }> }).artifacts?.[0]).toMatchObject({
+    expect(
+      (result as { artifacts?: Array<{ path: string; kind: string }> }).artifacts?.[0],
+    ).toMatchObject({
       kind: "image",
     });
     expect(selectedClient.chat).not.toHaveBeenCalled();
@@ -856,7 +1243,10 @@ describe("IPC handler registration", () => {
     const revealItem = vi.fn(async () => ({ ok: true }));
     const agent = await assembleDesktopAgent({ llmProvider: "mock", workspaceDir: root });
     registerIpcHandlers(agent, undefined, makeFakeIpc(handlers), { revealItem });
-    await handlers.get(IPC.WORKSPACE_WRITE)?.({}, { path: "artifacts/t/cover.png", content: "PNG" });
+    await handlers.get(IPC.WORKSPACE_WRITE)?.(
+      {},
+      { path: "artifacts/t/cover.png", content: "PNG" },
+    );
 
     const listed = (await handlers.get(IPC.WORKSPACE_LIST)?.({}, undefined)) as {
       entries?: Array<{ path: string }>;

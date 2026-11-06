@@ -19,6 +19,9 @@ extraMetadata:
   main: out/main/index.js
 # 发布源：打包时据此生成 app-update.yml，供 electron-updater 拉取 GitHub Release。
 # owner/repo 默认从 package.json 的 repository 字段推断；CI 上可用 GH_TOKEN 上传。
+extraResources:
+  - from: resources/watermark-icon.png
+    to: watermark-icon.png
 publish:
   provider: github
   owner: oceancolor

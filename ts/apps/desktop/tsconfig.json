@@ -26,6 +26,10 @@
     { "path": "../../packages/taskpool" },
     { "path": "../../packages/classifier" },
     { "path": "../../packages/skills" },
-    { "path": "../../packages/telemetry/otel" }
+    { "path": "../../packages/telemetry/otel" },
+    { "path": "../../packages/runtime" },
+    { "path": "../../packages/profile" },
+    { "path": "../../packages/scheduler" },
+    { "path": "../../packages/connectors" }
   ]
 }

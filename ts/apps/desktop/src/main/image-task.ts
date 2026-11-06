@@ -83,14 +83,16 @@ export const fulfillImageGenerationTask = async (opts: {
         finalAnswer: `已用混元生图模型 Hy-Image-3.0 生成封面。已写入工作区：\`${path}\``,
       };
     } catch (error) {
-      console.warn("[OpenINTJ desktop] hunyuan image generation failed; falling back to SVG", error);
+      console.warn(
+        "[OpenINTJ desktop] hunyuan image generation failed; falling back to SVG",
+        error,
+      );
       await writeUtf8(svgPath, fallbackCoverSvg(opts.query));
       const detail = error instanceof Error ? error.message : String(error);
       return {
         path: svgPath,
         fallback: true,
-        finalAnswer:
-          `混元生图调用失败，已写入工作区：\`${svgPath}\`。${detail}`,
+        finalAnswer: `混元生图调用失败，已写入工作区：\`${svgPath}\`。${detail}`,
       };
     }
   }

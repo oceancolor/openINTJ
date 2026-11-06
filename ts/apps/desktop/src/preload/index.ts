@@ -7,10 +7,19 @@
 
 import { contextBridge, ipcRenderer } from "electron";
 import {
+  type AgentCancelRequest,
+  type AgentSteerRequest,
   type AppConfig,
   type AppConfigPatch,
+  type ApprovalDecideRequest,
+  type ApprovalRequestView,
+  type CapabilityGrantView,
+  type ChannelStatusView,
   type ChatRequest,
   type ChatResponse,
+  type CommandsInvokeRequest,
+  type CommandsInvokeResponse,
+  type ConnectorStatusView,
   type DormantDecisionError,
   type DormantDecisionResponse,
   type DormantError,
@@ -19,11 +28,23 @@ import {
   type DormantMineResponse,
   type DormantPersonaResponse,
   type DormantProposalDecision,
+  type GrantCreateRequest,
   IPC,
+  type IdentityAssertRequest,
+  type IdentityConfirmRequest,
+  type IdentityPersonView,
+  type IdentityResolveRequest,
+  type IdentityResolveResultView,
+  type LinkedAccountView,
   type MemoryQueryRequest,
   type MemoryQueryResult,
   type ModelCredentialSet,
   type ModelProfile,
+  type ProfileEntryView,
+  type ProfileUpsertRequest,
+  type ScheduleAddRequest,
+  type ScheduleUpdateRequest,
+  type ScheduledJobView,
   type SkillActiveResponse,
   type SkillCatalogResponse,
   type SkillDecisionResponse,
@@ -33,6 +54,13 @@ import {
   type SkillListResponse,
   type SkillProposalDecision,
   type StatusResponse,
+  type SubagentRecordView,
+  type SyncApplyReportView,
+  type SyncBundleView,
+  type TaskCheckpointView,
+  type TaskRunResultView,
+  type VoiceTranscribeRequest,
+  type WindowChromeAction,
   type WorkbenchConversation,
   type WorkbenchMessage,
   type WorkbenchTask,
@@ -58,7 +86,10 @@ const onEvent = (
     | typeof IPC.EVT_AUDIT
     | typeof IPC.EVT_UPDATE
     | typeof IPC.EVT_WORKSPACE
-    | typeof IPC.EVT_SKILL,
+    | typeof IPC.EVT_SKILL
+    | typeof IPC.EVT_ASSISTANT_DELTA
+    | typeof IPC.EVT_APPROVAL
+    | typeof IPC.EVT_SCHEDULE,
   cb: (payload: unknown) => void,
 ): (() => void) => {
   const listener = (_evt: unknown, payload: unknown): void => cb(payload);
@@ -67,6 +98,7 @@ const onEvent = (
 };
 
 const api = {
+  hostPlatform: process.platform,
   ping(): Promise<{ ok: boolean; ts: number }> {
     return ipcRenderer.invoke(IPC.PING);
   },
@@ -75,6 +107,138 @@ const api = {
   },
   chat(req: ChatRequest): Promise<ChatResponse> {
     return ipcRenderer.invoke(IPC.CHAT, req);
+  },
+  invokeCommand(req: CommandsInvokeRequest): Promise<CommandsInvokeResponse | { error: string }> {
+    return ipcRenderer.invoke(IPC.COMMANDS_INVOKE, req);
+  },
+  steer(req: AgentSteerRequest): Promise<{ ok: boolean } | { error: string }> {
+    return ipcRenderer.invoke(IPC.AGENT_STEER, req);
+  },
+  inject(req: AgentSteerRequest): Promise<{ ok: boolean } | { error: string }> {
+    return ipcRenderer.invoke(IPC.AGENT_INJECT, req);
+  },
+  cancelAgent(req: AgentCancelRequest): Promise<{ ok: boolean } | { error: string }> {
+    return ipcRenderer.invoke(IPC.AGENT_CANCEL, req);
+  },
+  onAssistantDelta(cb: (payload: unknown) => void): () => void {
+    return onEvent(IPC.EVT_ASSISTANT_DELTA, cb);
+  },
+  // RFC-013 interactive approval + capability grants
+  approvalList(): Promise<ApprovalRequestView[]> {
+    return ipcRenderer.invoke(IPC.APPROVAL_LIST);
+  },
+  approvalDecide(req: ApprovalDecideRequest): Promise<{ ok: boolean } | { error: string }> {
+    return ipcRenderer.invoke(IPC.APPROVAL_DECIDE, req);
+  },
+  grantsList(): Promise<CapabilityGrantView[]> {
+    return ipcRenderer.invoke(IPC.GRANTS_LIST);
+  },
+  grantsGrant(req: GrantCreateRequest): Promise<CapabilityGrantView | { error: string }> {
+    return ipcRenderer.invoke(IPC.GRANTS_GRANT, req);
+  },
+  grantsRevoke(id: string): Promise<{ ok: boolean } | { error: string }> {
+    return ipcRenderer.invoke(IPC.GRANTS_REVOKE, id);
+  },
+  onApprovalEvent(cb: (payload: unknown) => void): () => void {
+    return onEvent(IPC.EVT_APPROVAL, cb);
+  },
+  // RFC-014 personal profile (memory control plane)
+  profileList(): Promise<ProfileEntryView[]> {
+    return ipcRenderer.invoke(IPC.PROFILE_LIST);
+  },
+  profileUpsert(req: ProfileUpsertRequest): Promise<ProfileEntryView | { error: string }> {
+    return ipcRenderer.invoke(IPC.PROFILE_UPSERT, req);
+  },
+  profileRemove(id: string): Promise<{ ok: boolean } | { error: string }> {
+    return ipcRenderer.invoke(IPC.PROFILE_REMOVE, id);
+  },
+  profileExport(): Promise<{ profile: string }> {
+    return ipcRenderer.invoke(IPC.PROFILE_EXPORT);
+  },
+  // RFC-015 scheduler (persistent jobs + notifications)
+  scheduleList(): Promise<ScheduledJobView[]> {
+    return ipcRenderer.invoke(IPC.SCHEDULE_LIST);
+  },
+  scheduleAdd(req: ScheduleAddRequest): Promise<ScheduledJobView | { error: string }> {
+    return ipcRenderer.invoke(IPC.SCHEDULE_ADD, req);
+  },
+  scheduleUpdate(
+    id: string,
+    patch: ScheduleUpdateRequest,
+  ): Promise<ScheduledJobView | { error: string }> {
+    return ipcRenderer.invoke(IPC.SCHEDULE_UPDATE, { id, patch });
+  },
+  scheduleRemove(id: string): Promise<{ ok: boolean } | { error: string }> {
+    return ipcRenderer.invoke(IPC.SCHEDULE_REMOVE, id);
+  },
+  onScheduleEvent(cb: (payload: unknown) => void): () => void {
+    return onEvent(IPC.EVT_SCHEDULE, cb);
+  },
+  // RFC-020 identity graph (proposal-confirm account linking)
+  identityPersons(): Promise<IdentityPersonView[]> {
+    return ipcRenderer.invoke(IPC.IDENTITY_PERSONS);
+  },
+  identityResolve(
+    req: IdentityResolveRequest,
+  ): Promise<IdentityResolveResultView | { error: string }> {
+    return ipcRenderer.invoke(IPC.IDENTITY_RESOLVE, req);
+  },
+  identityConfirm(req: IdentityConfirmRequest): Promise<
+    | {
+        persons: IdentityPersonView[];
+        linked: LinkedAccountView[];
+        skipped: string[];
+      }
+    | { error: string }
+  > {
+    return ipcRenderer.invoke(IPC.IDENTITY_CONFIRM, req);
+  },
+  identityAssert(req: IdentityAssertRequest): Promise<IdentityPersonView | { error: string }> {
+    return ipcRenderer.invoke(IPC.IDENTITY_ASSERT, req);
+  },
+  identityUnlink(
+    accountId: string,
+  ): Promise<{ removed: boolean; personRemoved: boolean } | { error: string }> {
+    return ipcRenderer.invoke(IPC.IDENTITY_UNLINK, { accountId });
+  },
+  // RFC-016 connectors (status surface)
+  connectorsList(): Promise<ConnectorStatusView[]> {
+    return ipcRenderer.invoke(IPC.CONNECTORS_LIST);
+  },
+  // RFC-012 TaskPool checkpoints
+  taskpoolCheckpoints(
+    ...args: [limit?: number]
+  ): Promise<TaskCheckpointView[] | { error: string }> {
+    return ipcRenderer.invoke(IPC.TASKPOOL_CHECKPOINTS, args[0]);
+  },
+  taskpoolResume(runId: string): Promise<TaskRunResultView | { error: string }> {
+    return ipcRenderer.invoke(IPC.TASKPOOL_RESUME, runId);
+  },
+  taskpoolCancel(runId: string): Promise<{ ok: boolean } | { error: string }> {
+    return ipcRenderer.invoke(IPC.TASKPOOL_CANCEL, runId);
+  },
+  // RFC-012 §3 subagents
+  subagentsList(): Promise<SubagentRecordView[]> {
+    return ipcRenderer.invoke(IPC.SUBAGENTS_LIST);
+  },
+  // RFC-018 outbound channels
+  channelsList(): Promise<ChannelStatusView[]> {
+    return ipcRenderer.invoke(IPC.CHANNELS_LIST);
+  },
+  channelsTest(id: string): Promise<{ ok: boolean } | { error: string }> {
+    return ipcRenderer.invoke(IPC.CHANNELS_TEST, id);
+  },
+  // RFC-019 cross-device sync + voice
+  syncExport(): Promise<SyncBundleView> {
+    return ipcRenderer.invoke(IPC.SYNC_EXPORT);
+  },
+  syncImport(bundle: SyncBundleView): Promise<{ report: SyncApplyReportView } | { error: string }> {
+    return ipcRenderer.invoke(IPC.SYNC_IMPORT, bundle);
+  },
+  voiceTranscribe(
+    req: VoiceTranscribeRequest,
+  ): Promise<{ text: string; durationMs?: number } | { error: string }> {
+    return ipcRenderer.invoke(IPC.VOICE_TRANSCRIBE, req);
   },
   memoryQuery(req: MemoryQueryRequest): Promise<MemoryQueryResult[]> {
     return ipcRenderer.invoke(IPC.MEMORY_QUERY, req);
@@ -192,9 +356,7 @@ const api = {
     return ipcRenderer.invoke(IPC.WORKSPACE_LIST);
   },
   /** 读取工作区二进制文件（预览图片用 base64）。 */
-  workspaceReadBytes(
-    req: WorkspaceBytesRequest,
-  ): Promise<WorkspaceBytesResponse | WorkspaceError> {
+  workspaceReadBytes(req: WorkspaceBytesRequest): Promise<WorkspaceBytesResponse | WorkspaceError> {
     return ipcRenderer.invoke(IPC.WORKSPACE_READ_BYTES, req);
   },
   /** 在系统文件管理器中打开工作区根或定位某个文件。 */
@@ -217,6 +379,9 @@ const api = {
   /** Gracefully close stores and relaunch the desktop process. */
   restartApp(): Promise<{ ok: boolean; reason?: string }> {
     return ipcRenderer.invoke(IPC.APP_RESTART);
+  },
+  windowChrome(action: WindowChromeAction): Promise<{ ok: boolean }> {
+    return ipcRenderer.invoke(IPC.WINDOW_CHROME, action);
   },
   modelProfiles(): Promise<ModelProfile[]> {
     return ipcRenderer.invoke(IPC.MODEL_PROFILES);
@@ -280,6 +445,9 @@ const api = {
   },
   workbenchMessages(conversationId: string): Promise<WorkbenchMessage[]> {
     return ipcRenderer.invoke(IPC.WORKBENCH_MESSAGES, conversationId);
+  },
+  clearWorkbenchMessages(conversationId: string): Promise<{ ok: boolean; error?: string }> {
+    return ipcRenderer.invoke(IPC.WORKBENCH_MESSAGES_CLEAR, conversationId);
   },
 };
 

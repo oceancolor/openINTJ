@@ -38,7 +38,7 @@ export const MemoryPanel: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full min-h-0 text-xs">
-      <div className="shrink-0 p-2 border-b border-gray-800 flex gap-2">
+      <div className="shrink-0 p-2 border-b border-line flex gap-2">
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -46,36 +46,36 @@ export const MemoryPanel: React.FC = () => {
             if (e.key === "Enter") void search(query);
           }}
           placeholder="检索记忆（留空=最近片段）"
-          className="flex-1 bg-[#1e1e2e] border border-gray-700 rounded px-2 py-1 text-gray-200 focus:outline-none focus:border-purple-500"
+          className="flex-1 bg-white border border-linedark rounded px-2 py-1 text-ink focus:outline-none focus:border-moss"
         />
         <button
           type="button"
           onClick={() => void search(query)}
           disabled={loading}
-          className="px-3 py-1 rounded bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white"
+          className="px-3 py-1 rounded bg-ink hover:bg-inksoft disabled:opacity-50 text-white"
         >
           {loading ? "…" : "检索"}
         </button>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2">
-        {error ? <div className="text-red-400">[错误] {error}</div> : null}
+        {error ? <div className="text-signal">[错误] {error}</div> : null}
         {hits === undefined ? (
-          <div className="text-gray-500">输入关键词检索，或留空点「检索」查看最近记忆。</div>
+          <div className="text-muted">输入关键词检索，或留空点「检索」查看最近记忆。</div>
         ) : hits.length === 0 ? (
-          <div className="text-gray-500">没有命中的记忆。</div>
+          <div className="text-muted">没有命中的记忆。</div>
         ) : (
           hits.map((h) => (
-            <div key={h.fragmentId} className="border-l-2 border-gray-700 pl-2">
-              <div className="flex items-center gap-2 text-[10px] text-gray-500">
-                <span className="px-1 rounded bg-gray-800 text-gray-300">{h.memoryType}</span>
+            <div key={h.fragmentId} className="border-l border-linedark pl-2">
+              <div className="flex items-center gap-2 text-[10px] text-muted">
+                <span className="px-1 rounded bg-inset text-muted">{h.memoryType}</span>
                 {typeof h.score === "number" ? <span>score={h.score.toFixed(3)}</span> : null}
                 {h.taskTags.length > 0 ? <span>tags: {h.taskTags.join(", ")}</span> : null}
               </div>
-              <div className="text-gray-300 whitespace-pre-wrap break-words mt-0.5">
+              <div className="text-muted whitespace-pre-wrap break-words mt-0.5">
                 {h.content?.trim() ? (
                   h.content
                 ) : (
-                  <span className="text-gray-600">（仅元数据，无正文）</span>
+                  <span className="text-muted">（仅元数据，无正文）</span>
                 )}
               </div>
             </div>

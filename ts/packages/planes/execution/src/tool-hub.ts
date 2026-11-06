@@ -52,8 +52,14 @@ export class ToolHub {
   /**
    * Per-run skill tool allowlist. Empty `names` means no extra restriction.
    * Concurrent tao.run / TaskPool steps each enter their own ALS scope.
+   * `cap` is a hard ceiling (subagent runs): the effective allowlist is the
+   * intersection of `names` and `cap`, so in-run narrowing can never widen
+   * past the cap.
    */
-  private readonly allowlistAls = new AsyncLocalStorage<{ names?: readonly string[] }>();
+  private readonly allowlistAls = new AsyncLocalStorage<{
+    names?: readonly string[];
+    cap?: readonly string[];
+  }>();
 
   constructor(opts: ToolHubOpts = {}) {
     if (opts.hooks !== undefined) this.hooks = opts.hooks;
@@ -93,9 +99,14 @@ export class ToolHub {
   /**
    * Enter a per-run allowlist box. `setRunAllowlist` from skill `onSelected`
    * mutates this box so `list()` / `call()` see the same restriction.
+   * With `inherit`, an enclosing box is reused instead of starting fresh —
+   * run wrappers use this so a restriction set by an outer frame (e.g. a
+   * subagent child's host runner) survives into the run; top-level calls
+   * without an enclosing box behave exactly like a fresh scope.
    */
-  runInAllowlistScope<T>(fn: () => T): T {
-    return this.allowlistAls.run({}, fn);
+  runInAllowlistScope<T>(fn: () => T, opts?: { inherit?: boolean }): T {
+    const existing = opts?.inherit ? this.allowlistAls.getStore() : undefined;
+    return this.allowlistAls.run(existing ?? {}, fn);
   }
 
   /** Empty / undeclared tools = no restriction. No-op outside `runInAllowlistScope`. */
@@ -107,8 +118,23 @@ export class ToolHub {
     else delete box.names;
   }
 
+  /**
+   * Set the hard tool ceiling for the current scope (subagent child runs).
+   * The effective allowlist becomes `names ∩ cap`; later `setRunAllowlist`
+   * calls can narrow further but never widen past the cap. No-op outside a
+   * scope. An empty cap blocks every tool.
+   */
+  setRunCap(names: readonly string[]): void {
+    const box = this.allowlistAls.getStore();
+    if (!box) return;
+    box.cap = canonicalToolNames(names);
+  }
+
   private currentAllowlist(): readonly string[] | undefined {
-    return this.allowlistAls.getStore()?.names;
+    const box = this.allowlistAls.getStore();
+    if (!box) return undefined;
+    if (box.cap && box.names) return box.cap.filter((name) => box.names!.includes(name));
+    return box.cap ?? box.names;
   }
 
   private resolveRegisteredName(name: string): string {

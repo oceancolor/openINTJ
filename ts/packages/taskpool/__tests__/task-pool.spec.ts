@@ -232,6 +232,51 @@ describe("TaskPool MVD", () => {
     expect(await store.listIncompleteRuns()).toEqual([]);
   });
 
+  it("lists, resumes, and cancels durable checkpoints", async () => {
+    const store = new MemoryTaskStore();
+    const graph = {
+      planId: "checkpoint-plan",
+      goalIntent: "test",
+      goalInput: "finish the checkpoint",
+      nodes: [
+        { id: "a", deps: [], action: "x", description: "done" },
+        { id: "b", deps: ["a"], action: "x", description: "remaining" },
+      ],
+    };
+    await store.saveRun({
+      runId: "checkpoint-run",
+      planId: graph.planId,
+      status: "running",
+      graph,
+      nodes: [
+        { taskId: "a", state: "completed", attempt: 1, result: "kept", updatedAt: 2 },
+        { taskId: "b", state: "running", attempt: 1, updatedAt: 2 },
+      ],
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    const pool = new TaskPool({ store });
+    await expect(pool.listCheckpoints()).resolves.toMatchObject([{ runId: "checkpoint-run" }]);
+    const resumed = await pool.resumeRun("checkpoint-run", async (node) => `${node.id}-done`);
+    expect(resumed).toBeDefined();
+    const result = await resumed!.result;
+    expect(result.status).toBe("completed");
+    expect(result.results.get("a")).toBe("kept");
+    await expect(pool.cancelRun("checkpoint-run")).resolves.toBe(false);
+
+    await store.saveRun({
+      runId: "checkpoint-cancel",
+      planId: graph.planId,
+      status: "running",
+      graph,
+      nodes: [{ taskId: "a", state: "running", attempt: 1, updatedAt: 3 }],
+      createdAt: 3,
+      updatedAt: 3,
+    });
+    await expect(pool.cancelRun("checkpoint-cancel")).resolves.toBe(true);
+    expect((await store.loadRun("checkpoint-cancel"))?.status).toBe("cancelled");
+  });
+
   it("cancels interrupted snapshots by default without replaying workers", async () => {
     const store = new MemoryTaskStore();
     await store.saveRun({
@@ -402,6 +447,10 @@ describe("TaskPool MVD", () => {
 
       listIncompleteRuns(): Promise<readonly StoredTaskRun[]> {
         return this.memory.listIncompleteRuns();
+      }
+
+      listRuns(limit?: number): Promise<readonly StoredTaskRun[]> {
+        return this.memory.listRuns(limit);
       }
     }
 

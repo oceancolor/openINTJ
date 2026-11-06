@@ -7,7 +7,7 @@ export type StatusSnapshot = StatusResponse;
 export const StatusBar: React.FC<{ status: StatusSnapshot | undefined }> = ({ status }) => {
   if (!status) {
     return (
-      <div className="shrink-0 px-4 py-1 text-xs text-gray-500 border-t border-gray-800">
+      <div className="shrink-0 px-4 py-1 text-xs text-muted border-t border-line">
         加载状态中...
       </div>
     );
@@ -16,18 +16,18 @@ export const StatusBar: React.FC<{ status: StatusSnapshot | undefined }> = ({ st
   const runtimeEmbed = status.modelRuntime.embed;
   const dotColor =
     runtimeLlm.status === "connected" && !runtimeLlm.fallbackFrom
-      ? "bg-green-400"
+      ? "bg-[#62a36d]"
       : status.llm.status === "degraded"
-        ? "bg-yellow-400"
-        : "bg-red-400";
+        ? "bg-amberdot"
+        : "bg-signal";
   return (
-    <div className="shrink-0 flex items-center gap-4 px-4 py-1 text-xs text-gray-400 border-t border-gray-800 bg-[#181825] overflow-x-auto whitespace-nowrap [&>span]:shrink-0">
+    <div className="shrink-0 flex items-center gap-4 overflow-x-auto whitespace-nowrap border-t border-line bg-panel px-4 py-1 font-mono text-[11px] text-muted [&>span]:shrink-0">
       <span className="flex items-center gap-1">
         <span className={`inline-block w-2 h-2 rounded-full ${dotColor}`} />
         LLM: {runtimeLlm.provider} ({runtimeLlm.model}) · {runtimeLlm.mode}
         {runtimeLlm.fallbackFrom ? ` ← ${runtimeLlm.fallbackFrom}` : ""}
       </span>
-      <span className={runtimeEmbed.fallbackFrom ? "text-yellow-300" : "text-gray-400"}>
+      <span className={runtimeEmbed.fallbackFrom ? "text-ambertext" : "text-muted"}>
         Embed: {runtimeEmbed.provider} ({runtimeEmbed.model}, {runtimeEmbed.dimension}d) ·{" "}
         {runtimeEmbed.mode}
         {runtimeEmbed.fallbackFrom ? ` ← ${runtimeEmbed.fallbackFrom}` : ""}
@@ -40,18 +40,18 @@ export const StatusBar: React.FC<{ status: StatusSnapshot | undefined }> = ({ st
           : ""}
       </span>
       {status.retrievalMode ? (
-        <span className="text-gray-500">
-          检索: <span className="text-gray-300">{status.retrievalMode}</span>
+        <span className="text-muted">
+          检索: <span className="text-muted">{status.retrievalMode}</span>
         </span>
       ) : null}
       {status.persistence ? (
-        <span className="text-gray-500">
-          盘: <span className="text-gray-300">{status.persistence.mode}</span>
+        <span className="text-muted">
+          盘: <span className="text-muted">{status.persistence.mode}</span>
         </span>
       ) : null}
-      <span className="text-gray-500">
+      <span className="text-muted">
         分类器:{" "}
-        <span className={status.classifier.enabled ? "text-gray-300" : "text-gray-600"}>
+        <span className={status.classifier.enabled ? "text-muted" : "text-muted"}>
           {status.classifier.enabled
             ? status.classifier.impliedByTaskPool
               ? "on (TaskPool)"
@@ -60,31 +60,31 @@ export const StatusBar: React.FC<{ status: StatusSnapshot | undefined }> = ({ st
         </span>
       </span>
       {status.taskPool ? (
-        <span className={status.taskPool.active ? "text-green-300" : "text-gray-500"}>
+        <span className={status.taskPool.active ? "text-moss" : "text-muted"}>
           TaskPool: {status.taskPool.active ? "active" : status.taskPool.reason}
           {status.taskPool.persistence === "sqlite" ? ` · ${status.taskPool.recovery}` : ""}
         </span>
       ) : null}
       {status.dormant ? (
-        <span className="text-gray-500">
+        <span className="text-muted">
           Dormant:{" "}
           <span
-            className={status.dormant.pendingProposals > 0 ? "text-yellow-300" : "text-gray-300"}
+            className={status.dormant.pendingProposals > 0 ? "text-ambertext" : "text-muted"}
           >
             {status.dormant.passiveSize} ev / {status.dormant.pendingProposals} 待审
           </span>
         </span>
       ) : null}
       {status.skills ? (
-        <span className={status.skills.enabled ? "text-gray-400" : "text-gray-600"}>
+        <span className={status.skills.enabled ? "text-muted" : "text-muted"}>
           技能:{" "}
           <span
             className={
               status.skills.pendingProposals > 0
-                ? "text-yellow-300"
+                ? "text-ambertext"
                 : status.skills.enabled
-                  ? "text-gray-300"
-                  : "text-gray-600"
+                  ? "text-muted"
+                  : "text-muted"
             }
           >
             {status.skills.enabled

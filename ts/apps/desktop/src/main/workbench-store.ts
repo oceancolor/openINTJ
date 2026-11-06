@@ -2,6 +2,16 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
+import {
+  type Journal,
+  type JournalEvent,
+  type JournalEventDraft,
+  JournalEventSchema,
+  appendSessionCleared,
+  deriveChatMessages,
+  lastClearedSeq,
+  recordClosedTurn,
+} from "@openintj/core";
 import type {
   WorkbenchConversation,
   WorkbenchMessage,
@@ -137,6 +147,8 @@ export interface WorkbenchStore {
     conversation: WorkbenchConversation;
   };
   listMessages(conversationId: string, limit?: number): WorkbenchMessage[];
+  listJournal(conversationId: string): JournalEvent[];
+  journal(): Journal;
   appendMessage(
     input: Omit<WorkbenchMessage, "id" | "createdAt" | "messageKind"> & {
       id?: string;
@@ -144,6 +156,7 @@ export interface WorkbenchStore {
       messageKind?: WorkbenchMessage["messageKind"];
     },
   ): WorkbenchMessage;
+  clearMessages(conversationId: string): void;
   close(): void;
 }
 
@@ -187,7 +200,21 @@ export const createWorkbenchStore = (opts: {
     );
     CREATE INDEX IF NOT EXISTS idx_messages_conversation
       ON messages(conversation_id, created_at ASC);
-    PRAGMA user_version = 3;
+    CREATE TABLE IF NOT EXISTS journal_events (
+      conversation_id TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      turn_id TEXT,
+      step INTEGER,
+      trace_id TEXT,
+      payload_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (conversation_id, seq)
+    );
+    CREATE INDEX IF NOT EXISTS idx_journal_conversation
+      ON journal_events(conversation_id, seq ASC);
+    PRAGMA user_version = 4;
   `);
   const messageColumns = new Set(
     (
@@ -212,7 +239,7 @@ export const createWorkbenchStore = (opts: {
   if (!workspaceColumns.has("closed_at")) {
     db.exec("ALTER TABLE workspaces ADD COLUMN closed_at INTEGER");
   }
-  db.pragma("user_version = 3");
+  db.pragma("user_version = 4");
   db.prepare("UPDATE conversations SET model_profile_id=? WHERE model_profile_id='auto'").run(
     DEFAULT_DESKTOP_MODEL_PROFILE_ID,
   );
@@ -261,6 +288,137 @@ export const createWorkbenchStore = (opts: {
       | undefined;
     if (!row) throw new Error(`conversation not found: ${conversationId}`);
     return conversation(row);
+  };
+
+  interface JournalRow {
+    conversation_id: string;
+    seq: number;
+    id: string;
+    type: string;
+    turn_id: string | null;
+    step: number | null;
+    trace_id: string | null;
+    payload_json: string;
+    created_at: number;
+  }
+
+  const journal: Journal = {
+    append(draft: JournalEventDraft) {
+      const last = db
+        .prepare("SELECT MAX(seq) AS seq FROM journal_events WHERE conversation_id=?")
+        .get(draft.conversationId) as { seq: number | null };
+      const seq = (last.seq ?? 0) + 1;
+      const event = JournalEventSchema.parse({
+        ...draft,
+        seq,
+        id: draft.id ?? id(),
+        createdAt: draft.createdAt ?? now(),
+      });
+      db.prepare(
+        `INSERT INTO journal_events(
+          conversation_id, seq, id, type, turn_id, step, trace_id, payload_json, created_at
+        ) VALUES(?,?,?,?,?,?,?,?,?)`,
+      ).run(
+        event.conversationId,
+        event.seq,
+        event.id,
+        event.type,
+        "turnId" in event ? (event.turnId ?? null) : null,
+        "step" in event ? (event.step ?? null) : null,
+        event.traceId ?? null,
+        JSON.stringify(event),
+        event.createdAt,
+      );
+      return event;
+    },
+    list(conversationId) {
+      const rows = db
+        .prepare("SELECT * FROM journal_events WHERE conversation_id=? ORDER BY seq ASC")
+        .all(conversationId) as JournalRow[];
+      return rows.map((row) => JournalEventSchema.parse(JSON.parse(row.payload_json)));
+    },
+    listActive(conversationId) {
+      const listed = this.list(conversationId);
+      const cleared = lastClearedSeq(listed);
+      return listed.filter((event) => event.seq > cleared);
+    },
+    gc(conversationId) {
+      const listed = this.list(conversationId);
+      const cleared = lastClearedSeq(listed);
+      if (cleared <= 0) return 0;
+      const result = db
+        .prepare("DELETE FROM journal_events WHERE conversation_id=? AND seq<=?")
+        .run(conversationId, cleared);
+      return result.changes;
+    },
+  };
+
+  const backfillJournal = (conversationId: string): void => {
+    const existing = journal.list(conversationId);
+    if (existing.length > 0) return;
+    const rows = db
+      .prepare("SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at ASC")
+      .all(conversationId) as MessageRow[];
+    if (rows.length === 0) return;
+    let pendingUser: MessageRow | undefined;
+    const flush = (assistant?: MessageRow): void => {
+      if (!pendingUser && !assistant) return;
+      const turnId = id();
+      const userRow = pendingUser;
+      recordClosedTurn(journal, {
+        conversationId,
+        turnId,
+        ...(assistant?.trace_id ? { traceId: assistant.trace_id } : {}),
+        user: {
+          content: userRow?.content ?? "",
+          ...(userRow?.content !== undefined ? { originalInput: userRow.content } : {}),
+          ...(userRow?.input_structure_json
+            ? { inputStructure: JSON.parse(userRow.input_structure_json) }
+            : assistant?.input_structure_json
+              ? { inputStructure: JSON.parse(assistant.input_structure_json) }
+              : {}),
+        },
+        assistant: {
+          content: assistant?.content ?? "",
+          messageKind:
+            assistant?.message_kind === "clarification" || assistant?.message_kind === "answer"
+              ? assistant.message_kind
+              : "answer",
+          ...(assistant?.status ? { status: assistant.status } : {}),
+        },
+        endStatus: assistant?.message_kind === "clarification" ? "clarify" : "completed",
+      });
+      pendingUser = undefined;
+    };
+    for (const row of rows) {
+      if (row.role === "user") {
+        if (pendingUser) flush();
+        pendingUser = row;
+      } else if (row.role === "assistant") {
+        flush(row);
+      }
+    }
+    if (pendingUser) flush();
+  };
+
+  const chatMessageFromDerived = (
+    row: ReturnType<typeof deriveChatMessages>[number],
+  ): WorkbenchMessage => {
+    const parsedStructure =
+      row.inputStructure !== undefined
+        ? InputStructureSchema.safeParse(row.inputStructure)
+        : undefined;
+    return {
+      id: row.id,
+      conversationId: row.conversationId,
+      role: row.role,
+      content: row.content,
+      messageKind: row.messageKind === "message" ? "message" : row.messageKind,
+      createdAt: row.createdAt,
+      ...(row.traceId ? { traceId: row.traceId } : {}),
+      ...(row.status ? { status: row.status } : {}),
+      ...(parsedStructure?.success ? { inputStructure: parsedStructure.data } : {}),
+    };
   };
 
   const closeOthers = (keepId?: string): void => {
@@ -323,7 +481,11 @@ export const createWorkbenchStore = (opts: {
 
   return {
     bootstrap() {
-      return db.transaction(() => listOpenSnapshot())();
+      return db.transaction(() => {
+        const snapshot = listOpenSnapshot();
+        for (const item of snapshot.conversations) backfillJournal(item.id);
+        return snapshot;
+      })();
     },
     createWorkspace(input) {
       const rootPath = resolve(input.rootPath);
@@ -414,14 +576,43 @@ export const createWorkbenchStore = (opts: {
     },
     listMessages(conversationId, limit = 80) {
       getConversationRow(conversationId);
-      const rows = db
+      backfillJournal(conversationId);
+      const cap = Math.max(1, Math.min(500, limit));
+      const cachedRows = db
         .prepare(
           `SELECT * FROM (
              SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT ?
            ) ORDER BY created_at ASC`,
         )
-        .all(conversationId, Math.max(1, Math.min(500, limit))) as MessageRow[];
-      return rows.map(message);
+        .all(conversationId, cap) as MessageRow[];
+      const events = journal.list(conversationId);
+      if (events.length > 0) {
+        const projected = deriveChatMessages(events).slice(-cap).map(chatMessageFromDerived);
+        let cacheIndex = 0;
+        return projected.map((row) => {
+          while (cacheIndex < cachedRows.length && cachedRows[cacheIndex]!.role !== row.role) {
+            cacheIndex += 1;
+          }
+          const cached = cachedRows[cacheIndex];
+          if (!cached || cached.role !== row.role) return row;
+          cacheIndex += 1;
+          return {
+            ...row,
+            ...(cached.tokens !== null && row.tokens === undefined
+              ? { tokens: cached.tokens }
+              : {}),
+          };
+        });
+      }
+      return cachedRows.map(message);
+    },
+    listJournal(conversationId) {
+      getConversationRow(conversationId);
+      backfillJournal(conversationId);
+      return journal.list(conversationId);
+    },
+    journal() {
+      return journal;
     },
     appendMessage(input) {
       getConversationRow(input.conversationId);
@@ -449,6 +640,12 @@ export const createWorkbenchStore = (opts: {
         input.conversationId,
       );
       return message(db.prepare("SELECT * FROM messages WHERE id=?").get(messageId) as MessageRow);
+    },
+    clearMessages(conversationId) {
+      getConversationRow(conversationId);
+      appendSessionCleared(journal, conversationId, { by: "command", command: "/clear" });
+      db.prepare("DELETE FROM messages WHERE conversation_id=?").run(conversationId);
+      db.prepare("UPDATE conversations SET updated_at=? WHERE id=?").run(now(), conversationId);
     },
     close() {
       db.close();

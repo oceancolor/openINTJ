@@ -387,6 +387,25 @@ describe("HunyuanClient (live mode with fetch mock)", () => {
     });
   });
 
+  it("classifies context-length rejections as CONTEXT_OVERFLOW (RFC-012)", async () => {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            message: "This model's maximum context length is 8192 tokens",
+            code: "context_length_exceeded",
+          },
+        }),
+        { status: 400 },
+      )) as unknown as typeof fetch;
+    const c = new HunyuanClient({ apiKey: "k" });
+    await expect(c.chat([{ role: "user", content: "x" }])).rejects.toMatchObject({
+      code: "CONTEXT_OVERFLOW",
+      retriable: false,
+      details: { provider: "hunyuan", status: 400, overflow: true },
+    });
+  });
+
   it("throws on 500 retriable", async () => {
     globalThis.fetch = (async () =>
       new Response(JSON.stringify({ error: { message: "server error" } }), {

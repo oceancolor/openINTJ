@@ -6,6 +6,7 @@ import {
   ErrorCode,
   type LlmClient,
   type LlmStatus,
+  matchesContextOverflowText,
 } from "@openintj/core";
 import { type OllamaConfig, OllamaConfigSchema, loadOllamaConfigFromEnv } from "./types.js";
 
@@ -136,11 +137,16 @@ export class OllamaClient implements LlmClient {
         this.lastError = text.slice(0, 200);
         this.lastErrorType = "http_error";
         this.connected = false;
+        const overflow = matchesContextOverflowText(text);
         throw new AgentError({
-          code: ErrorCode.INTERNAL_ERROR,
+          code: overflow ? ErrorCode.CONTEXT_OVERFLOW : ErrorCode.INTERNAL_ERROR,
           message: `Ollama 调用失败 (${res.status}): ${this.lastError || res.statusText}`,
-          retriable: res.status === 408 || res.status === 429 || res.status >= 500,
-          details: { provider: "ollama", status: res.status },
+          retriable: !overflow && (res.status === 408 || res.status === 429 || res.status >= 500),
+          details: {
+            provider: "ollama",
+            status: res.status,
+            ...(overflow ? { overflow: true } : {}),
+          },
         });
       }
       let data: OllamaChatResponse;

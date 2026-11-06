@@ -1,37 +1,64 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import {
-  DEFAULT_SEEDS,
-  ReinforcingClassifier,
-  decideRoute,
-  outcomeSignal,
-} from "@openintj/classifier";
+  type ChannelDispatcher,
+  channelEventFromScheduler,
+  channelsFromEnv,
+} from "@openintj/channels";
+import { DEFAULT_SEEDS, ReinforcingClassifier, outcomeSignal } from "@openintj/classifier";
 import { forkJoin } from "@openintj/concurrency";
 import {
+  type Connector,
+  ConnectorRegistry,
+  connectorsFromEnv,
+  parseIcs,
+  parseMbox,
+} from "@openintj/connectors";
+import {
+  type AgentHandle,
   type ChatMessage,
   DEFAULT_REACT_CONFIG,
   DEFAULT_TAO_CONFIG,
   HookBus,
   type InputStructuredTaoResult,
   type InputStructuringPolicy,
+  type Journal,
+  type JournalTurnContext,
   type LlmClient,
   ReactStateMachine,
+  type SlashCommandRegistry,
   TaoLoop,
   TaskType,
   type TaskTypeType,
   attachProductTraitSignals,
+  createAgentHandle,
+  createBuiltinSlashCommands,
+  createInMemoryJournal,
+  createSlashCommandRegistry,
   detectTaskType,
+  finalizeJournalTurn,
   getShaderForTask,
-  inputClarificationFromPreflight,
-  inputClarificationFromQuestions,
   inputClarificationResult,
+  invokeSlashCommand,
   resolveInputStructuringConfig,
-  structureUserInput,
+  slashCommandResultToTao,
 } from "@openintj/core";
 import {
   type DormantPersistenceAdapter,
   DormantRuntime,
   type DormantRuntimeOpts,
 } from "@openintj/dormant";
+import {
+  type IdentityDocument,
+  type IdentityPerson,
+  IdentityService,
+  InMemoryIdentityStore,
+  JsonIdentityStore,
+  createGravatarResolver,
+  createLocalCorpusResolver,
+  derivePrimaryIdentity,
+} from "@openintj/identity";
 import { HunyuanClient, createHunyuanSearchTool } from "@openintj/llm-hunyuan";
 import {
   type EmbedProviderId,
@@ -40,7 +67,7 @@ import {
   resolveModelRuntime,
   validateEmbeddingFingerprintForDataDir,
 } from "@openintj/model-runtime";
-import { ControlPlane, resolvePlanAdviceForRun } from "@openintj/plane-control";
+import { ControlPlane } from "@openintj/plane-control";
 import {
   Executor,
   ToolHub,
@@ -48,7 +75,19 @@ import {
   createWorkspaceTools,
   resolveWebSearchConfig,
 } from "@openintj/plane-execution";
-import { GovernancePlane, createToolCallGate } from "@openintj/plane-governance";
+import {
+  type ApprovalBroker,
+  GovernancePlane,
+  type GrantStore,
+  JsonGrantStore,
+  type PendingApprovalBroker,
+  TOOL_RISK_ORDER,
+  type ToolRisk,
+  classifyToolRisk,
+  createApprovalSetup,
+  createToolCallGate,
+  riskAtLeast,
+} from "@openintj/plane-governance";
 import {
   ContextEngine,
   MemoryPlane,
@@ -57,19 +96,37 @@ import {
   createPersistentMemoryStore,
   fragmentsToRanked,
 } from "@openintj/plane-memory";
+import { InMemoryProfileStore, JsonProfileStore, ProfileService } from "@openintj/profile";
+import {
+  type Compactor,
+  type PromptSectionRegistry,
+  type SubagentSpawner,
+  buildJournalTurnContext,
+  createCompactor,
+  createDefaultPromptSections,
+  createDelegateTool,
+  createPromptSectionRegistry,
+  createSubagentSpawner,
+  prepareRunPrelude,
+  runCompactCommand,
+} from "@openintj/runtime";
+import {
+  InMemoryScheduleStore,
+  JsonScheduleStore,
+  type QuietHours,
+  SchedulerService,
+} from "@openintj/scheduler";
 import {
   DEFAULT_AGENT_SYSTEM_PROMPT,
   PRODUCT_BEHAVIOR_VERSION,
   type SelfConsistencyStrategy,
   appendSourcesFooter,
-  assembleSystemPromptPrefix,
   enforceProductBehaviorAnswer,
-  resolveDeterministicProductBehaviorAnswer,
+  isCommandExecutionAvailable,
   resolvePersonaInjection,
   resolveProductBehaviorEnabled,
   resolveSearchEvidenceStatus,
   resolveSelfConsistency,
-  isCommandExecutionAvailable,
   resolveWorkspaceConfig,
   selectConsistentAnswer,
 } from "@openintj/shared";
@@ -90,11 +147,21 @@ import {
   createSqliteSkillStore,
 } from "@openintj/storage-sqlite";
 import {
+  type SyncApplyReport,
+  type SyncBundle,
+  applySyncBundle,
+  buildSyncBundle,
+} from "@openintj/sync";
+import {
   MemoryHybridIndex,
+  type StoredTaskRun,
+  type TaskGraphNode,
   TaskPool,
   type TaskPoolActivationStatus,
   type TaskPoolRecoveryPolicy,
   type TaskPoolRecoverySummary,
+  type TaskRunResult,
+  type TaskWorkerContext,
   planGraphToTaskGraph,
   resolveOrchestrationMode,
   resolveTaskPoolActivation,
@@ -108,6 +175,7 @@ import {
   type AttachedOtel,
   attachOtelToHooks,
 } from "@openintj/telemetry-otel";
+import { type SpeechToTextProvider, sttFromEnv } from "@openintj/voice";
 import { type RateLimitOpts, RateLimitedLlmClient } from "./rate-limited-llm.js";
 
 export interface ServerAgentOpts {
@@ -223,6 +291,36 @@ export interface ServerAgentOpts {
    * 真正想 export trace/metric 时，调用方需自己先调 `bootstrapNodeOtel(...)` 或注册自家 SDK。
    */
   enableOtel?: boolean | AttachOtelOpts;
+  /** RFC-013：需要交互审批的风险级（或 env OPENINTJ_APPROVAL_RISKS）。 */
+  approvalRisks?: ToolRisk[];
+  /** RFC-013：自定义审批 broker；缺省用 PendingApprovalBroker（无人决定即拒绝）。 */
+  approvalBroker?: ApprovalBroker;
+  /** RFC-013：注入自定义 grant 存储；缺省 real 持久化时用 <dataDir>/grants.json（仅显式 grant 落盘）。 */
+  grants?: GrantStore;
+  /** RFC-014：注入自定义个人档案服务；缺省 real 持久化时用 <dataDir>/profile.json。 */
+  profile?: ProfileService;
+  /** RFC-014：个人档案开关；默认开，env OPENINTJ_PROFILE=0 可关。 */
+  enableProfile?: boolean;
+  /** RFC-015：注入自定义调度服务；缺省 real 持久化时用 <dataDir>/schedules.json。 */
+  scheduler?: SchedulerService;
+  /** RFC-015：调度开关；默认开，env OPENINTJ_SCHEDULER=0 可关（关时 start() 为 no-op）。 */
+  enableScheduler?: boolean;
+  /** RFC-015：安静时段，命中时任务顺延（如 { start: "22:00", end: "07:00" }）。 */
+  schedulerQuietHours?: QuietHours;
+  /** RFC-020：注入自定义身份服务；缺省 real 持久化时用 <dataDir>/identity.json。 */
+  identity?: IdentityService;
+  /** RFC-016：注入额外连接器；缺省叠加 env 连接器（OPENINTJ_NOTES_DIR 等）。 */
+  connectors?: Connector[];
+  /** RFC-016：连接器开关；默认开，env OPENINTJ_CONNECTORS=0 可关。 */
+  enableConnectors?: boolean;
+  /** RFC-012：压缩开关；默认开，env OPENINTJ_COMPACT=0 可关。 */
+  enableCompaction?: boolean;
+  /** RFC-012：压缩参数（压力阈值 tokens / 保留最近轮数）。 */
+  compaction?: { pressureTokens?: number; keepRecentTurns?: number };
+  /** RFC-012 §3：进程内 Subagent（delegate_task 工具）。默认关；env OPENINTJ_SUBAGENTS=1。 */
+  enableSubagents?: boolean;
+  /** RFC-012 §3：子会话工具风险上限（默认 read；env OPENINTJ_SUBAGENT_MAX_RISK 可调）。 */
+  subagentMaxRisk?: ToolRisk;
 }
 
 export interface ServerAgent {
@@ -256,6 +354,42 @@ export interface ServerAgent {
   refreshModelRuntime(): Promise<ModelRuntimeStatus>;
   /** real data dir + TaskPool 开启时的启动恢复结果。 */
   taskPoolRecovery?: TaskPoolRecoverySummary;
+  /** RFC-012: durable TaskPool checkpoints, newest first. */
+  taskPoolCheckpoints(limit?: number): Promise<readonly StoredTaskRun[]>;
+  /** RFC-012: resume a durable incomplete TaskPool run, retaining completed nodes. */
+  resumeTaskRun(runId: string): Promise<TaskRunResult | undefined>;
+  /** RFC-012: cancel an active or durable incomplete TaskPool run. */
+  cancelTaskRun(runId: string): Promise<boolean>;
+  journal: Journal;
+  commands: SlashCommandRegistry;
+  handle: AgentHandle;
+  /** RFC-011 prompt section registry (RFC-006 order locked). */
+  prompt: PromptSectionRegistry;
+  /** RFC-013 pending approvals (present when approval risks are configured). */
+  approvals?: PendingApprovalBroker;
+  /** RFC-013 capability grants. */
+  grants: GrantStore;
+  /** RFC-014 personal profile (memory control plane). */
+  profile: ProfileService;
+  /** RFC-015 scheduler (persistent jobs + notifications). */
+  scheduler: SchedulerService;
+  /** RFC-020 identity graph (proposal-confirm account linking). */
+  identity: IdentityService;
+  /** RFC-018 outbound notification channels. */
+  channels: ChannelDispatcher;
+  /** RFC-019 speech-to-text provider (undefined when unconfigured). */
+  stt?: SpeechToTextProvider;
+  /** RFC-019 cross-device sync bundle export/import. */
+  exportSyncBundle(): SyncBundle;
+  importSyncBundle(bundle: unknown): SyncApplyReport;
+  /** RFC-016 connector registry (ToolHub-registered external data sources). */
+  connectors: ConnectorRegistry;
+  /** RFC-016: initialize async connectors (MCP) and register discovered tools. */
+  initConnectors(): Promise<void>;
+  /** RFC-012 compaction driver (pressure / command triggers). */
+  compactor: Compactor;
+  /** RFC-012 §3 subagent spawner（delegate_task 仅启用时注册）。 */
+  subagents: SubagentSpawner;
   run(query: string, opts?: ServerRunOptions): Promise<InputStructuredTaoResult>;
   status(): Promise<{
     llm: ReturnType<LlmClient["getStatus"]> & { runtime?: ModelRuntimeStatus["llm"] };
@@ -287,6 +421,8 @@ export interface ServerRunOptions {
   signal?: AbortSignal;
   history?: readonly ChatMessage[];
   llm?: LlmClient;
+  journal?: JournalTurnContext;
+  skipSlashCommand?: boolean;
 }
 
 const parseServerLlmProvider = (opts: ServerAgentOpts): LlmProviderId => {
@@ -321,6 +457,51 @@ const parseServerEmbedProvider = (opts: ServerAgentOpts): EmbedProviderId | unde
     return raw;
   }
   return undefined;
+};
+
+/**
+ * RFC-020: read-only local corpus for identity resolution, built from the
+ * same env-configured paths as the connectors. Best-effort: unreadable
+ * sources are skipped, and documents never leave the process.
+ */
+const identityCorpusDocuments = (): IdentityDocument[] => {
+  const docs: IdentityDocument[] = [];
+  try {
+    const notesDir = process.env["OPENINTJ_NOTES_DIR"];
+    if (notesDir && existsSync(notesDir)) {
+      for (const name of readdirSync(notesDir).slice(0, 200)) {
+        if (!/\.(md|txt)$/i.test(name)) continue;
+        docs.push({
+          source: "notes",
+          title: `notes: ${name}`,
+          text: readFileSync(join(notesDir, name), "utf8").slice(0, 16_000),
+        });
+      }
+    }
+    const mboxPath = process.env["OPENINTJ_MAIL_MBOX"];
+    if (mboxPath && existsSync(mboxPath)) {
+      for (const msg of parseMbox(readFileSync(mboxPath, "utf8")).slice(0, 300)) {
+        docs.push({
+          source: "mail",
+          title: `mail: ${msg.subject || msg.from}`,
+          text: `${msg.from}\n${msg.to ?? ""}\n${msg.subject}\n${msg.body}`.slice(0, 8_000),
+        });
+      }
+    }
+    const icsPath = process.env["OPENINTJ_CALENDAR_ICS"];
+    if (icsPath && existsSync(icsPath)) {
+      for (const ev of parseIcs(readFileSync(icsPath, "utf8")).slice(0, 300)) {
+        docs.push({
+          source: "calendar",
+          title: `calendar: ${ev.summary}`,
+          text: [ev.summary, ev.description ?? "", ev.location ?? ""].join("\n"),
+        });
+      }
+    }
+  } catch {
+    // Corpus is an optional recall aid; never block identity resolution.
+  }
+  return docs;
 };
 
 const resolvePersistence = (opts: ServerAgentOpts): { mode: PersistenceMode; dataDir?: string } => {
@@ -442,7 +623,25 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
   if (dormant) await dormant.hydrate();
   const retrievalMode = resolveRetrievalMode(opts);
 
-  const governance = new GovernancePlane({ hooks });
+  const approvalSetup = createApprovalSetup({
+    ...(opts.approvalRisks ? { requiredRisks: opts.approvalRisks } : {}),
+    ...(opts.approvalBroker ? { broker: opts.approvalBroker } : {}),
+  });
+  // RFC-013: explicit grants persist to <dataDir>/grants.json in real mode;
+  // approval-derived grants stay session-only (enforced by JsonGrantStore).
+  const grantStore =
+    opts.grants ??
+    (persistence.mode === "real" && persistence.dataDir
+      ? new JsonGrantStore(`${persistence.dataDir}/grants.json`)
+      : undefined);
+  const governance = new GovernancePlane({
+    hooks,
+    approval: {
+      requiredRisks: approvalSetup.requiredRisks,
+      ...(approvalSetup.broker ? { broker: approvalSetup.broker } : {}),
+      ...(grantStore ? { grants: grantStore } : {}),
+    },
+  });
   if (persistence.mode === "real" && persistence.dataDir) {
     await validateEmbeddingFingerprintForDataDir(
       persistence.dataDir,
@@ -518,6 +717,17 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
   if (!isCommandExecutionAvailable(wsConfig)) {
     toolHub.unregister("execute_command");
   }
+
+  // RFC-016: connectors register their tools into the same ToolHub, so every
+  // call keeps flowing through the governance gate.
+  const connectorsEnabled = opts.enableConnectors ?? process.env["OPENINTJ_CONNECTORS"] !== "0";
+  const connectorRegistry = new ConnectorRegistry();
+  if (connectorsEnabled) {
+    for (const connector of [...(opts.connectors ?? []), ...connectorsFromEnv()]) {
+      connectorRegistry.register(connector);
+    }
+  }
+  connectorRegistry.attachHub(toolHub);
   const execution = new Executor({ toolHub, hooks, registerBuiltins: false });
 
   const react = new ReactStateMachine({
@@ -599,6 +809,110 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
       })
     : undefined;
 
+  // RFC-014: the profile is the editable control plane above Dormant persona.
+  // When enabled it owns the user-persona section (importing dormant fields
+  // first); when disabled, fall back to the raw persona prompt.
+  const profileEnabled = opts.enableProfile ?? process.env["OPENINTJ_PROFILE"] !== "0";
+  const profile =
+    opts.profile ??
+    new ProfileService(
+      persistence.mode === "real" && persistence.dataDir
+        ? new JsonProfileStore(`${persistence.dataDir}/profile.json`)
+        : new InMemoryProfileStore(),
+    );
+
+  // RFC-012: compaction driver (pressure check per run + /compact command).
+  const compactionEnabled = opts.enableCompaction ?? process.env["OPENINTJ_COMPACT"] !== "0";
+  const compactor = createCompactor({
+    llm,
+    ...(opts.compaction?.pressureTokens ? { pressureTokens: opts.compaction.pressureTokens } : {}),
+    ...(opts.compaction?.keepRecentTurns
+      ? { keepRecentTurns: opts.compaction.keepRecentTurns }
+      : {}),
+  });
+
+  // RFC-015: scheduler (runner attached once the handle exists, below).
+  const schedulerEnabled = opts.enableScheduler ?? process.env["OPENINTJ_SCHEDULER"] !== "0";
+  const scheduler =
+    opts.scheduler ??
+    new SchedulerService(
+      persistence.mode === "real" && persistence.dataDir
+        ? new JsonScheduleStore(`${persistence.dataDir}/schedules.json`)
+        : new InMemoryScheduleStore(),
+      {
+        enabled: schedulerEnabled,
+        ...(opts.schedulerQuietHours ? { quietHours: opts.schedulerQuietHours } : {}),
+      },
+    );
+
+  // RFC-020: identity graph. Gravatar covers the public email surface; the
+  // local corpus resolver links phone/wechat/handles from the user's own data.
+  // The primary person's email/name are mirrored into the profile identity
+  // section (provenance "identity-graph"); hand-written profile entries are
+  // never overwritten — the graph yields to them.
+  const applyIdentityToProfile = (persons: readonly IdentityPerson[]): void => {
+    const derived = derivePrimaryIdentity(persons);
+    for (const key of ["email", "name"] as const) {
+      const existing = profile.get("identity", key);
+      const value = derived[key];
+      if (value) {
+        if (!existing || existing.provenance === "identity-graph") {
+          profile.upsert({
+            section: "identity",
+            key,
+            value,
+            source: "import",
+            provenance: "identity-graph",
+          });
+        }
+      } else if (existing?.provenance === "identity-graph") {
+        profile.remove(existing.id);
+      }
+    }
+  };
+  const identity =
+    opts.identity ??
+    new IdentityService({
+      store:
+        persistence.mode === "real" && persistence.dataDir
+          ? new JsonIdentityStore(`${persistence.dataDir}/identity.json`)
+          : new InMemoryIdentityStore(),
+      resolvers: [
+        createGravatarResolver(),
+        createLocalCorpusResolver({ documents: identityCorpusDocuments }),
+      ],
+      onGraphChanged: applyIdentityToProfile,
+    });
+  // Mirror the persisted graph once at startup (mutations re-fire the hook).
+  if (!opts.identity) applyIdentityToProfile(identity.listPersons());
+
+  // RFC-018: outbound channels; scheduler lifecycle events fan out to them.
+  const channels = channelsFromEnv();
+  const stt = sttFromEnv();
+  scheduler.on((event) => {
+    void channels.dispatch(channelEventFromScheduler(event));
+  });
+
+  const prompt = createPromptSectionRegistry(
+    createDefaultPromptSections({
+      productBehaviorEnabled,
+      persona: () => {
+        if (!profileEnabled) {
+          return personaEnabled ? (dormant?.personaSystemPrompt() ?? "") : "";
+        }
+        if (personaEnabled && dormant) profile.importPersona(dormant.snapshot());
+        return profile.renderPromptSection();
+      },
+      skills: async ({ query, taskType, traceId }) => {
+        if (!skillContext) return "";
+        return skillContext.render(query, {
+          ...(taskType ? { taskType } : {}),
+          ...(traceId ? { traceId } : {}),
+        });
+      },
+    }),
+  );
+
   const tao = new TaoLoop({
     config: {
       ...DEFAULT_TAO_CONFIG,
@@ -610,20 +924,15 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
     systemPrompt: baseSystemPrompt,
     // 每轮注入：①已批准的钝化记忆 persona（无需检索）②检索到的 [记忆参考]。
     // personaEnabled 是 A/B 杠杆：关闭即得到无 persona 基线（RFC-003 §3.6 #3）。
-    contextProvider: async ({ query, history, taskType, topK, traceId }) => {
-      const persona = personaEnabled ? (dormant?.personaSystemPrompt() ?? "") : "";
-      const skillBlock = skillContext
-        ? await skillContext.render(query, {
-            ...(taskType ? { taskType } : {}),
-            ...(traceId ? { traceId } : {}),
-          })
-        : "";
-      const stacked = assembleSystemPromptPrefix({
-        base: baseSystemPrompt,
-        productBehavior: { enabled: productBehaviorEnabled },
-        userPersona: persona,
-        skillBlock,
+    contextProvider: async ({ query, history, taskType, topK, traceId, planAdviceBlock }) => {
+      const prefix = await prompt.render({
+        query,
+        history,
+        ...(taskType ? { taskType } : {}),
+        ...(traceId ? { traceId } : {}),
+        ...(planAdviceBlock ? { planAdviceBlock } : {}),
       });
+      const stacked = prefix ? `${baseSystemPrompt}\n\n${prefix}` : baseSystemPrompt;
       const snap = await contextEngine.build({
         query,
         history,
@@ -637,7 +946,8 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
   });
 
   const runTao: TaoLoop["run"] = (query, runOpts) =>
-    toolHub.runInAllowlistScope(() => tao.run(query, runOpts));
+    toolHub.runInAllowlistScope(() => tao.run(query, runOpts), { inherit: true });
+  const journal = createInMemoryJournal();
 
   const selfConsistency = resolveSelfConsistency(opts.selfConsistency);
 
@@ -659,18 +969,29 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
     if (classifier.size === 0) await classifier.addSeeds(DEFAULT_SEEDS);
   }
 
+  const runTaskPoolNode = async (
+    node: TaskGraphNode,
+    ctx: TaskWorkerContext,
+    extraOpts: Parameters<TaoLoop["run"]>[1] = {},
+  ): Promise<Awaited<ReturnType<TaoLoop["run"]>>> => {
+    const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
+    return runTao(stepQuery, {
+      traceId: ctx.traceId,
+      signal: ctx.signal,
+      ...extraOpts,
+    });
+  };
+
   const taskPoolRecovery =
     taskPool && taskStore
-      ? await taskPool.recoverIncomplete(async (node, ctx) => {
-          const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
-          return runTao(stepQuery, {
-            traceId: ctx.traceId,
-            signal: ctx.signal,
-          });
-        }, taskPoolRecoveryPolicy)
+      ? await taskPool.recoverIncomplete(
+          (node, ctx) => runTaskPoolNode(node, ctx),
+          taskPoolRecoveryPolicy,
+        )
       : undefined;
 
-  return {
+  const commands = createSlashCommandRegistry(createBuiltinSlashCommands());
+  const agent: ServerAgent = {
     hooks,
     llm,
     control,
@@ -683,6 +1004,29 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
     governance,
     contextEngine,
     tao,
+    journal,
+    commands,
+    prompt,
+    profile,
+    scheduler,
+    identity,
+    channels,
+    ...(stt ? { stt } : {}),
+    exportSyncBundle() {
+      return buildSyncBundle({ profile, scheduler, identity });
+    },
+    importSyncBundle(bundle: unknown) {
+      return applySyncBundle(bundle as SyncBundle, { profile, scheduler, identity });
+    },
+    connectors: connectorRegistry,
+    async initConnectors() {
+      await connectorRegistry.initAll();
+    },
+    compactor,
+    subagents: undefined as unknown as SubagentSpawner,
+    grants: governance.grants,
+    ...(approvalSetup.pending ? { approvals: approvalSetup.pending } : {}),
+    handle: undefined as unknown as AgentHandle,
     persistenceInfo: persistence,
     ...(dormant ? { dormant } : {}),
     ...(dormantPersistenceInfo ? { dormantPersistenceInfo } : {}),
@@ -690,54 +1034,93 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
     modelRuntime: runtime.status,
     refreshModelRuntime: () => runtime.refreshHealth(),
     ...(taskPoolRecovery ? { taskPoolRecovery } : {}),
+    async taskPoolCheckpoints(limit?: number) {
+      return taskPool ? taskPool.listCheckpoints(limit) : [];
+    },
+    async resumeTaskRun(runId: string) {
+      if (!taskPool) return undefined;
+      const run = await taskPool.resumeRun(runId, (node, ctx) => runTaskPoolNode(node, ctx));
+      return run?.result;
+    },
+    async cancelTaskRun(runId: string) {
+      return taskPool ? taskPool.cancelRun(runId) : false;
+    },
     ...(otel ? { otel } : {}),
     async run(query: string, runOpts: ServerRunOptions = {}) {
+      if (!runOpts.skipSlashCommand) {
+        const invoked = await invokeSlashCommand(commands, query, {
+          journal,
+          handle: agent.handle,
+          conversationId: runOpts.journal?.conversationId ?? "server",
+          ...(compactionEnabled
+            ? {
+                compact: () =>
+                  runCompactCommand(
+                    compactor,
+                    journal,
+                    runOpts.journal?.conversationId ?? "server",
+                    runOpts.llm,
+                  ),
+              }
+            : {}),
+        });
+        if (invoked) return slashCommandResultToTao(invoked.result);
+        return agent.handle.run(query, runOpts);
+      }
       await hooks.emit("event.PRODUCT_BEHAVIOR", {
         version: PRODUCT_BEHAVIOR_VERSION,
         enabled: productBehaviorEnabled,
       });
       if (dormant) dormant.record(query, "user", { stage: "run.input" });
-      const preflight = productBehaviorEnabled
-        ? resolveDeterministicProductBehaviorAnswer(query, { memories: memory.store.all })
-        : undefined;
-      const inputStructure =
-        preflight?.guard === "material-clarification"
-          ? inputClarificationFromPreflight(query, preflight.answer)
-          : !preflight
-            ? await structureUserInput({
-                input: query,
-                llm: runOpts.llm ?? llm,
-                ...inputStructuringConfig,
-                hooks,
-                ...(runOpts.history ? { history: runOpts.history } : {}),
-                ...(runOpts.signal ? { signal: runOpts.signal } : {}),
-              })
-            : undefined;
-      const executionQuery =
-        inputStructure?.action === "proceed" ? inputStructure.executionInput : query;
-      // 前端分类器：预分类 → taskType + 降 token 路由（高置信简单类走单次 LLM）。
-      const cls =
-        !preflight && inputStructure?.action !== "clarify" && classifier
-          ? await classifier.classify(executionQuery)
-          : undefined;
-      const route = cls ? decideRoute(cls) : undefined;
-      const routedTaskType = cls?.label ?? detectTaskType(executionQuery);
-      let structured = inputStructure;
-      let workQuery = executionQuery;
-      if (!preflight && structured?.action !== "clarify") {
-        const decision = resolvePlanAdviceForRun(control, {
+      const prelude = await prepareRunPrelude(
+        {
+          hooks,
+          llm,
+          control,
+          productBehaviorEnabled,
+          inputStructuringConfig,
+          ...(classifier ? { classifier } : {}),
+        },
+        {
           query,
-          executionQuery: workQuery,
-          taskType: routedTaskType,
-          ...(structured?.structure ? { structure: structured.structure } : {}),
+          memories: memory.store.all,
+          ...(runOpts.history ? { history: runOpts.history } : {}),
+          ...(runOpts.signal ? { signal: runOpts.signal } : {}),
+          ...(runOpts.llm ? { llm: runOpts.llm } : {}),
+        },
+      );
+      const { preflight, inputStructure, executionQuery, cls, route, routedTaskType } = prelude;
+      const structured = prelude.structured;
+      const workQuery = prelude.workQuery;
+      const planAdviceBlock = prelude.planAdviceBlock;
+      const journalCtx = buildJournalTurnContext({
+        ...(runOpts.journal ? { provided: runOpts.journal } : {}),
+        fallback: { conversationId: "server", sink: journal },
+        query,
+        ...(structured ? { structured } : {}),
+      }) as JournalTurnContext;
+      // RFC-012: pressure compaction — fold old turns into a summary when the
+      // history crosses the threshold; fail-soft, never blocks the run.
+      let effectiveHistory = runOpts.history;
+      let didCompact = false;
+      let overflowRecovered = false;
+      if (compactionEnabled) {
+        const compacted = await compactor.compactIfNeeded({
+          journal,
+          conversationId: journalCtx.conversationId,
+          trigger: "pressure",
+          ...(runOpts.llm ? { llm: runOpts.llm } : {}),
         });
-        if (decision.kind === "clarify") {
-          structured = inputClarificationFromQuestions(query, decision.questions, "plan-unknowns");
-        } else if (decision.kind === "proceed") {
-          workQuery = decision.executionQuery;
+        if (compacted.compacted) {
+          effectiveHistory = compacted.history;
+          didCompact = true;
         }
       }
-      const taoOpts = (traceId?: string, signal: AbortSignal | undefined = runOpts.signal) => ({
+      const taoOpts = (
+        traceId?: string,
+        signal: AbortSignal | undefined = runOpts.signal,
+        attachJournal = false,
+      ) => ({
         taskType: routedTaskType,
         ...(route?.single || (!cls && routedTaskType === TaskType.QUICK_RESPONSE)
           ? { enableReact: false }
@@ -745,8 +1128,10 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
         ...(route ? { topK: route.topK } : {}),
         ...(traceId ? { traceId } : {}),
         ...(signal ? { signal } : {}),
-        ...(runOpts.history ? { history: runOpts.history } : {}),
+        ...(effectiveHistory ? { history: effectiveHistory } : {}),
         ...(runOpts.llm ? { llm: runOpts.llm } : {}),
+        ...(planAdviceBlock ? { planAdviceBlock } : {}),
+        ...(attachJournal ? { journal: journalCtx } : {}),
       });
       // 先跑（contextProvider 会检索此前已落盘的记忆），再记录本轮 → 避免检索命中当前输入本身。
       let result: InputStructuredTaoResult;
@@ -781,10 +1166,9 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
         if (orchestrationMode === "taskpool" && taskPool && cls) {
           const { plan } = control.processInput(workQuery, cls.label);
           const graph = planGraphToTaskGraph(plan);
-          const poolResult = await taskPool.submitRun(graph, async (node, ctx) => {
-            const stepQuery = `[${node.description}]（步骤 ${node.id}/${node.action}）\n${ctx.goalInput}`;
-            return runTao(stepQuery, taoOpts(ctx.traceId, ctx.signal));
-          });
+          const poolResult = await taskPool.submitRun(graph, (node, ctx) =>
+            runTaskPoolNode(node, ctx, taoOpts(ctx.traceId, ctx.signal)),
+          );
           result = synthesizeTaskPoolAnswer(poolResult, workQuery);
         } else if (orchestrationMode === "self-consistency" && selfConsistency) {
           // 方向一/二：并行多采样 + 投票。forkJoin 会发 forkjoin.* 事件 → OTel span/metric。
@@ -802,10 +1186,31 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
           );
           result = selectConsistentAnswer(fulfilled, selfConsistency.strategy) ?? fulfilled[0]!;
         } else {
-          result = await runTao(workQuery, taoOpts());
+          result = await runTao(workQuery, {
+            ...taoOpts(undefined, runOpts.signal, true),
+            ...(compactionEnabled
+              ? {
+                  onContextOverflow: async () => {
+                    const out = await compactor.compactIfNeeded({
+                      journal,
+                      conversationId: journalCtx.conversationId,
+                      trigger: "overflow",
+                      maxSummaryInputChars: 16_000,
+                      ...(runOpts.llm ? { llm: runOpts.llm } : {}),
+                    });
+                    if (!out.compacted) return undefined;
+                    didCompact = true;
+                    overflowRecovered = true;
+                    return out.history;
+                  },
+                }
+              : {}),
+          });
         }
       }
-      if (workQuery !== executionQuery) result.metrics.planAdvice = 1;
+      if (prelude.usedPlanAdvice) result.metrics.planAdvice = 1;
+      if (didCompact) result.metrics.compacted = 1;
+      if (overflowRecovered) result.metrics.overflowRecovered = 1;
       if (inputStructure?.action === "proceed") {
         result.inputStructure = inputStructure;
         result.totalTokensSpent += inputStructure.tokensSpent;
@@ -870,6 +1275,16 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
           stage: "run.output",
           iterations: result.iterations,
         });
+      finalizeJournalTurn(journal, journalCtx, {
+        userContent: workQuery,
+        originalInput: query,
+        ...(structured ? { inputStructure: structured } : {}),
+        assistantContent: result.finalAnswer,
+        messageKind: structured?.action === "clarify" ? "clarification" : "answer",
+        status: result.status,
+        endStatus: structured?.action === "clarify" ? "clarify" : "completed",
+        traceId: result.traceId,
+      });
       await persistentStore.awaitPendingWrites();
       return result;
     },
@@ -912,6 +1327,8 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
       };
     },
     async close() {
+      scheduler.stop();
+      await connectorRegistry.close();
       hybridIndex.dispose();
       if (classifierStore) await classifierStore.close();
       if (skillLearning) await skillLearning.close();
@@ -921,4 +1338,69 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
       await persistentStore.close();
     },
   };
+  agent.handle = createAgentHandle({
+    id: "server",
+    journal,
+    hooks,
+    runTurn: (query, runOpts) => agent.run(query, { ...runOpts, skipSlashCommand: true }),
+  });
+  // RFC-015: scheduled jobs run as ordinary turns through the handle.
+  scheduler.attachRunner(async (job) => {
+    const result = await agent.handle.run(job.prompt);
+    if (result.status !== "completed") {
+      throw new Error(`scheduled run ended with status ${result.status}`);
+    }
+  });
+  // RFC-012 §3: subagent spawner; delegate tool registered only when enabled.
+  // Children run under a tool ceiling (default read-risk only): the cap is
+  // resolved per spawn so late-registered connector tools are included, and
+  // enforced through a fresh ToolHub allowlist scope (see setRunCap).
+  const subagentMaxRisk: ToolRisk =
+    opts.subagentMaxRisk ??
+    (TOOL_RISK_ORDER.includes(process.env["OPENINTJ_SUBAGENT_MAX_RISK"] as ToolRisk)
+      ? (process.env["OPENINTJ_SUBAGENT_MAX_RISK"] as ToolRisk)
+      : "read");
+  const subagents = createSubagentSpawner({
+    tools: () =>
+      toolHub
+        .list()
+        .filter(
+          (d) =>
+            d.name !== "delegate_task" &&
+            riskAtLeast(
+              subagentMaxRisk,
+              classifyToolRisk({
+                tool: d.name,
+                permissions: d.permissions,
+                idempotent: d.idempotent,
+              }),
+            ),
+        )
+        .map((d) => d.name),
+    runChild: async (childConversationId, task, signal, tools) => {
+      const run = async () => {
+        const result = await agent.handle.run(task, {
+          journal: {
+            conversationId: childConversationId,
+            turnId: randomUUID(),
+            sink: journal,
+            originalInput: task,
+          },
+          signal,
+        });
+        return { status: result.status, finalAnswer: result.finalAnswer };
+      };
+      if (!tools) return run();
+      return toolHub.runInAllowlistScope(async () => {
+        toolHub.setRunCap(tools);
+        return run();
+      });
+    },
+  });
+  agent.subagents = subagents;
+  if (opts.enableSubagents ?? process.env["OPENINTJ_SUBAGENTS"] === "1") {
+    const delegate = createDelegateTool(subagents);
+    toolHub.register(delegate.descriptor, delegate.handler);
+  }
+  return agent;
 };

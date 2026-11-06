@@ -1,19 +1,43 @@
+import { randomUUID } from "node:crypto";
 import { type FSWatcher, watch } from "node:fs";
+import {
+  type JournalTurnContext,
+  type SlashCommandContext,
+  deriveHistory,
+  finalizeJournalTurn,
+} from "@openintj/core";
 import { createToolCallGate } from "@openintj/plane-governance";
+import { runCompactCommand } from "@openintj/runtime";
+import type { ScheduleTrigger } from "@openintj/scheduler";
 import { withRootSpan } from "@openintj/telemetry-otel";
-import { type IpcMain, type WebContents, ipcMain, shell } from "electron";
+import { BrowserWindow, type IpcMain, type WebContents, app, ipcMain, shell } from "electron";
 import {
   AGENT_RUNTIME_CONFIG_KEYS,
+  AgentCancelRequestSchema,
+  AgentSteerRequestSchema,
   AppConfigPatchSchema,
+  ApprovalDecideRequestSchema,
   ChatRequestSchema,
+  CommandsInvokeRequestSchema,
   DEFAULT_MODEL_PROFILES,
   DormantListRequestSchema,
   DormantProposalDecisionSchema,
+  GrantCreateRequestSchema,
   IPC,
+  IdentityAssertRequestSchema,
+  IdentityConfirmRequestSchema,
+  IdentityResolveRequestSchema,
+  IdentityUnlinkRequestSchema,
   MemoryQueryRequestSchema,
   ModelCredentialSetSchema,
+  ProfileUpsertRequestSchema,
+  ScheduleAddRequestSchema,
+  ScheduleUpdateRequestSchema,
   SkillListRequestSchema,
   SkillProposalDecisionSchema,
+  SyncBundleViewSchema,
+  VoiceTranscribeRequestSchema,
+  WindowChromeActionSchema,
   WorkbenchCreateSchema,
   WorkbenchUpdateSchema,
   WorkspaceBytesRequestSchema,
@@ -34,11 +58,7 @@ import type { ConfigService } from "./config-store.js";
 import type { CredentialStore } from "./credential-store.js";
 import type { ModelRegistry } from "./model-registry.js";
 import type { WorkbenchStore } from "./workbench-store.js";
-import {
-  listWorkspaceEntries,
-  readWorkspaceBytes,
-  resolveWorkspaceItem,
-} from "./workspace-fs.js";
+import { listWorkspaceEntries, readWorkspaceBytes, resolveWorkspaceItem } from "./workspace-fs.js";
 
 const DORMANT_NOT_ENABLED = {
   error: "dormant_not_enabled",
@@ -101,6 +121,27 @@ const hasSuccessfulFileWrite = (trajectory: readonly unknown[]): boolean =>
     return result?.toolName === "write_file" && result.success === true;
   });
 
+/** Rebuild a zod-parsed trigger as an exact scheduler trigger (drops undefined optionals). */
+const normalizeTrigger = (
+  trigger:
+    | { kind: "once"; at: number }
+    | { kind: "interval"; everyMs: number; startAt?: number | undefined }
+    | { kind: "daily"; time: string },
+): ScheduleTrigger => {
+  switch (trigger.kind) {
+    case "once":
+      return { kind: "once", at: trigger.at };
+    case "daily":
+      return { kind: "daily", time: trigger.time };
+    case "interval":
+      return {
+        kind: "interval",
+        everyMs: trigger.everyMs,
+        ...(trigger.startAt !== undefined ? { startAt: trigger.startAt } : {}),
+      };
+  }
+};
+
 /** 注册所有 IPC channel handler，并把 hook 事件转发为 webContents.send。 */
 export const registerIpcHandlers = (
   agent: DesktopAgent,
@@ -111,6 +152,33 @@ export const registerIpcHandlers = (
   const offs: Array<() => void> = [];
   const activeChats = new Set<AbortController>();
   let restarting = false;
+
+  const commandCtx = (conversationId?: string): Omit<SlashCommandContext, "raw"> => {
+    const journal = deps.workbench?.journal() ?? agent.handle.journal;
+    const handle = conversationId ? agent.handleFor(conversationId, journal) : agent.handle;
+    return conversationId
+      ? {
+          journal,
+          handle,
+          conversationId,
+          // RFC-012: /compact runs against the workbench journal.
+          compact: () => runCompactCommand(agent.compactor, journal, conversationId),
+        }
+      : { journal, handle };
+  };
+
+  if (deps.workbench) {
+    agent.commands.register({
+      name: "/clear",
+      aliases: ["/clear history"],
+      description: "清空当前会话（journal 追加 session.cleared）",
+      async run(ctx) {
+        if (ctx.conversationId) deps.workbench?.clearMessages(ctx.conversationId);
+        ctx.handle.cancel("command");
+        return { kind: "ok", message: "对话已清空。" };
+      },
+    });
+  }
 
   api.handle(IPC.PING, async () => ({ ok: true, ts: Date.now() }));
 
@@ -125,6 +193,37 @@ export const registerIpcHandlers = (
     for (const controller of activeChats) controller.abort(new Error("app_restarting"));
     await deps.restart();
     return { ok: true };
+  });
+
+  api.handle(IPC.WINDOW_CHROME, async (evt, raw: unknown) => {
+    const parsed = WindowChromeActionSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false };
+    const win = BrowserWindow.fromWebContents(evt.sender);
+    if (!win || win.isDestroyed()) return { ok: false };
+    switch (parsed.data) {
+      case "quit":
+        app.quit();
+        return { ok: true };
+      case "reload":
+        win.webContents.reloadIgnoringCache();
+        return { ok: true };
+      case "toggleDevTools":
+        win.webContents.toggleDevTools();
+        return { ok: true };
+      case "toggleFullScreen":
+        win.setFullScreen(!win.isFullScreen());
+        return { ok: true };
+      case "minimize":
+        win.minimize();
+        return { ok: true };
+      case "maximize":
+        if (win.isMaximized()) win.unmaximize();
+        else win.maximize();
+        return { ok: true };
+      case "close":
+        win.close();
+        return { ok: true };
+    }
   });
 
   api.handle(IPC.MODEL_PROFILES, async () => {
@@ -233,6 +332,263 @@ export const registerIpcHandlers = (
     if (typeof conversationId !== "string" || !deps.workbench) return [];
     return deps.workbench.listMessages(conversationId);
   });
+  api.handle(IPC.WORKBENCH_MESSAGES_CLEAR, async (_evt, conversationId: unknown) => {
+    if (typeof conversationId !== "string" || !deps.workbench) return { error: "invalid_request" };
+    const command = agent.commands.match("/clear");
+    if (!command) return { error: "invalid_request" };
+    await command.run({ ...commandCtx(conversationId), raw: "/clear" });
+    return { ok: true };
+  });
+
+  api.handle(IPC.COMMANDS_INVOKE, async (_evt, raw: unknown) => {
+    const parsed = CommandsInvokeRequestSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    const command = agent.commands.match(parsed.data.text);
+    if (!command) return { error: "unknown_command" };
+    const result = await command.run({
+      ...commandCtx(parsed.data.conversationId),
+      raw: parsed.data.text,
+    });
+    return { name: command.name, result };
+  });
+
+  api.handle(IPC.AGENT_STEER, async (_evt, raw: unknown) => {
+    const parsed = AgentSteerRequestSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    commandCtx(parsed.data.conversationId).handle.steer(parsed.data.message);
+    return { ok: true };
+  });
+
+  api.handle(IPC.AGENT_INJECT, async (_evt, raw: unknown) => {
+    const parsed = AgentSteerRequestSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    commandCtx(parsed.data.conversationId).handle.inject(parsed.data.message);
+    return { ok: true };
+  });
+
+  api.handle(IPC.AGENT_CANCEL, async (_evt, raw: unknown) => {
+    const parsed = AgentCancelRequestSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    commandCtx(parsed.data.conversationId).handle.cancel(parsed.data.cause);
+    for (const controller of activeChats) controller.abort(new Error(parsed.data.cause));
+    return { ok: true };
+  });
+
+  // RFC-013: interactive approval + capability grants.
+  api.handle(IPC.APPROVAL_LIST, async () => agent.approvals?.listPending() ?? []);
+  api.handle(IPC.APPROVAL_DECIDE, async (_evt, raw: unknown) => {
+    const parsed = ApprovalDecideRequestSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    if (!agent.approvals) return { error: "approval_not_enabled" };
+    const ok = agent.approvals.decide(parsed.data.id, {
+      decision: parsed.data.decision,
+      ...(parsed.data.reason ? { reason: parsed.data.reason } : {}),
+      ...(parsed.data.grant ? { grant: parsed.data.grant } : {}),
+    } as Parameters<typeof agent.approvals.decide>[1]);
+    return ok ? { ok: true } : { error: "not_pending" };
+  });
+  api.handle(IPC.GRANTS_LIST, async () => agent.grants.list());
+  api.handle(IPC.GRANTS_GRANT, async (_evt, raw: unknown) => {
+    const parsed = GrantCreateRequestSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    return agent.grants.grant({
+      tool: parsed.data.tool,
+      risk: parsed.data.risk,
+      ...(parsed.data.scope ? { scope: parsed.data.scope } : {}),
+      ...(parsed.data.ttlMs ? { expiresAt: Date.now() + parsed.data.ttlMs } : {}),
+      ...(parsed.data.label ? { label: parsed.data.label } : {}),
+    });
+  });
+  api.handle(IPC.GRANTS_REVOKE, async (_evt, raw: unknown) => {
+    if (typeof raw !== "string" || !raw) return { error: "invalid_request" };
+    return agent.grants.revoke(raw) ? { ok: true } : { error: "not_found" };
+  });
+
+  // RFC-014: personal profile (memory control plane).
+  api.handle(IPC.PROFILE_LIST, async () => agent.profile.list());
+  api.handle(IPC.PROFILE_UPSERT, async (_evt, raw: unknown) => {
+    const parsed = ProfileUpsertRequestSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    const entry = agent.profile.upsert({
+      section: parsed.data.section,
+      key: parsed.data.key,
+      value: parsed.data.value,
+      ...(parsed.data.validUntil ? { validUntil: parsed.data.validUntil } : {}),
+    });
+    return entry ?? { error: "conflict" };
+  });
+  api.handle(IPC.PROFILE_REMOVE, async (_evt, raw: unknown) => {
+    if (typeof raw !== "string" || !raw) return { error: "invalid_request" };
+    return agent.profile.remove(raw) ? { ok: true } : { error: "not_found" };
+  });
+  api.handle(IPC.PROFILE_EXPORT, async () => ({ profile: agent.profile.exportJSON() }));
+
+  // RFC-020: identity graph. Resolvers only propose; confirm() is the only
+  // way into the graph, and owned values can never be silently moved.
+  api.handle(IPC.IDENTITY_PERSONS, async () => agent.identity.listPersons());
+  api.handle(IPC.IDENTITY_RESOLVE, async (_evt, raw: unknown) => {
+    const parsed = IdentityResolveRequestSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    try {
+      return await agent.identity.resolve(parsed.data);
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : "resolve_failed" };
+    }
+  });
+  api.handle(IPC.IDENTITY_CONFIRM, async (_evt, raw: unknown) => {
+    const parsed = IdentityConfirmRequestSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    try {
+      return agent.identity.confirm(parsed.data.proposals);
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : "confirm_failed" };
+    }
+  });
+  api.handle(IPC.IDENTITY_ASSERT, async (_evt, raw: unknown) => {
+    const parsed = IdentityAssertRequestSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    try {
+      return agent.identity.assertAccount(parsed.data);
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : "assert_failed" };
+    }
+  });
+  api.handle(IPC.IDENTITY_UNLINK, async (_evt, raw: unknown) => {
+    const parsed = IdentityUnlinkRequestSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    const result = agent.identity.unlink(parsed.data.accountId);
+    return result.removed ? result : { error: "not_found" };
+  });
+
+  // RFC-015: scheduler. The runner is (re)attached here so scheduled turns
+  // land in the workbench journal and show up in the target conversation.
+  agent.scheduler.attachRunner(async (job) => {
+    const journal = deps.workbench?.journal() ?? agent.handle.journal;
+    const handle = agent.handleFor(job.conversationId ?? "scheduler", journal);
+    const result = await handle.run(job.prompt);
+    if (result.status !== "completed") {
+      throw new Error(`scheduled run ended with status ${result.status}`);
+    }
+  });
+  api.handle(IPC.SCHEDULE_LIST, async () => agent.scheduler.list());
+  api.handle(IPC.SCHEDULE_ADD, async (_evt, raw: unknown) => {
+    const parsed = ScheduleAddRequestSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    try {
+      const d = parsed.data;
+      return agent.scheduler.add({
+        title: d.title,
+        prompt: d.prompt,
+        trigger: normalizeTrigger(d.trigger),
+        ...(d.conversationId ? { conversationId: d.conversationId } : {}),
+        ...(d.enabled !== undefined ? { enabled: d.enabled } : {}),
+        ...(d.maxRuns ? { maxRuns: d.maxRuns } : {}),
+      });
+    } catch (e) {
+      return { error: "invalid_request", message: (e as Error).message };
+    }
+  });
+  api.handle(IPC.SCHEDULE_UPDATE, async (_evt, raw: unknown) => {
+    const req = (raw ?? {}) as { id?: unknown; patch?: unknown };
+    if (typeof req.id !== "string" || !req.id) return { error: "invalid_request" };
+    const parsed = ScheduleUpdateRequestSchema.safeParse(req.patch);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    try {
+      const d = parsed.data;
+      const job = agent.scheduler.update(req.id, {
+        ...(d.title !== undefined ? { title: d.title } : {}),
+        ...(d.prompt !== undefined ? { prompt: d.prompt } : {}),
+        ...(d.conversationId !== undefined ? { conversationId: d.conversationId } : {}),
+        ...(d.trigger ? { trigger: normalizeTrigger(d.trigger) } : {}),
+        ...(d.enabled !== undefined ? { enabled: d.enabled } : {}),
+        ...(d.maxRuns !== undefined ? { maxRuns: d.maxRuns } : {}),
+      });
+      return job ?? { error: "not_found" };
+    } catch (e) {
+      return { error: "invalid_request", message: (e as Error).message };
+    }
+  });
+  api.handle(IPC.SCHEDULE_REMOVE, async (_evt, raw: unknown) => {
+    if (typeof raw !== "string" || !raw) return { error: "invalid_request" };
+    return agent.scheduler.remove(raw) ? { ok: true } : { error: "not_found" };
+  });
+
+  // RFC-016: connector statuses (connector tools live in the agent ToolHub).
+  api.handle(IPC.CONNECTORS_LIST, async () => agent.connectors.statuses());
+
+  // RFC-012: TaskPool checkpoints (list / resume / cancel; no renderer panel yet).
+  api.handle(IPC.TASKPOOL_CHECKPOINTS, async (_evt, raw: unknown) => {
+    if (raw !== undefined && (typeof raw !== "number" || !Number.isFinite(raw))) {
+      return { error: "invalid_request" };
+    }
+    return agent.taskPoolCheckpoints(raw);
+  });
+  api.handle(IPC.TASKPOOL_RESUME, async (_evt, raw: unknown) => {
+    if (typeof raw !== "string" || !raw) return { error: "invalid_request" };
+    const result = await agent.resumeTaskRun(raw);
+    if (!result) return { error: "not_found_or_not_resumable" };
+    return {
+      runId: result.runId,
+      planId: result.planId,
+      status: result.status,
+      results: Object.fromEntries(result.results),
+      errors: Object.fromEntries(
+        [...result.errors].map(([taskId, error]) => [
+          taskId,
+          error instanceof Error ? error.message : String(error),
+        ]),
+      ),
+      states: Object.fromEntries(result.states),
+      attempts: Object.fromEntries(result.attempts),
+    };
+  });
+  api.handle(IPC.TASKPOOL_CANCEL, async (_evt, raw: unknown) => {
+    if (typeof raw !== "string" || !raw) return { error: "invalid_request" };
+    return (await agent.cancelTaskRun(raw))
+      ? { ok: true }
+      : { error: "not_found_or_not_cancellable" };
+  });
+
+  // RFC-012 §3: subagent records (spawning stays model-side via delegate_task).
+  api.handle(IPC.SUBAGENTS_LIST, async () => agent.subagents.list());
+
+  // RFC-018: outbound channels (status + test send).
+  api.handle(IPC.CHANNELS_LIST, async () => agent.channels.list());
+  api.handle(IPC.CHANNELS_TEST, async (_evt, raw: unknown) => {
+    if (typeof raw !== "string" || !raw) return { error: "invalid_request" };
+    const result = await agent.channels.test(raw);
+    return result.ok ? result : { error: result.error ?? "channel_test_failed" };
+  });
+
+  // RFC-019: cross-device sync bundle (export/import; main validates shape).
+  api.handle(IPC.SYNC_EXPORT, async () => agent.exportSyncBundle());
+  api.handle(IPC.SYNC_IMPORT, async (_evt, raw: unknown) => {
+    const parsed = SyncBundleViewSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_bundle", issues: parsed.error.issues };
+    try {
+      return { report: agent.importSyncBundle(parsed.data) };
+    } catch (e) {
+      return { error: "invalid_bundle", detail: String(e) };
+    }
+  });
+
+  // RFC-019: speech-to-text (error when no provider configured via env).
+  api.handle(IPC.VOICE_TRANSCRIBE, async (_evt, raw: unknown) => {
+    if (!agent.stt) return { error: "stt_not_configured" };
+    const parsed = VoiceTranscribeRequestSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    const audio = Buffer.from(parsed.data.audioBase64, "base64");
+    if (audio.byteLength > 26_000_000) return { error: "audio_too_large" };
+    try {
+      return await agent.stt.transcribe({
+        audio: new Uint8Array(audio),
+        mimeType: parsed.data.mimeType,
+        ...(parsed.data.language ? { language: parsed.data.language } : {}),
+      });
+    } catch (e) {
+      return { error: "transcribe_failed", detail: String(e) };
+    }
+  });
 
   api.handle(IPC.CHAT, async (_evt, raw: unknown) => {
     const parsed = ChatRequestSchema.safeParse(raw);
@@ -243,22 +599,44 @@ export const registerIpcHandlers = (
     const controller = new AbortController();
     activeChats.add(controller);
     let persistedConversationId: string | undefined;
+    let journalCtx: JournalTurnContext | undefined;
     try {
       const selected = parsed.data.conversationId
         ? deps.workbench?.getConversation(parsed.data.conversationId)
         : undefined;
-      const priorMessages = selected
-        ? deps.workbench
-            ?.listMessages(selected.conversation.id, 40)
-            .filter((entry) => entry.role !== "system")
-            .map((entry) => ({ role: entry.role, content: entry.content }))
+      const listedMessages = selected
+        ? deps.workbench?.listMessages(selected.conversation.id, 40)
+        : undefined;
+      const history = selected
+        ? deriveHistory(deps.workbench?.listJournal(selected.conversation.id) ?? [])
         : undefined;
       const profileId = parsed.data.modelProfileId ?? selected?.conversation.modelProfileId;
       const selectedLlm =
         profileId && deps.modelRegistry ? await deps.modelRegistry.resolve(profileId) : undefined;
-      if (selected) {
+      const slash = agent.commands.match(parsed.data.query);
+      if (slash) {
+        const result = await slash.run({
+          ...commandCtx(selected?.conversation.id),
+          raw: parsed.data.query,
+        });
+        return {
+          finalAnswer: result.message ?? "",
+          iterations: 0,
+          status: result.kind === "ok" ? "completed" : "failed",
+          traceId: "command",
+          command: { name: slash.name, kind: result.kind },
+          context: agent.status().context,
+        };
+      }
+      if (selected && deps.workbench) {
         persistedConversationId = selected.conversation.id;
-        deps.workbench?.appendMessage({
+        journalCtx = {
+          conversationId: selected.conversation.id,
+          turnId: randomUUID(),
+          sink: deps.workbench.journal(),
+          originalInput: parsed.data.query,
+        };
+        deps.workbench.appendMessage({
           conversationId: selected.conversation.id,
           role: "user",
           content: parsed.data.query,
@@ -266,7 +644,7 @@ export const registerIpcHandlers = (
         });
       }
       if (requestsArtifactPreview(parsed.data.query)) {
-        const historyPaths = (priorMessages ?? []).flatMap((entry) =>
+        const historyPaths = (listedMessages ?? []).flatMap((entry) =>
           extractWorkspaceArtifactPaths(entry.content),
         );
         let listedPaths: string[] = [];
@@ -282,8 +660,17 @@ export const registerIpcHandlers = (
           ? `已在预览区打开：\`${path}\``
           : "工作区里还没有可预览的产物。请先生成图片或文件。";
         const artifacts = path ? artifactsFromAnswer(`\`${path}\``) : [];
-        if (selected) {
-          deps.workbench?.appendMessage({
+        if (selected && deps.workbench) {
+          finalizeJournalTurn(deps.workbench.journal(), journalCtx, {
+            userContent: parsed.data.query,
+            originalInput: parsed.data.query,
+            assistantContent: finalAnswer,
+            messageKind: "answer",
+            status: "completed",
+            endStatus: "completed",
+            traceId: "preview",
+          });
+          deps.workbench.appendMessage({
             conversationId: selected.conversation.id,
             role: "assistant",
             content: finalAnswer,
@@ -305,7 +692,8 @@ export const registerIpcHandlers = (
         () =>
           agent.run(parsed.data.query, {
             signal: controller.signal,
-            ...(priorMessages ? { history: priorMessages } : {}),
+            ...(history ? { history } : {}),
+            ...(journalCtx ? { journal: journalCtx } : {}),
             ...(selectedLlm ? { llm: selectedLlm } : {}),
             ...(selected
               ? {
@@ -339,8 +727,18 @@ export const registerIpcHandlers = (
         });
         finalAnswer = `${result.finalAnswer}\n\n已写入工作区：\`${artifact.path}\``;
       }
-      if (selected) {
-        deps.workbench?.appendMessage({
+      if (selected && deps.workbench) {
+        finalizeJournalTurn(deps.workbench.journal(), journalCtx, {
+          userContent: parsed.data.query,
+          originalInput: parsed.data.query,
+          ...(result.inputStructure ? { inputStructure: result.inputStructure } : {}),
+          assistantContent: finalAnswer,
+          messageKind: result.inputStructure?.action === "clarify" ? "clarification" : "answer",
+          status: result.status,
+          endStatus: result.inputStructure?.action === "clarify" ? "clarify" : "completed",
+          traceId: result.traceId,
+        });
+        deps.workbench.appendMessage({
           conversationId: selected.conversation.id,
           role: "assistant",
           content: finalAnswer,
@@ -365,11 +763,20 @@ export const registerIpcHandlers = (
         ...(artifacts.length > 0 ? { artifacts } : {}),
       };
     } catch (error) {
-      if (persistedConversationId) {
-        deps.workbench?.appendMessage({
+      if (persistedConversationId && deps.workbench) {
+        const failed = error instanceof Error ? error.message : String(error);
+        finalizeJournalTurn(deps.workbench.journal(), journalCtx, {
+          userContent: parsed.data.query,
+          originalInput: parsed.data.query,
+          assistantContent: failed,
+          messageKind: "answer",
+          status: "failed",
+          endStatus: "failed",
+        });
+        deps.workbench.appendMessage({
           conversationId: persistedConversationId,
           role: "assistant",
-          content: error instanceof Error ? error.message : String(error),
+          content: failed,
           status: "failed",
           messageKind: "answer",
         });
@@ -769,6 +1176,20 @@ export const registerIpcHandlers = (
       ),
     );
     offs.push(
+      agent.hooks.on("event.ASSISTANT_DELTA", (ctx) => send(IPC.EVT_ASSISTANT_DELTA, ctx.payload)),
+    );
+    offs.push(
+      agent.hooks.on("event.APPROVAL_REQUESTED", (ctx) =>
+        send(IPC.EVT_APPROVAL, { kind: "requested", ...ctx.payload }),
+      ),
+    );
+    offs.push(
+      agent.hooks.on("event.APPROVAL_DECIDED", (ctx) =>
+        send(IPC.EVT_APPROVAL, { kind: "decided", ...ctx.payload }),
+      ),
+    );
+    offs.push(agent.scheduler.on((event) => send(IPC.EVT_SCHEDULE, event)));
+    offs.push(
       agent.hooks.on("event.SKILL_PROPOSED", (ctx) =>
         send(IPC.EVT_SKILL, { kind: "proposed", ...ctx.payload }),
       ),
@@ -794,6 +1215,7 @@ export const registerIpcHandlers = (
       api.removeHandler(IPC.PING);
       api.removeHandler(IPC.STATUS);
       api.removeHandler(IPC.APP_RESTART);
+      api.removeHandler(IPC.WINDOW_CHROME);
       api.removeHandler(IPC.MODEL_PROFILES);
       api.removeHandler(IPC.MODEL_CREDENTIAL_SET);
       api.removeHandler(IPC.MODEL_CREDENTIAL_DELETE);
@@ -806,6 +1228,30 @@ export const registerIpcHandlers = (
       api.removeHandler(IPC.WORKBENCH_CONVERSATION_CREATE);
       api.removeHandler(IPC.WORKBENCH_CONVERSATION_UPDATE);
       api.removeHandler(IPC.WORKBENCH_MESSAGES);
+      api.removeHandler(IPC.WORKBENCH_MESSAGES_CLEAR);
+      api.removeHandler(IPC.COMMANDS_INVOKE);
+      api.removeHandler(IPC.AGENT_STEER);
+      api.removeHandler(IPC.AGENT_INJECT);
+      api.removeHandler(IPC.AGENT_CANCEL);
+      api.removeHandler(IPC.APPROVAL_LIST);
+      api.removeHandler(IPC.APPROVAL_DECIDE);
+      api.removeHandler(IPC.GRANTS_LIST);
+      api.removeHandler(IPC.GRANTS_GRANT);
+      api.removeHandler(IPC.GRANTS_REVOKE);
+      api.removeHandler(IPC.PROFILE_LIST);
+      api.removeHandler(IPC.PROFILE_UPSERT);
+      api.removeHandler(IPC.PROFILE_REMOVE);
+      api.removeHandler(IPC.PROFILE_EXPORT);
+      api.removeHandler(IPC.SCHEDULE_LIST);
+      api.removeHandler(IPC.SCHEDULE_ADD);
+      api.removeHandler(IPC.SCHEDULE_UPDATE);
+      api.removeHandler(IPC.SCHEDULE_REMOVE);
+      api.removeHandler(IPC.IDENTITY_PERSONS);
+      api.removeHandler(IPC.IDENTITY_RESOLVE);
+      api.removeHandler(IPC.IDENTITY_CONFIRM);
+      api.removeHandler(IPC.IDENTITY_ASSERT);
+      api.removeHandler(IPC.IDENTITY_UNLINK);
+      api.removeHandler(IPC.CONNECTORS_LIST);
       api.removeHandler(IPC.CHAT);
       api.removeHandler(IPC.MEMORY_QUERY);
       api.removeHandler(IPC.AUDIT_RECENT);

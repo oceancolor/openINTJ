@@ -6,8 +6,8 @@ export default defineConfig({
     include: [
       "__tests__/artifact-fallback.spec.ts",
       "__tests__/image-task.spec.ts",
+      "__tests__/markdown.spec.ts",
       "__tests__/workspace-view.spec.ts",
-      "__tests__/editor-buffers.spec.ts",
     ],
   },
 });

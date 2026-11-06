@@ -1,6 +1,9 @@
 import { z } from "zod";
+import type { JournalTurnContext } from "../journal/types.js";
 import type { ShaderModeType, TaskTypeType } from "../types/shader.js";
 import type { ToolCallResult, ToolDescriptor } from "../types/tool.js";
+
+export type { JournalTurnContext };
 
 /** 用户输入图片数据。 */
 export const ImagePayloadSchema = z.object({

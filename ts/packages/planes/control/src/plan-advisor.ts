@@ -66,7 +66,8 @@ export const advisePlan = (plan: PlanGraph, ctx: PlanKnowledgeContext): PlanAdvi
   };
 };
 
-export const formatNextGoalQuery = (executionQuery: string, advice: PlanAdvice): string => {
+/** RFC-011: plan advice as a system prompt section (not spliced into the user query). */
+export const formatPlanAdviceBlock = (advice: PlanAdvice): string => {
   const knownLine =
     advice.known.length > 0
       ? advice.known.map((f) => `${f.slot}:${f.evidence}`).join("；")
@@ -79,9 +80,12 @@ export const formatNextGoalQuery = (executionQuery: string, advice: PlanAdvice):
     `【规划】下一轮目标：${advice.nextGoal}`,
     `【已知】${knownLine}`,
     `【未知】${unknownLine}`,
-    "---",
-    executionQuery,
   ].join("\n");
+};
+
+/** @deprecated RFC-011 moves advice into a prompt section; kept for compat callers/tests. */
+export const formatNextGoalQuery = (executionQuery: string, advice: PlanAdvice): string => {
+  return [formatPlanAdviceBlock(advice), "---", executionQuery].join("\n");
 };
 
 export type PlanAdviceRunDecision =

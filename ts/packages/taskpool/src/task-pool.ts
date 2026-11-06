@@ -167,6 +167,7 @@ export class TaskPool {
     Pick<RetryPolicy, "shouldRetry">;
   private readonly store: TaskStore | undefined;
   private readonly name: string;
+  private readonly activeRuns = new Map<string, TaskRun<unknown>>();
 
   constructor(opts: TaskPoolOpts = {}) {
     this.hooks = opts.hooks;
@@ -222,7 +223,7 @@ export class TaskPool {
           once: true,
         });
     }
-    return new TaskRun(runId, graph.planId, shared, controller, states, attempts, () =>
+    const run = new TaskRun(runId, graph.planId, shared, controller, states, attempts, () =>
       this.execute(
         graph,
         ordered,
@@ -238,6 +239,14 @@ export class TaskPool {
         seed?.createdAt,
       ),
     );
+    this.activeRuns.set(runId, run as TaskRun<unknown>);
+    const forget = (): void => {
+      if (this.activeRuns.get(runId) === (run as TaskRun<unknown>)) {
+        this.activeRuns.delete(runId);
+      }
+    };
+    void run.result.then(forget, forget);
+    return run;
   }
 
   async submitRun<T>(
@@ -309,6 +318,56 @@ export class TaskPool {
       }
     }
     return summary;
+  }
+
+  /** List durable run snapshots that operators can inspect or resume. */
+  async listCheckpoints(limit = 50): Promise<readonly StoredTaskRun[]> {
+    return this.store ? this.store.listRuns(limit) : [];
+  }
+
+  /** Load one durable run snapshot by id. */
+  async getCheckpoint(runId: string): Promise<StoredTaskRun | undefined> {
+    return this.store?.loadRun(runId);
+  }
+
+  /**
+   * Resume a durable incomplete run. Completed node results are retained;
+   * callers must pass the same kind of worker they use for fresh runs.
+   * Legacy snapshots without the original goal input are cancelled instead
+   * of being reconstructed from the lossy intent label.
+   */
+  async resumeRun<T>(runId: string, worker: TaskWorker<T>): Promise<TaskRun<T> | undefined> {
+    const active = this.activeRuns.get(runId);
+    if (active) return active as TaskRun<T>;
+    if (!this.store) return undefined;
+    const stored = await this.store.loadRun(runId);
+    if (!stored || stored.status !== "running") return undefined;
+    if (!stored.graph.goalInput) {
+      await this.cancelStoredRun(
+        stored,
+        "cannot resume legacy snapshot without original goal input",
+      );
+      return undefined;
+    }
+    return this.recover(stored, worker, { traceId: `${stored.runId}:resume` });
+  }
+
+  /**
+   * Cancel an active run, or mark a durable incomplete snapshot cancelled.
+   * Returns false when the run is unknown or already terminal.
+   */
+  async cancelRun(runId: string, reason = "cancelled by user"): Promise<boolean> {
+    const active = this.activeRuns.get(runId);
+    if (active) {
+      active.cancel(reason);
+      await active.result.catch(() => undefined);
+      return true;
+    }
+    if (!this.store) return false;
+    const stored = await this.store.loadRun(runId);
+    if (!stored || stored.status !== "running") return false;
+    await this.cancelStoredRun(stored, reason);
+    return true;
   }
 
   private async cancelStoredRun(
