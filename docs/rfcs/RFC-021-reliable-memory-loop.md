@@ -2,7 +2,7 @@
 
 设计规格：[`docs/openintj-reliable-memory-design.md`](../openintj-reliable-memory-design.md)（v0.1，2026-11-09）
 设计基线：`main@2326b4b02ad578363fd470317ce733a039c775e0`
-状态：**实施中**（G0 已完成，G1 进行中）
+状态：**实施中**（G0/G1/G2 已完成并于 2026-11-09 复核收口，G3 未启动）
 
 本文件是实施记录，不是设计规格。每个阶段记录：核实结论、实际改动、测试证据、
 未解决问题与门控确认。阶段顺序与门控以设计文档 §7 为准；每阶段结束暂停，
@@ -208,10 +208,36 @@ F10 归因修好后再讨论默认值翻转。是否实施及何时翻转默认�
 
 ---
 
+## G0–G2 复核收口（2026-11-09，G3 启动前）
+
+逐条核对三阶段全部遗留，分级处理：本阶段可修的已修，后续阶段归属的
+确认不属本轮欠账，有意保留的注明决策依据。
+
+| 遗留条目 | 结论 |
+| --- | --- |
+| G2 晋升/丢弃 tier 漂移 | **已修**：add 路径前后 tier 快照对账——晋升补写、工作记忆溢出丢弃补删（T11b）。复核中另发现真 bug：mutation `inputHash` 只哈希正文，tier 变更会被误判 replayed 静默丢弃；已改为全记录哈希 |
+| G0.3 止损开关 | **已实施**：`OPENINTJ_SKILLS_LEARN_MODE=observe\|active`，observe 只记观察不升权/不进蒸馏 buffer；默认 active 不改变现行为（skills 61 passed，+2） |
+| G1 子代理 run 未带 scope | **已修**（桌面）：父 run 身份经 AsyncLocalStorage 传播，spawn 时 `childRunContext` 派生（同 workspace/task/principal/epoch、新会话与 runId）。CLI 侧子代理维持现状（durability=memory 决策内） |
+| G1 candidateRetrieve 召回后过滤 | **已修**：`MemoryHybridIndex.search` 新增 `filter` 谓词（过量取回→过滤→截断），ContextEngine 把 scope 透传给候选召回器，桌面/server 在召回前做 scope 过滤（taskpool 49 passed，+1） |
+| G2 embedding model 名取 embedder.name | **已修**：`embeddingSpaceInfo` 贯通 factory→store，`store.embeddingSpace()` 产真实 provider/model 指纹；桌面传 llm/runtime 指纹 |
+| G2 同步 add* fire-and-forget 写 canonical | **保留并注明**：同步 API 契约使然；桌面/server 的落盘路径均走 Async API（已 await 到收据），同步路径仅 CLI/测试便利层使用 |
+| E09 shader 24h 半衰期 / E10 compact coveredTurns | **非欠账**：经设计 §7 核对属 F08/F09 → **G3 范围**，已列入 G3 输入 |
+| E01 原文直存 | **非欠账**：属 F13 writer → G5（G3 先做生命周期 F08–F10） |
+| E13 dormant/profile revoke、物理 purge | **非欠账**：F12 管理面 → G4，G2 只要求 P0 地基（已交付） |
+| server/cli loop-owned finalize 与持久 journal | **有意保留**：用户已定桌面优先决策，两端标注 durability=memory；三端统一另行排期 |
+
+复核回归（2026-11-09 实测）：core 176、runtime 18、plane-memory 97/3、
+plane-execution 65/1、plane-governance 41、storage-sqlite 37、skills 61、
+taskpool 49、profile 6、server 77/11、cli 54/6、desktop typecheck +
+109/2 + 生产构建——全部通过，零基线回归。
+
+---
+
 ## 待决策 / 未解决问题
 
-- 止损开关（G0.3）是否实施、何时翻转默认值。
+- 止损开关默认值何时翻转 observe（建议 G3 的 F10 归因修好后评估）。
 - CLI/server 持久 journal adapter 的排期（当前决策：桌面优先，两端标注
   `durability=memory`）。
 - 物理 purge 的完整度承诺（F12/G4 决策，基础版先交付有效撤回 + barrier）。
-- 真实用户数据迁移（G2 前必须单独走备份 + dry-run 确认流程）。
+- ~~真实用户数据迁移~~ 已于 2026-11-09 经备份 + dry-run 确认后完成
+  （16/16 激活，见 G2 门控说明）。

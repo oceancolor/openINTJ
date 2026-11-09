@@ -31,6 +31,11 @@ export interface MemoryHybridSearchOpts {
   topK?: number;
   /** 仅保留这些 memoryType。 */
   memoryTypes?: readonly string[];
+  /**
+   * 召回前谓词过滤（如 scope 可见性）：命中谓词才进 topK，
+   * 避免不可见候选占用槽位（RFC-021 F04.3）。
+   */
+  filter?: (hit: MemoryHybridHit) => boolean;
   /** 任意一个标签命中即保留。 */
   taskTags?: readonly string[];
   /** 按查询覆盖融合配置（alpha/beta/useRRF/...）；全是 search-time 量，不触发重建。 */
@@ -97,7 +102,8 @@ export class MemoryHybridIndex {
     opts: MemoryHybridSearchOpts = {},
   ): MemoryHybridHit[] {
     const topK = opts.topK ?? 10;
-    const hasFilter = (opts.memoryTypes?.length ?? 0) > 0 || (opts.taskTags?.length ?? 0) > 0;
+    const hasFilter =
+      (opts.memoryTypes?.length ?? 0) > 0 || (opts.taskTags?.length ?? 0) > 0 || opts.filter !== undefined;
     // 有过滤时过量取回（共享索引含全量），筛完再 slice。
     const fetch = hasFilter ? Math.max(topK * 4, this.retriever.size) : topK;
     let hits = this.retriever.search(query, queryVector, fetch, opts.config);
@@ -109,6 +115,7 @@ export class MemoryHybridIndex {
       const tagSet = new Set(opts.taskTags);
       hits = hits.filter((h) => h.doc.metadata.taskTags.some((t) => tagSet.has(t)));
     }
+    if (opts.filter) hits = hits.filter(opts.filter);
     return hits.slice(0, topK);
   }
 

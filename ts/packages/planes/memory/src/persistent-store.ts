@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   type EmbeddingProvider,
   type HookBus,
@@ -20,6 +21,7 @@ import {
   candidateReceiveKeyString,
   type CandidateReceiveKey,
 } from "./canonical.js";
+import { type EmbeddingSpace, embeddingSpaceForEmbedder } from "./embedding-space.js";
 import { type AddOptions, MemoryStore, type MemoryStoreConfig } from "./store.js";
 
 export interface PersistentMemoryStoreOpts {
@@ -34,6 +36,8 @@ export interface PersistentMemoryStoreOpts {
    * mutation 边界，向量库降为 outbox 投影；不注入时保持 legacy 双写行为。
    */
   canonical?: CanonicalMemoryRepository;
+  /** embedding 空间身份（真实 provider/model 名，供指纹与索引代次记录）。 */
+  embeddingSpaceInfo?: { provider: string; model: string; transformVersion?: number };
   /**
    * 启动时是否 hydrate（从持久化层把已有 fragments 加载到内存）。
    * 默认 true。
@@ -118,6 +122,27 @@ const fragmentToCanonicalRecord = (f: MemoryFragment): CanonicalMemoryRecord => 
   lastAccessed: f.lastAccessed,
 });
 
+/**
+ * mutation 输入哈希必须覆盖完整记录（tier/importance/tags/embedding…）：
+ * 只哈希正文会让晋升等状态变更被误判为重放而静默丢弃。
+ */
+const recordInputHash = (r: CanonicalMemoryRecord): string =>
+  createHash("sha256")
+    .update(
+      JSON.stringify({
+        fragmentId: r.fragmentId,
+        content: r.content,
+        memoryType: r.memoryType,
+        importance: r.importance,
+        taskTags: r.taskTags,
+        metadata: r.metadata,
+        summaries: r.summaries,
+        embedding: r.embedding,
+        timestamp: r.timestamp,
+      }),
+    )
+    .digest("hex");
+
 const canonicalRecordToFragment = (r: CanonicalMemoryRecord): MemoryFragment =>
   MemoryFragmentSchema.parse({
     fragmentId: r.fragmentId,
@@ -150,6 +175,7 @@ export class PersistentMemoryStore extends MemoryStore {
   readonly vectorStore: VectorStore;
   readonly metadataStore: MetadataStore;
   readonly canonical: CanonicalMemoryRepository | undefined;
+  private readonly embeddingSpaceInfo: PersistentMemoryStoreOpts["embeddingSpaceInfo"];
   private pending: Promise<void> = Promise.resolve();
   private readonly hydrateOnInit: boolean;
   private isInitialized = false;
@@ -164,7 +190,20 @@ export class PersistentMemoryStore extends MemoryStore {
     this.vectorStore = opts.vectorStore;
     this.metadataStore = opts.metadataStore;
     this.canonical = opts.canonical;
+    this.embeddingSpaceInfo = opts.embeddingSpaceInfo;
     this.hydrateOnInit = opts.hydrateOnInit ?? true;
+  }
+
+  /** 当前 embedding 空间（含真实 provider/model）及其指纹。 */
+  embeddingSpace(generation = 1): EmbeddingSpace {
+    return embeddingSpaceForEmbedder(this.embedder, {
+      ...(this.embeddingSpaceInfo?.provider ? { provider: this.embeddingSpaceInfo.provider } : {}),
+      ...(this.embeddingSpaceInfo?.model ? { model: this.embeddingSpaceInfo.model } : {}),
+      ...(this.embeddingSpaceInfo?.transformVersion
+        ? { transformVersion: this.embeddingSpaceInfo.transformVersion }
+        : {}),
+      generation,
+    });
   }
 
   async init(): Promise<void> {
@@ -200,14 +239,18 @@ export class PersistentMemoryStore extends MemoryStore {
   }
 
   override addShortTerm(content: string, opts: AddOptions = {}): MemoryFragment {
+    const before = this.tierSnapshot();
     const f = super.addShortTerm(content, opts);
     if (f.embedding.length > 0) this.scheduleWrite(f);
+    this.reconcileTiers(before, f.fragmentId, false);
     return f;
   }
 
   override addWorking(content: string, opts: AddOptions = {}): MemoryFragment {
+    const before = this.tierSnapshot();
     const f = super.addWorking(content, opts);
     this.scheduleWrite(f);
+    this.reconcileTiers(before, f.fragmentId, false);
     return f;
   }
 
@@ -224,14 +267,18 @@ export class PersistentMemoryStore extends MemoryStore {
     if (!content.trim() && opts.embedding === undefined) {
       return super.addShortTermAsync(content, opts);
     }
+    const before = this.tierSnapshot();
     const f = await super.addShortTermAsync(content, opts);
     await this.persist(f);
+    await this.reconcileTiers(before, f.fragmentId, true);
     return f;
   }
 
   override async addWorkingAsync(content: string, opts: AddOptions = {}): Promise<MemoryFragment> {
+    const before = this.tierSnapshot();
     const f = await super.addWorkingAsync(content, opts);
     await this.persist(f);
+    await this.reconcileTiers(before, f.fragmentId, true);
     return f;
   }
 
@@ -243,27 +290,69 @@ export class PersistentMemoryStore extends MemoryStore {
 
   override remove(fragmentId: string): boolean {
     const ok = super.remove(fragmentId);
-    if (ok) {
-      if (this.canonical) {
-        const canonical = this.canonical;
-        this.enqueuePending(() =>
-          canonical.applyMutation({
-            writeKey: `delete:${fragmentId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
-            inputHash: fragmentId,
-            kind: "delete",
-            fragmentId,
-          }).then(() => undefined),
-        );
+    if (ok) this.scheduleDelete(fragmentId);
+    return ok;
+  }
+
+  /** 删除一条 fragment 的持久层记录（canonical tombstone 或 legacy 双删）。 */
+  private scheduleDelete(fragmentId: string): void {
+    if (this.canonical) {
+      const canonical = this.canonical;
+      this.enqueuePending(() =>
+        canonical.applyMutation({
+          writeKey: `delete:${fragmentId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+          inputHash: fragmentId,
+          kind: "delete",
+          fragmentId,
+        }).then(() => undefined),
+      );
+    } else {
+      this.enqueuePending(() =>
+        Promise.all([
+          this.vectorStore.delete([fragmentId]),
+          this.metadataStore.deleteFragmentMeta([fragmentId]),
+        ]).then(() => undefined),
+      );
+    }
+  }
+
+  private tierSnapshot(): { longTerm: Set<string>; all: Set<string> } {
+    return {
+      longTerm: new Set(this.longTerm.map((f) => f.fragmentId)),
+      all: new Set(this.all.map((f) => f.fragmentId)),
+    };
+  }
+
+  /**
+   * 溢出副作用对账（修 G2 遗留漂移）：短期溢出晋升的 fragment 必须补写新 tier，
+   * 工作记忆溢出丢弃的 fragment 必须补删——否则重启后 tier 错位/已丢弃条目复活。
+   */
+  private async reconcileTiers(
+    before: { longTerm: Set<string>; all: Set<string> },
+    newFragmentId: string,
+    awaitWrites: boolean,
+  ): Promise<void> {
+    const promoted = this.longTerm.filter(
+      (f) => !before.longTerm.has(f.fragmentId) && f.fragmentId !== newFragmentId,
+    );
+    const now = new Set(this.all.map((f) => f.fragmentId));
+    const discarded = [...before.all].filter((id) => !now.has(id));
+    for (const f of promoted) {
+      if (awaitWrites) await this.persist(f);
+      else this.scheduleWrite(f);
+    }
+    for (const id of discarded) {
+      if (awaitWrites && this.canonical) {
+        await this.canonical.applyMutation({
+          writeKey: `delete:${id}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+          inputHash: id,
+          kind: "delete",
+          fragmentId: id,
+        });
       } else {
-        this.enqueuePending(() =>
-          Promise.all([
-            this.vectorStore.delete([fragmentId]),
-            this.metadataStore.deleteFragmentMeta([fragmentId]),
-          ]).then(() => undefined),
-        );
+        this.scheduleDelete(id);
       }
     }
-    return ok;
   }
 
   /** E06 修复：clearWorking 同步走 canonical mutation，不再只清内存留墓碑复活。 */
@@ -333,12 +422,14 @@ export class PersistentMemoryStore extends MemoryStore {
   private async persist(f: MemoryFragment): Promise<void> {
     if (this.canonical) {
       // canonical 是权威：先落正文+outbox，向量投影交给 projectIndex。
+      const record = fragmentToCanonicalRecord(f);
+      const inputHash = recordInputHash(record);
       await this.canonical.applyMutation({
-        // 写键含内容哈希：同内容重放命中收据（replayed），内容变更是新 mutation。
-        writeKey: `upsert:${f.fragmentId}:${contentHash(f)}`,
-        inputHash: contentHash(f),
+        // 写键含记录哈希：同状态重放命中收据（replayed），状态变更是新 mutation。
+        writeKey: `upsert:${f.fragmentId}:${inputHash}`,
+        inputHash,
         kind: "upsert",
-        record: fragmentToCanonicalRecord(f),
+        record,
       });
       await this.projectIndex();
       return;

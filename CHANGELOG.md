@@ -8,6 +8,12 @@
 
 ### Changed
 
+- **RFC-021 G0–G2 复核收口**：修复 canonical 晋升/丢弃 tier 漂移（复核中
+  另发现并修复 mutation 输入哈希只覆盖正文、会静默吞掉 tier 变更的真
+  bug）；技能学习止损开关 `OPENINTJ_SKILLS_LEARN_MODE=observe` 落地
+  （默认 active 不改变现行为）；子代理继承父 run scope；hybrid 候选召回
+  改为 scope 召回前过滤；embedding 空间指纹带真实 provider/model。
+
 - **可靠记忆闭环 G2（RFC-021）**：SQLite 成为 canonical memory 权威源（正文/
   scope/状态/修订 + mutation 收据 + index outbox 同事务）；向量库降为可重建
   投影（逐 job 隔离、过期投影不复活、空间冲突显式失败但正文与词法检索

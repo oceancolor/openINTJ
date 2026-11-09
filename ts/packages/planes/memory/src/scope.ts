@@ -1,5 +1,3 @@
-import type { MemoryFragment } from "@openintj/core";
-
 /**
  * RFC-021 F04: read-scope eligibility for memory fragments.
  *
@@ -17,7 +15,7 @@ export interface MemoryScope {
   conversationId?: string;
 }
 
-const scopeTagValue = (fragment: MemoryFragment, prefix: string): string | undefined => {
+const scopeTagValue = (fragment: { taskTags: readonly string[] }, prefix: string): string | undefined => {
   for (const tag of fragment.taskTags) {
     if (tag.startsWith(prefix)) return tag.slice(prefix.length);
   }
@@ -25,7 +23,7 @@ const scopeTagValue = (fragment: MemoryFragment, prefix: string): string | undef
 };
 
 export const isFragmentVisibleToScope = (
-  fragment: MemoryFragment,
+  fragment: { taskTags: readonly string[] },
   scope: MemoryScope | undefined,
 ): boolean => {
   if (!scope) return true;

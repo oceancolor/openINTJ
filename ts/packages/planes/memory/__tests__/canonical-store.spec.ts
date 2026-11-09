@@ -87,6 +87,32 @@ describe("G2 canonical memory (T10–T15)", () => {
     await second.close();
   });
 
+  it("T11b 溢出对账：晋升 tier 落盘、工作记忆丢弃不复活", async () => {
+    const canonical = await tmpCanonical();
+    const first = new PersistentMemoryStore({
+      vectorStore: new InMemoryVectorStore(),
+      metadataStore: new InMemoryMetadataStore(),
+      canonical,
+      storeConfig: { maxShortTerm: 2, maxWorking: 1 },
+    });
+    await first.init();
+    await first.addShortTermAsync("短期一");
+    await first.addShortTermAsync("短期二");
+    await first.addShortTermAsync("短期三");
+    await first.addWorkingAsync("工作一");
+    await first.addWorkingAsync("工作二");
+    await first.awaitPendingWrites();
+    await first.close();
+
+    const second = await makeStore(canonical);
+    const byContent = new Map(second.all.map((f) => [f.content, f.memoryType]));
+    expect(byContent.get("短期一")).toBe("long_term");
+    expect(byContent.get("短期二")).toBe("short_term");
+    expect(byContent.has("工作一")).toBe(false);
+    expect(byContent.get("工作二")).toBe("working");
+    await second.close();
+  });
+
   it("T12 写幂等/CAS：同键同 hash 重放、同键异 hash 冲突、CAS 不符零写入", async () => {
     const repo = new InMemoryCanonicalMemoryRepository();
     await repo.init();

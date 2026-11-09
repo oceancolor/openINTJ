@@ -44,6 +44,8 @@ export interface CreatePersistentMemoryStoreOpts {
    * 默认关——真实数据目录需先跑 legacy dry-run 对账并确认后才开启（迁移门）。
    */
   useCanonical?: boolean;
+  /** embedding 空间真实 provider/model（指纹用；缺省取 embedder.name）。 */
+  embeddingSpaceInfo?: { provider: string; model: string; transformVersion?: number };
 }
 
 export interface PersistenceBackends {
@@ -127,6 +129,7 @@ export const createPersistentMemoryStore = async (
     vectorStore: backends.vectorStore,
     metadataStore: backends.metadataStore,
     ...(backends.canonical ? { canonical: backends.canonical } : {}),
+    ...(opts.embeddingSpaceInfo ? { embeddingSpaceInfo: opts.embeddingSpaceInfo } : {}),
     storeConfig: { embeddingDim: dim, ...(opts.storeConfig ?? {}) },
     ...(opts.embedder ? { embedder: opts.embedder } : {}),
     ...(opts.hooks ? { hooks: opts.hooks } : {}),

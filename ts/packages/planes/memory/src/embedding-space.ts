@@ -17,10 +17,10 @@ export const embeddingSpaceFingerprint = (s: Omit<EmbeddingSpace, "generation">)
 
 export const embeddingSpaceForEmbedder = (
   embedder: EmbeddingProvider,
-  opts: { model?: string; transformVersion?: number; generation?: number } = {},
+  opts: { provider?: string; model?: string; transformVersion?: number; generation?: number } = {},
 ): EmbeddingSpace => {
   const space = {
-    provider: embedder.name,
+    provider: opts.provider ?? embedder.name,
     model: opts.model ?? embedder.name,
     dimension: embedder.dimension,
     transformVersion: opts.transformVersion ?? 1,

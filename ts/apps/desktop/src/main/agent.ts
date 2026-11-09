@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -28,6 +29,7 @@ import {
   type LlmClient,
   ReactStateMachine,
   type RunContext,
+  childRunContext,
   type SlashCommandRegistry,
   TaoLoop,
   TaskType,
@@ -97,6 +99,8 @@ import {
   type PersistentMemoryStore,
   createPersistentMemoryStore,
   fragmentsToRanked,
+  isFragmentVisibleToScope,
+  type MemoryScope,
   scopeFromContextTags,
 } from "@openintj/plane-memory";
 import { InMemoryProfileStore, JsonProfileStore, ProfileService } from "@openintj/profile";
@@ -707,6 +711,10 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     hooks,
     // G2：真实数据已完成 legacy 对账迁移（2026-11-09，16/16 激活），启用 canonical 权威源。
     ...(persistence.mode === "real" ? { useCanonical: true } : {}),
+    embeddingSpaceInfo: {
+      provider: runtime.embeddingFingerprint.provider,
+      model: runtime.embeddingFingerprint.model,
+    },
   });
 
   // G2/F07：构造注入同一 store 实例，取代旧的 defineProperty 反射替换。
@@ -733,10 +741,19 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
   // A1.3 opt-in：OPENINTJ_LOOP_HYBRID=1 时主循环检索改走 session 级增量 HybridRetriever。
   const loopHybrid = process.env["OPENINTJ_LOOP_HYBRID"] === "1";
   const candidateRetrieve = loopHybrid
-    ? async (query: string, ro: { topK?: number; taskType?: TaskTypeType }) => {
+    ? async (query: string, ro: { topK?: number; taskType?: TaskTypeType; scope?: MemoryScope }) => {
         const e = persistentStore.embedder.embed(query);
         const qVec = e instanceof Promise ? await e : e;
-        const hits = hybridIndex.search(query, qVec, { topK: ro.topK ?? 6 });
+        const hits = hybridIndex.search(query, qVec, {
+          topK: ro.topK ?? 6,
+          // F04.3：scope 在召回前过滤，不让不可见候选占 topK 槽位。
+          ...(ro.scope
+            ? {
+                filter: (h: { doc: { metadata: { taskTags: readonly string[] } } }) =>
+                  isFragmentVisibleToScope({ taskTags: h.doc.metadata.taskTags }, ro.scope!),
+              }
+            : {}),
+        });
         return fragmentsToRanked(
           persistentStore,
           hits.map((h) => ({ id: h.doc.id, score: h.score })),
@@ -1064,6 +1081,8 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
 
   const commands = createSlashCommandRegistry(createBuiltinSlashCommands());
   const fallbackJournal = createInMemoryJournal();
+  // RFC-021 F02 遗留修复：当前 run 的身份随异步链传播，子代理 spawn 时据此派生 child run。
+  const activeRunStorage = new AsyncLocalStorage<RunContext>();
   const handles = new Map<string, AgentHandle>();
   const agent: DesktopAgent = {
     hooks,
@@ -1264,6 +1283,8 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
             ...(tagScope.conversationId ? { conversationId: tagScope.conversationId } : {}),
           }
         : undefined;
+      // 让 delegate_task 等工具执行链能拿到父 run 身份（子代理派生 child run 用）。
+      if (effectiveRun) activeRunStorage.enterWith(effectiveRun);
       const taoOpts = (
         traceId?: string,
         signal: AbortSignal | undefined = runOpts.signal,
@@ -1519,10 +1540,15 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
         )
         .map((d) => d.name),
     runChild: async (childConversationId, task, signal, tools) => {
+      // 子代理继承父 run 的 scope 身份（workspace/task/principal/epoch），换新会话与 runId。
+      const parentRun = activeRunStorage.getStore();
+      const childRun = parentRun
+        ? childRunContext(parentRun, { conversationId: childConversationId })
+        : undefined;
       const run = async () => {
         const result = await agent
           .handleFor(childConversationId, fallbackJournal)
-          .run(task, { signal });
+          .run(task, { signal, ...(childRun ? { run: childRun } : {}) });
         return { status: result.status, finalAnswer: result.finalAnswer };
       };
       if (!tools) return run();

@@ -41,6 +41,37 @@ describe("resolveSkillWeightHalfLifeSec", () => {
   });
 });
 
+describe("SkillLearningRuntime · 止损开关（RFC-021 G0.3）", () => {
+  afterEach(() => {
+    delete process.env["OPENINTJ_SKILLS_LEARN_MODE"];
+  });
+  it("observe：只记观察，不升权、不进蒸馏 buffer", () => {
+    const rt = new SkillLearningRuntime({
+      store: new InMemorySkillStore(),
+      clock: () => 1_000_000,
+      learnMode: "observe",
+    });
+    rt.noteSelected("fix the bug", TaskType.CODING, ["s1"]);
+    rt.recordOutcome("fix the bug", TaskType.CODING, "completed", { finalAnswer: "done" });
+    expect(rt.learnMode).toBe("observe");
+    expect(rt.observedOutcomes).toBe(1);
+    expect(rt.weightFor("s1")).toBe(0);
+    expect(rt.bufferedCount()).toBe(0);
+  });
+  it("env OPENINTJ_SKILLS_LEARN_MODE=observe 生效；默认 active 行为不变", () => {
+    process.env["OPENINTJ_SKILLS_LEARN_MODE"] = "observe";
+    const observed = new SkillLearningRuntime({ store: new InMemorySkillStore() });
+    expect(observed.learnMode).toBe("observe");
+    delete process.env["OPENINTJ_SKILLS_LEARN_MODE"];
+    const active = new SkillLearningRuntime({ store: new InMemorySkillStore(), clock: () => 1 });
+    active.noteSelected("q", undefined, ["s"]);
+    active.recordOutcome("q", undefined, "completed");
+    expect(active.learnMode).toBe("active");
+    expect(active.weightFor("s")).toBe(1);
+    expect(active.bufferedCount()).toBe(1);
+  });
+});
+
 describe("SkillLearningRuntime · 加权", () => {
   it("noteSelected + recordOutcome：成功升权、失败降权、写穿 store", () => {
     const store = new InMemorySkillStore();

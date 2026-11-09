@@ -95,6 +95,8 @@ import {
   type PersistentMemoryStore,
   createPersistentMemoryStore,
   fragmentsToRanked,
+  isFragmentVisibleToScope,
+  type MemoryScope,
 } from "@openintj/plane-memory";
 import { InMemoryProfileStore, JsonProfileStore, ProfileService } from "@openintj/profile";
 import {
@@ -671,10 +673,19 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
   // A1.3 opt-in：OPENINTJ_LOOP_HYBRID=1 时主循环检索改走 session 级增量 HybridRetriever。
   const loopHybrid = process.env["OPENINTJ_LOOP_HYBRID"] === "1";
   const candidateRetrieve = loopHybrid
-    ? async (query: string, ro: { topK?: number; taskType?: TaskTypeType }) => {
+    ? async (query: string, ro: { topK?: number; taskType?: TaskTypeType; scope?: MemoryScope }) => {
         const e = persistentStore.embedder.embed(query);
         const qVec = e instanceof Promise ? await e : e;
-        const hits = hybridIndex.search(query, qVec, { topK: ro.topK ?? 6 });
+        const hits = hybridIndex.search(query, qVec, {
+          topK: ro.topK ?? 6,
+          // F04.3：scope 在召回前过滤，不让不可见候选占 topK 槽位。
+          ...(ro.scope
+            ? {
+                filter: (h: { doc: { metadata: { taskTags: readonly string[] } } }) =>
+                  isFragmentVisibleToScope({ taskTags: h.doc.metadata.taskTags }, ro.scope!),
+              }
+            : {}),
+        });
         return fragmentsToRanked(
           persistentStore,
           hits.map((h) => ({ id: h.doc.id, score: h.score })),

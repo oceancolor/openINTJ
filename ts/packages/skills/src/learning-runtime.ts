@@ -29,6 +29,19 @@ export const resolveSkillWeightHalfLifeSec = (opts?: {
   return Number.isFinite(env) && env > 0 ? env : undefined;
 };
 
+/**
+ * RFC-021 G0.3 止损开关：技能学习模式。
+ * - active（默认）：现行为——outcome 升权 + 成功轨迹进蒸馏 buffer。
+ * - observe：只记观察（selection/outcome 计数），不写权重、不进蒸馏 buffer。
+ *   用于在归因（F10/G3）修好前止损自动升权/蒸馏，env OPENINTJ_SKILLS_LEARN_MODE 切换。
+ */
+export type SkillsLearnMode = "observe" | "active";
+
+export const resolveSkillsLearnMode = (opts?: { learnMode?: SkillsLearnMode }): SkillsLearnMode => {
+  if (opts?.learnMode) return opts.learnMode;
+  return process.env["OPENINTJ_SKILLS_LEARN_MODE"] === "observe" ? "observe" : "active";
+};
+
 /** 一次成功 run 的精简（脱敏后）轨迹，进 buffer 供蒸馏。 */
 export interface TrajectorySample {
   query: string;
@@ -88,6 +101,8 @@ export interface SkillLearningRuntimeOpts {
   idPrefix?: string;
   /** 落 buffer 前对 query/finalAnswer 脱敏。默认恒等（不脱敏；agent 装配时可注入）。 */
   redactor?: (text: string) => string;
+  /** RFC-021 止损：学习模式（缺省经 env 解析，默认 active）。 */
+  learnMode?: SkillsLearnMode;
 }
 
 const STOPWORDS = new Set([
@@ -181,6 +196,9 @@ const topKeywords = (queries: readonly string[], n: number): string[] => {
  */
 export class SkillLearningRuntime {
   readonly store: SkillStore;
+  readonly learnMode: SkillsLearnMode;
+  /** observe 模式下累计的 outcome 观察数（只记不用，供止损期审计）。 */
+  observedOutcomes = 0;
   private readonly hooks?: HookBus;
   private readonly clock: () => number;
   private readonly wMin: number;
@@ -204,6 +222,7 @@ export class SkillLearningRuntime {
 
   constructor(opts: SkillLearningRuntimeOpts = {}) {
     this.store = opts.store ?? new InMemorySkillStore();
+    this.learnMode = resolveSkillsLearnMode(opts);
     if (opts.hooks) this.hooks = opts.hooks;
     this.clock = opts.clock ?? (() => Date.now());
     this.wMin = opts.weightClamp?.min ?? -2;
@@ -293,6 +312,12 @@ export class SkillLearningRuntime {
   ): void {
     const key = this.keyOf(query, taskType);
     const ids = this.selection.get(key);
+    // 止损 observe：只记观察，不升权、不进蒸馏 buffer（selection 照常消费防泄漏）。
+    if (this.learnMode === "observe") {
+      this.observedOutcomes += 1;
+      if (ids) this.selection.delete(key);
+      return;
+    }
     if (ids) {
       const signal = skillOutcomeSignal(status);
       for (const id of ids) this.reinforce(id, signal);

@@ -14,6 +14,19 @@ const frag = (id: string, content: string, extra: Record<string, unknown> = {}) 
   });
 
 describe("MemoryHybridIndex", () => {
+  it("filter 谓词在 topK 之前过滤：不可见候选不占槽位（F04.3）", () => {
+    const idx = new MemoryHybridIndex();
+    idx.seed([
+      frag("hidden", "cats cats cats", { taskTags: ["workspace:other"] }),
+      frag("visible", "cats and dogs", { taskTags: ["workspace:mine"] }),
+    ]);
+    const hits = idx.search("cats", [1, 0, 0], {
+      topK: 1,
+      filter: (h) => h.doc.metadata.taskTags.includes("workspace:mine"),
+    });
+    expect(hits.map((h) => h.doc.id)).toEqual(["visible"]);
+  });
+
   it("seed 后可检索，size 正确", () => {
     const idx = new MemoryHybridIndex();
     idx.seed([frag("a", "cats and dogs"), frag("b", "quantum physics")]);

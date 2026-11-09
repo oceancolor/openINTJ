@@ -33,7 +33,7 @@ export interface ContextEngineOpts {
    */
   candidateRetrieve?: (
     query: string,
-    opts: { topK?: number; taskType?: TaskTypeType },
+    opts: { topK?: number; taskType?: TaskTypeType; scope?: MemoryScope },
   ) => Promise<RankedMemory[]>;
 }
 
