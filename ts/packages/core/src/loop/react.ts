@@ -6,6 +6,7 @@ import {
   journalUser,
 } from "../journal/sink.js";
 import type { JournalTurnContext } from "../journal/types.js";
+import type { RunContext } from "../run-context.js";
 import { AgentError, ErrorCode, isContextOverflowError } from "../types/errors.js";
 import { estimateTokens } from "../types/memory-fragment.js";
 import type { ToolCallResult, ToolDescriptor } from "../types/tool.js";
@@ -28,7 +29,7 @@ import type {
 export type ReactToolRunner = (
   toolName: string,
   params: Record<string, unknown>,
-  opts?: { traceId?: string; timeoutMs?: number; signal?: AbortSignal },
+  opts?: { traceId?: string; timeoutMs?: number; signal?: AbortSignal; runId?: string },
 ) => Promise<ToolCallResult>;
 
 export interface ReactDeps {
@@ -45,6 +46,8 @@ export interface ReactRunOptions {
   llm?: LlmClient;
   /** RFC-009 optional journal; missing or throwing sink never fails the loop. */
   journal?: JournalTurnContext;
+  /** RFC-021 F02: host-verified run identity, forwarded to hooks/tools. */
+  run?: RunContext;
   /**
    * RFC-012 overflow recovery (at most once per run): invoked when the
    * provider rejects the conversation as too long. Receives the history
@@ -270,7 +273,10 @@ export class ReactStateMachine {
       // Thought 阶段
       // ============================================================
       if (this._hooks) {
-        const beforeOpts = traceId ? { traceId } : undefined;
+        const beforeOpts = {
+          ...(traceId ? { traceId } : {}),
+          ...(opts.run ? { runId: opts.run.runId } : {}),
+        };
         const thoughtHook = await this._hooks.emitOutcome(
           "react.beforeThought",
           {
@@ -440,11 +446,17 @@ export class ReactStateMachine {
       }
       const actionPayload = actionHook.payload;
 
-      const callOpts: { traceId?: string; timeoutMs: number; signal?: AbortSignal } = {
+      const callOpts: {
+        traceId?: string;
+        timeoutMs: number;
+        signal?: AbortSignal;
+        runId?: string;
+      } = {
         timeoutMs: this._config.stepTimeoutMs,
       };
       if (traceId) callOpts.traceId = traceId;
       if (opts.signal) callOpts.signal = opts.signal;
+      if (opts.run) callOpts.runId = opts.run.runId;
       journalToolCall(
         opts.journal,
         iter,
@@ -557,7 +569,10 @@ export class ReactStateMachine {
     opts.signal?.throwIfAborted();
     const llm = opts.llm ?? this._llm;
     const traceId = opts.traceId;
-    const hookOpts = traceId ? { traceId } : undefined;
+    const hookOpts = {
+      ...(traceId ? { traceId } : {}),
+      ...(opts.run ? { runId: opts.run.runId } : {}),
+    };
 
     const thoughtHook = await this._hooks.emitOutcome(
       "react.beforeThought",

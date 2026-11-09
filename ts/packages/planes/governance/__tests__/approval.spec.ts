@@ -96,6 +96,38 @@ describe("GovernancePlane approval gate (RFC-013)", () => {
     expect(broker.listPending()).toHaveLength(0);
   });
 
+  it("RFC-021 T04: aborting the run signal denies the parked request; late decide is a no-op", async () => {
+    const broker = new PendingApprovalBroker();
+    const controller = new AbortController();
+    const outcome = broker.request({
+      id: "req-cancel",
+      tool: "write_file",
+      risk: "write",
+      params: { path: "a.md" },
+      requestedAt: Date.now(),
+      signal: controller.signal,
+    });
+    expect(broker.listPending()).toHaveLength(1);
+    controller.abort(new Error("user"));
+    await expect(outcome).resolves.toEqual({ decision: "denied", reason: "cancelled" });
+    expect(broker.listPending()).toHaveLength(0);
+    expect(broker.decide("req-cancel", { decision: "approved" })).toBe(false);
+
+    const pre = new AbortController();
+    pre.abort(new Error("user"));
+    await expect(
+      broker.request({
+        id: "req-pre",
+        tool: "write_file",
+        risk: "write",
+        params: {},
+        requestedAt: Date.now(),
+        signal: pre.signal,
+      }),
+    ).resolves.toEqual({ decision: "denied", reason: "cancelled" });
+    expect(broker.listPending()).toHaveLength(0);
+  });
+
   it("read tools never prompt unless configured, and gate forwards descriptor risk", async () => {
     let requests = 0;
     const gov = new GovernancePlane({

@@ -7,6 +7,7 @@ import {
   journalUser,
 } from "../journal/sink.js";
 import type { JournalTurnContext, TurnEndStatus } from "../journal/types.js";
+import type { RunContext } from "../run-context.js";
 import {
   type ShaderModeType,
   TASK_SHADER_MAP,
@@ -48,6 +49,8 @@ export interface TaoContextInput {
   topK?: number;
   /** RFC-011: plan-advice system section for this run (never spliced into the user query). */
   planAdviceBlock?: string;
+  /** RFC-021 F02/F04: verified run identity; providers must scope reads by it. */
+  run?: RunContext;
 }
 
 /**
@@ -200,6 +203,15 @@ export class TaoLoop {
       llm?: LlmClient;
       /** RFC-009 optional journal; missing or throwing sink never fails the loop. */
       journal?: JournalTurnContext;
+      /** RFC-021 F02: host-verified run identity, forwarded to hooks/tools. */
+      run?: RunContext;
+      /**
+       * RFC-021 F01: who commits the journal final. "loop" (default) keeps
+       * the historical behavior; "host" means the loop only records process
+       * events and the host commits the post-processed final via
+       * commitHostTurn — the committed text then equals the shown answer.
+       */
+      completionOwner?: "loop" | "host";
       /** RFC-011: plan-advice system section, forwarded to contextProvider per run. */
       planAdviceBlock?: string;
       /** RFC-012 overflow recovery, forwarded to ReAct (see ReactRunOptions). */
@@ -256,7 +268,10 @@ export class TaoLoop {
           break;
         }
 
-        const taoOpts = traceId ? { traceId } : undefined;
+        const taoOpts = {
+          ...(traceId ? { traceId } : {}),
+          ...(opts.run ? { runId: opts.run.runId } : {}),
+        };
 
         // ----- Think -----
         const think = await this._hooks.emitOutcome(
@@ -308,6 +323,7 @@ export class TaoLoop {
               traceId,
               ...(opts.topK !== undefined ? { topK: opts.topK } : {}),
               ...(opts.planAdviceBlock ? { planAdviceBlock: opts.planAdviceBlock } : {}),
+              ...(opts.run ? { run: opts.run } : {}),
             });
           } catch {
             // 记忆注入失败绝不阻断主循环，回退静态 systemPrompt。
@@ -339,12 +355,14 @@ export class TaoLoop {
           signal?: AbortSignal;
           llm?: LlmClient;
           journal?: JournalTurnContext;
+          run?: RunContext;
           onContextOverflow?: NonNullable<ReactRunOptions["onContextOverflow"]>;
         } = {};
         if (traceId) reactOpts.traceId = traceId;
         if (opts.signal) reactOpts.signal = opts.signal;
         if (opts.llm) reactOpts.llm = opts.llm;
         if (journal) reactOpts.journal = journal;
+        if (opts.run) reactOpts.run = opts.run;
         if (opts.onContextOverflow) reactOpts.onContextOverflow = opts.onContextOverflow;
         // enableReact=false 退化为单次 LLM 调用（不跑微循环、不下发工具）。
         const react = enableReact
@@ -435,15 +453,19 @@ export class TaoLoop {
         metrics: ctx.metrics,
       };
       if (failureReason) result.failureReason = failureReason;
-      journalAssistant(journal, result.finalAnswer, { status: result.status });
-      journalTurnEnd(journal, taoStatusToJournal(status));
+      if (opts.completionOwner !== "host") {
+        journalAssistant(journal, result.finalAnswer, { status: result.status });
+        journalTurnEnd(journal, taoStatusToJournal(status));
+      }
       return result;
     } catch (error) {
       const cancelled = opts.signal?.aborted === true;
-      journalAssistant(journal, ctx.finalAnswer ?? "", {
-        status: cancelled ? "cancelled" : "failed",
-      });
-      journalTurnEnd(journal, cancelled ? "cancelled" : "failed");
+      if (opts.completionOwner !== "host") {
+        journalAssistant(journal, ctx.finalAnswer ?? "", {
+          status: cancelled ? "cancelled" : "failed",
+        });
+        journalTurnEnd(journal, cancelled ? "cancelled" : "failed");
+      }
       throw error;
     }
   }

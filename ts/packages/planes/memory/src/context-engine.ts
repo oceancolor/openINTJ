@@ -11,6 +11,7 @@ import {
   estimateTokens,
 } from "@openintj/core";
 import { MemoryRetriever, type RankedMemory } from "./retriever.js";
+import { type MemoryScope, isFragmentVisibleToScope } from "./scope.js";
 import { ShaderPipeline } from "./shader/pipeline.js";
 import type { MemoryStore } from "./store.js";
 
@@ -44,6 +45,8 @@ export interface BuildContextInput {
   /** 由调用方提供的检索 topK；不提供则用 shaderConfig.maxFragmentsPerQuery。 */
   topK?: number;
   traceId?: string;
+  /** RFC-021 F04: verified read scope; invisible memories never enter the prompt. */
+  scope?: MemoryScope;
 }
 
 /**
@@ -83,13 +86,21 @@ export class ContextEngine {
   async build(input: BuildContextInput): Promise<ContextWindowSnapshot> {
     // 1) 检索（自动适配 sync / async embedder）。
     //    注入了 candidateRetrieve（A1.3 opt-in）则走它，否则用默认 MemoryRetriever。
-    const retrieveOpts: { topK?: number; taskType?: TaskTypeType } = {
+    const retrieveOpts: { topK?: number; taskType?: TaskTypeType; scope?: MemoryScope } = {
       taskType: input.taskType,
     };
     if (input.topK !== undefined) retrieveOpts.topK = input.topK;
-    const ranked: RankedMemory[] = this.candidateRetrieve
+    if (input.scope !== undefined) retrieveOpts.scope = input.scope;
+    const unfiltered: RankedMemory[] = this.candidateRetrieve
       ? await this.candidateRetrieve(input.query, retrieveOpts)
       : await this.retriever.retrieveAsync(input.query, retrieveOpts);
+    // The default retriever filters before topK; an injected candidate
+    // retriever only gets post-filtering here (defense in depth, and the
+    // reason hosts should prefer pre-filtered candidate sources).
+    const ranked: RankedMemory[] =
+      input.scope !== undefined
+        ? unfiltered.filter((r) => isFragmentVisibleToScope(r.fragment, input.scope))
+        : unfiltered;
 
     // 2) 着色
     const shaderOpts = input.traceId ? { traceId: input.traceId } : undefined;

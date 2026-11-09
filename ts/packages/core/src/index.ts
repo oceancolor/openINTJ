@@ -1,4 +1,5 @@
 export * from "./types/index.js";
+export * from "./run-context.js";
 export * from "./hooks/index.js";
 export * from "./loop/index.js";
 export * from "./journal/index.js";

@@ -73,6 +73,58 @@ describe("CircuitBreaker", () => {
   });
 });
 
+describe("RFC-021 F03 ToolOutcome (T05)", () => {
+  it("descriptor without handler is not_executed and never a success", async () => {
+    const hub = new ToolHub();
+    hub.register(ToolDescriptorSchema.parse({ name: "ghost", description: "" }));
+    const r = await hub.call("ghost", { a: 1 }, { runId: "run-1" });
+    expect(r.success).toBe(false);
+    expect(r.executionStatus).toBe("not_executed");
+    expect(r.businessStatus).toBe("unknown");
+    expect(r.evidenceStatus).toBe("none");
+    expect(r.callId).toBeTruthy();
+    expect(r.runId).toBe("run-1");
+  });
+
+  it("non-zero exitCode is a business failure even though the handler returned", async () => {
+    const hub = new ToolHub();
+    hub.register(ToolDescriptorSchema.parse({ name: "cmd", description: "" }), () => ({
+      command: "false",
+      stdout: "",
+      stderr: "nope",
+      exitCode: 1,
+    }));
+    const r = await hub.call("cmd", {});
+    expect(r.executionStatus).toBe("completed");
+    expect(r.businessStatus).toBe("failure");
+    expect(r.success).toBe(false);
+    expect(r.evidenceStatus).toBe("observed");
+  });
+
+  it("unstructured handler output stays business unknown, not verified success", async () => {
+    const hub = new ToolHub();
+    hub.register(ToolDescriptorSchema.parse({ name: "echo2", description: "" }), () => ({
+      text: "done",
+    }));
+    const r = await hub.call("echo2", {});
+    expect(r.executionStatus).toBe("completed");
+    expect(r.businessStatus).toBe("unknown");
+    expect(r.evidenceStatus).toBe("none");
+  });
+
+  it("gate rejection is blocked, not executed", async () => {
+    const hub = new ToolHub({
+      gate: () => {
+        throw new Error("denied by policy");
+      },
+    });
+    hub.register(ToolDescriptorSchema.parse({ name: "w", description: "" }), () => ({}));
+    const r = await hub.call("w", {});
+    expect(r.executionStatus).toBe("blocked");
+    expect(r.success).toBe(false);
+  });
+});
+
 describe("ToolHub", () => {
   it("returns failure for unregistered tool", async () => {
     const hub = new ToolHub();

@@ -8,6 +8,11 @@ export interface MemoryPlaneOpts {
   hooks?: HookBus;
   clock?: () => number;
   embedder?: EmbeddingProvider;
+  /**
+   * 注入已装配的 store（例如 PersistentMemoryStore）。注入后 plane 与 retriever
+   * 共用同一实例——取代旧的 Object.defineProperty 反射替换（E08）。
+   */
+  store?: MemoryStore;
 }
 
 export class MemoryPlane {
@@ -21,7 +26,7 @@ export class MemoryPlane {
       ...(opts.embedder ? { embedder: opts.embedder } : {}),
       ...(opts.hooks ? { hooks: opts.hooks } : {}),
     };
-    this.store = new MemoryStore(opts.storeConfig, storeOpts);
+    this.store = opts.store ?? new MemoryStore(opts.storeConfig, storeOpts);
     const retrieverOpts: { clock?: () => number; embedder?: EmbeddingProvider } = {};
     if (opts.clock !== undefined) retrieverOpts.clock = opts.clock;
     if (opts.embedder !== undefined) retrieverOpts.embedder = opts.embedder;

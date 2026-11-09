@@ -1,6 +1,7 @@
 export * from "./embedding.js";
 export * from "./store.js";
 export * from "./retriever.js";
+export * from "./scope.js";
 export * from "./memory-plane.js";
 export * from "./shader/vertex.js";
 export * from "./shader/geometry.js";
@@ -8,6 +9,9 @@ export * from "./shader/fragment.js";
 export * from "./shader/pipeline.js";
 export * from "./context-engine.js";
 export * from "./persistent-store.js";
+export * from "./canonical.js";
+export * from "./embedding-space.js";
+export * from "./legacy-migration.js";
 export * from "./persistence-factory.js";
 export * from "./eval/retrieval-metrics.js";
 export * from "./eval/retrieval-benchmark.js";

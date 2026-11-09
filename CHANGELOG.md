@@ -8,6 +8,23 @@
 
 ### Changed
 
+- **可靠记忆闭环 G2（RFC-021）**：SQLite 成为 canonical memory 权威源（正文/
+  scope/状态/修订 + mutation 收据 + index outbox 同事务）；向量库降为可重建
+  投影（逐 job 隔离、过期投影不复活、空间冲突显式失败但正文与词法检索
+  不中断）；候选批次按五元接收键幂等接收只存待审；embedding 空间指纹随
+  索引代次记录；MemoryPlane 改构造注入 store（桌面/server 去除反射替换）；
+  legacy 迁移提供 dry-run 对账，scope 不明数据隔离不静默激活。桌面真实
+  数据已于 2026-11-09 备份 + dry-run 对账（16/16 matched）后完成迁移并
+  启用 canonical。实施记录见 `docs/rfcs/RFC-021-reliable-memory-loop.md`。
+
+- **可靠记忆闭环 G1（RFC-021）**：RunContext 运行身份贯通（steer/inject/
+  cancel 按 run 归属，桌面取消不再跨会话）；ToolOutcome 三分
+  （execution/business/evidence，无 handler 不再伪 success）；TAO 新增
+  `completionOwner` + core `commitHostTurn` + runtime TurnCoordinator，
+  桌面 IPC 统一提交与用户所见一致的最终答案；memory scope eligibility
+  在评分/截断前 fail-closed 过滤。实施记录见
+  `docs/rfcs/RFC-021-reliable-memory-loop.md`。
+
 - **桌面 UI 落地 Miora 设计系统**（设计源归档于 `docs/design/miora/`）：暖中性
   令牌（Ink `#20231F` / Panel `#FBFBF8` / Canvas `#F6F6F1`）+ 三语义色
   （Moss 健康·选中 / Signal 注意·破坏 / Amber 运行·等待），Manrope/IBM Plex

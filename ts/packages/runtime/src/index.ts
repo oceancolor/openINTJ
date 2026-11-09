@@ -10,5 +10,6 @@ export * from "./prompt/registry.js";
 export * from "./prompt/defaults.js";
 export * from "./run/prelude.js";
 export * from "./run/journal-ctx.js";
+export * from "./run/turn-coordinator.js";
 export * from "./compact.js";
 export * from "./subagent.js";

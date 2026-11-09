@@ -5,3 +5,4 @@ export * from "./dormant.js";
 export * from "./classifier.js";
 export * from "./skills.js";
 export * from "./task-store.js";
+export * from "./canonical-memory.js";

@@ -3,8 +3,10 @@ import { InMemoryVectorStore, LanceDBVectorStore, type VectorStore } from "@open
 import {
   InMemoryMetadataStore,
   type MetadataStore,
+  SqliteCanonicalMemoryStore,
   SqliteMetadataStore,
 } from "@openintj/storage-sqlite";
+import type { CanonicalMemoryRepository } from "./canonical.js";
 import { PersistentMemoryStore } from "./persistent-store.js";
 import type { MemoryStoreConfig } from "./store.js";
 
@@ -37,11 +39,17 @@ export interface CreatePersistentMemoryStoreOpts {
   hooks?: HookBus;
   /** 启动时 hydrate（默认 true）。 */
   hydrateOnInit?: boolean;
+  /**
+   * G2：启用 canonical 权威源（real 模式下在 dataDir 建 memory-canonical.db）。
+   * 默认关——真实数据目录需先跑 legacy dry-run 对账并确认后才开启（迁移门）。
+   */
+  useCanonical?: boolean;
 }
 
 export interface PersistenceBackends {
   vectorStore: VectorStore;
   metadataStore: MetadataStore;
+  canonical?: CanonicalMemoryRepository;
   mode: PersistenceMode;
   /** 真实模式下：解析后的数据目录。 */
   dataDir?: string;
@@ -86,8 +94,19 @@ export const buildPersistenceBackends = async (
     dbPath: sqlitePath,
     wal: true,
   });
+  const canonical = opts.useCanonical
+    ? (new SqliteCanonicalMemoryStore(
+        path.join(dataDir, "memory-canonical.db"),
+      ) as unknown as CanonicalMemoryRepository)
+    : undefined;
 
-  return { vectorStore, metadataStore, mode: "real", dataDir };
+  return {
+    vectorStore,
+    metadataStore,
+    ...(canonical ? { canonical } : {}),
+    mode: "real",
+    dataDir,
+  };
 };
 
 /**
@@ -107,6 +126,7 @@ export const createPersistentMemoryStore = async (
   const store = new PersistentMemoryStore({
     vectorStore: backends.vectorStore,
     metadataStore: backends.metadataStore,
+    ...(backends.canonical ? { canonical: backends.canonical } : {}),
     storeConfig: { embeddingDim: dim, ...(opts.storeConfig ?? {}) },
     ...(opts.embedder ? { embedder: opts.embedder } : {}),
     ...(opts.hooks ? { hooks: opts.hooks } : {}),

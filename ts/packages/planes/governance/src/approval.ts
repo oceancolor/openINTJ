@@ -103,6 +103,8 @@ export interface ApprovalRequest {
   risk: ToolRisk;
   params: Record<string, unknown>;
   requestedAt: number;
+  /** RFC-021 F02: run cancellation signal; aborting denies the parked request. */
+  signal?: AbortSignal;
 }
 
 export type ApprovalOutcome =
@@ -134,8 +136,20 @@ export class PendingApprovalBroker implements ApprovalBroker {
   }
 
   request(req: ApprovalRequest): Promise<ApprovalOutcome> {
+    // RFC-021 F02 (T04): an already-cancelled run never parks; aborting a
+    // parked request denies it, and a later decide() finds nothing.
+    if (req.signal?.aborted) {
+      return Promise.resolve({ decision: "denied", reason: "cancelled" });
+    }
     return new Promise<ApprovalOutcome>((resolve) => {
       this.pending.set(req.id, { req, resolve });
+      req.signal?.addEventListener(
+        "abort",
+        () => {
+          this.cancel(req.id, "cancelled");
+        },
+        { once: true },
+      );
       for (const listener of this.listeners) listener(req);
     });
   }

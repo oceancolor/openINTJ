@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { HookBus } from "../hooks/bus.js";
 import type { InputStructuredTaoResult } from "../input-structuring.js";
 import type { JournalTurnContext } from "../journal/types.js";
+import { type RunContext, runContextFromJournal } from "../run-context.js";
 import type { AgentHandle, AgentHandleRunOpts, AgentStatus } from "./types.js";
 
 export interface CreateAgentHandleOpts {
@@ -35,6 +36,9 @@ export const createAgentHandle = (opts: CreateAgentHandleOpts): AgentHandle => {
   };
   let status: AgentStatus = "idle";
   let abort: AbortController | undefined;
+  let currentRunId: string | undefined;
+  let cancelRequested = false;
+  let disposed = false;
   const idleWaiters: Array<() => void> = [];
   let tail: Promise<void> = Promise.resolve();
 
@@ -43,12 +47,28 @@ export const createAgentHandle = (opts: CreateAgentHandleOpts): AgentHandle => {
     while (idleWaiters.length > 0) idleWaiters.shift()?.();
   };
 
-  opts.hooks.on("react.beforeThought", (ctx) => {
+  // Read through a call so TS does not narrow the mutable status field.
+  const isCancelling = (): boolean => status === "cancelling";
+
+  /**
+   * RFC-021 F02 (T03): steer/inject belong to this handle's active run.
+   * When the emitter carries a runId it must match exactly; runId-less
+   * emitters (legacy hosts) may only be consumed while this handle runs.
+   */
+  const ownsEmission = (runId: string | undefined): boolean => {
+    if (currentRunId === undefined) return false;
+    if (runId !== undefined) return runId === currentRunId;
+    return status === "running";
+  };
+
+  const unregisterSteer = opts.hooks.on("react.beforeThought", (ctx) => {
+    if (!ownsEmission(ctx.runId)) return;
     if (inbox.steer.length === 0) return;
     const steerMessages = inbox.steer.splice(0, inbox.steer.length);
     ctx.replace({ ...ctx.payload, steerMessages });
   });
-  opts.hooks.on("tao.beforeThink", (ctx) => {
+  const unregisterInject = opts.hooks.on("tao.beforeThink", (ctx) => {
+    if (!ownsEmission(ctx.runId)) return;
     if (inbox.inject.length === 0) return;
     const injectBlock = inbox.inject.splice(0, inbox.inject.length).join("\n\n");
     ctx.replace({ ...ctx.payload, injectBlock });
@@ -57,29 +77,50 @@ export const createAgentHandle = (opts: CreateAgentHandleOpts): AgentHandle => {
   const execute = async (
     query: string,
     runOpts: AgentHandleRunOpts | undefined,
+    freshTurn = false,
   ): Promise<InputStructuredTaoResult> => {
     status = "running";
     abort = new AbortController();
     const signal = combineSignals(abort.signal, runOpts?.signal);
-    const journalCtx: JournalTurnContext = runOpts?.journal ?? {
-      conversationId: opts.id,
-      turnId: randomUUID(),
-      sink: opts.journal,
-      originalInput: query,
-    };
+    const journalCtx: JournalTurnContext =
+      freshTurn || !runOpts?.journal
+        ? {
+            conversationId: opts.id,
+            turnId: randomUUID(),
+            sink: opts.journal,
+            originalInput: query,
+          }
+        : runOpts.journal;
+    const runCtx: RunContext =
+      runOpts?.run && !freshTurn
+        ? runOpts.run
+        : runContextFromJournal(journalCtx, {
+            ...(runOpts?.run
+              ? {
+                  principalId: runOpts.run.principalId,
+                  workspaceId: runOpts.run.workspaceId,
+                  taskId: runOpts.run.taskId,
+                  parentRunId: runOpts.run.runId,
+                }
+              : {}),
+          });
+    currentRunId = runCtx.runId;
     try {
       return await opts.runTurn(query, {
         ...runOpts,
         ...(signal ? { signal } : {}),
         journal: journalCtx,
+        run: runCtx,
       });
     } finally {
+      if (currentRunId === runCtx.runId) currentRunId = undefined;
       abort = undefined;
     }
   };
 
   const run: AgentHandle["run"] = (query, runOpts) => {
     if (status === "idle") status = "running";
+    cancelRequested = false;
     let resolve!: (value: InputStructuredTaoResult) => void;
     let reject!: (reason: unknown) => void;
     const result = new Promise<InputStructuredTaoResult>((res, rej) => {
@@ -89,12 +130,19 @@ export const createAgentHandle = (opts: CreateAgentHandleOpts): AgentHandle => {
     tail = tail.then(
       async () => {
         try {
+          // T04: a run cancelled while still queued must not start.
+          if (cancelRequested || status === "cancelling") {
+            reject(new Error("cancelled_before_start"));
+            return;
+          }
           const first = await execute(query, runOpts);
           resolve(first);
-          while (status !== "cancelling" && inbox.followup.length > 0) {
+          while (!isCancelling() && inbox.followup.length > 0) {
             const next = inbox.followup.shift();
             if (!next) break;
-            await execute(next, runOpts);
+            // Followups are new turns (fresh turnId/runId), never a replay
+            // of the parent turn's journal identity.
+            await execute(next, runOpts, true);
           }
         } catch (error) {
           reject(error);
@@ -135,6 +183,7 @@ export const createAgentHandle = (opts: CreateAgentHandleOpts): AgentHandle => {
     },
     cancel(cause, cancelOpts) {
       if (status === "idle") return;
+      cancelRequested = true;
       status = "cancelling";
       if (!cancelOpts?.keepInbox) {
         inbox.followup.length = 0;
@@ -146,6 +195,13 @@ export const createAgentHandle = (opts: CreateAgentHandleOpts): AgentHandle => {
     whenIdle() {
       if (status === "idle") return Promise.resolve();
       return new Promise<void>((resolve) => idleWaiters.push(resolve));
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      unregisterSteer();
+      unregisterInject();
+      if (status !== "idle") handle.cancel("dispose");
     },
   };
   return handle;

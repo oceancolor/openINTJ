@@ -89,7 +89,7 @@ export class HookBus {
   async emit<E extends keyof HookEventMap>(
     event: E,
     payload: HookEventMap[E],
-    opts?: { traceId?: string },
+    opts?: { traceId?: string; runId?: string },
   ): Promise<HookEventMap[E]> {
     const outcome = await this.emitOutcome(event, payload, opts);
     return outcome.payload;
@@ -98,7 +98,7 @@ export class HookBus {
   async emitOutcome<E extends keyof HookEventMap>(
     event: E,
     payload: HookEventMap[E],
-    opts?: { traceId?: string },
+    opts?: { traceId?: string; runId?: string },
   ): Promise<{ payload: HookEventMap[E]; cancelled: boolean }> {
     const list = this.handlers.get(event as string);
     if (!list || list.length === 0) {
@@ -131,6 +131,7 @@ export class HookBus {
         const ctx: HookContext<HookEventMap[E]> = {
           eventName: event as string,
           traceId,
+          ...(opts?.runId ? { runId: opts.runId } : {}),
           get payload() {
             return currentPayload;
           },

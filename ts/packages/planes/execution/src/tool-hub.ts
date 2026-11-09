@@ -39,6 +39,36 @@ export interface ToolHubOpts {
 const _unusedTypeCheck: { lod?: LODLevelType; shader?: ShaderModeType } = {};
 void _unusedTypeCheck;
 
+type BusinessStatus = NonNullable<ToolCallResult["businessStatus"]>;
+type EvidenceStatus = NonNullable<ToolCallResult["evidenceStatus"]>;
+
+/**
+ * RFC-021 F03: derive the business axis from a handler's structured output.
+ * A handler returning normally only proves execution completed — business
+ * success requires an explicit signal (exitCode 0 / ok:true); non-zero exit
+ * or ok:false is a business failure; anything else stays unknown and must
+ * never be treated as verified success by learning.
+ */
+export const deriveBusinessStatus = (output: unknown): BusinessStatus => {
+  if (output !== null && typeof output === "object") {
+    const rec = output as Record<string, unknown>;
+    if (typeof rec["exitCode"] === "number") return rec["exitCode"] === 0 ? "success" : "failure";
+    if (rec["ok"] === false || rec["success"] === false) return "failure";
+    if (rec["ok"] === true || rec["success"] === true) return "success";
+  }
+  return "unknown";
+};
+
+export const deriveEvidenceStatus = (output: unknown): EvidenceStatus => {
+  if (output !== null && typeof output === "object") {
+    const rec = output as Record<string, unknown>;
+    if (typeof rec["contentHash"] === "string" || typeof rec["exitCode"] === "number") {
+      return "observed";
+    }
+  }
+  return "none";
+};
+
 export class ToolHub {
   private readonly tools = new Map<string, ToolDescriptor>();
   private readonly handlers = new Map<string, ToolHandler>();
@@ -147,9 +177,18 @@ export class ToolHub {
   async call(
     name: string,
     params: Record<string, unknown>,
-    opts?: { traceId?: string; timeoutMs?: number; signal?: AbortSignal },
+    opts?: {
+      traceId?: string;
+      timeoutMs?: number;
+      signal?: AbortSignal;
+      runId?: string;
+      origin?: string;
+    },
   ): Promise<ToolCallResult> {
     opts?.signal?.throwIfAborted();
+    // RFC-021 F03: the callId exists before execution so every outcome —
+    // blocked, not-executed, failed, completed — is attributable to one call.
+    const callId = randomUUID();
     const resolvedName = this.resolveRegisteredName(name);
     const descriptor = this.tools.get(resolvedName);
     if (!descriptor) {
@@ -159,7 +198,12 @@ export class ToolHub {
         error: `工具未注册: ${name}`,
         durationMs: 0,
         traceId: opts?.traceId ?? "",
-        callId: randomUUID(),
+        callId,
+        executionStatus: "not_executed",
+        businessStatus: "unknown",
+        evidenceStatus: "none",
+        ...(opts?.runId ? { runId: opts.runId } : {}),
+        ...(opts?.origin ? { origin: opts.origin } : {}),
       };
       this.recordHistory(result);
       return result;
@@ -173,7 +217,12 @@ export class ToolHub {
         error: `熔断器已打开（state=${breaker.state}），暂停调用 ${resolvedName}`,
         durationMs: 0,
         traceId: opts?.traceId ?? "",
-        callId: randomUUID(),
+        callId,
+        executionStatus: "blocked",
+        businessStatus: "unknown",
+        evidenceStatus: "none",
+        ...(opts?.runId ? { runId: opts.runId } : {}),
+        ...(opts?.origin ? { origin: opts.origin } : {}),
       };
       if (this.hooks) {
         const emitOpts = opts?.traceId ? { traceId: opts.traceId } : undefined;
@@ -206,7 +255,12 @@ export class ToolHub {
         error: `技能未授权工具: ${resolvedName}`,
         durationMs: 0,
         traceId: opts?.traceId ?? "",
-        callId: randomUUID(),
+        callId,
+        executionStatus: "blocked",
+        businessStatus: "unknown",
+        evidenceStatus: "none",
+        ...(opts?.runId ? { runId: opts.runId } : {}),
+        ...(opts?.origin ? { origin: opts.origin } : {}),
       };
       this.recordHistory(blocked);
       if (this.hooks) {
@@ -229,7 +283,12 @@ export class ToolHub {
           error: errorMessage,
           durationMs: 0,
           traceId: opts?.traceId ?? "",
-          callId: randomUUID(),
+          callId,
+          executionStatus: "blocked",
+          businessStatus: "unknown",
+          evidenceStatus: "none",
+          ...(opts?.runId ? { runId: opts.runId } : {}),
+          ...(opts?.origin ? { origin: opts.origin } : {}),
         };
         this.recordHistory(blocked);
         if (this.hooks) {
@@ -250,30 +309,57 @@ export class ToolHub {
 
     try {
       const timeoutMs = opts?.timeoutMs ?? descriptor.timeoutS * 1000;
-      const output =
-        handler !== undefined
-          ? await runWithTimeout(handler(params), timeoutMs, resolvedName, opts?.signal)
-          : { status: "no_handler", params };
-
-      result = {
-        toolName: resolvedName,
-        success: true,
-        output,
-        durationMs: Date.now() - start,
-        traceId: opts?.traceId ?? "",
-        callId: randomUUID(),
-      };
-      breaker?.recordSuccess();
+      if (handler === undefined) {
+        // RFC-021 F03 (T05): no handler means NOT executed — never a
+        // success, never a breaker success, never positive learning.
+        result = {
+          toolName: resolvedName,
+          success: false,
+          error: `工具无处理器: ${resolvedName}`,
+          output: { status: "no_handler", params },
+          durationMs: Date.now() - start,
+          traceId: opts?.traceId ?? "",
+          callId,
+          executionStatus: "not_executed",
+          businessStatus: "unknown",
+          evidenceStatus: "none",
+          ...(opts?.runId ? { runId: opts.runId } : {}),
+          ...(opts?.origin ? { origin: opts.origin } : {}),
+        };
+      } else {
+        const output = await runWithTimeout(handler(params), timeoutMs, resolvedName, opts?.signal);
+        const businessStatus = deriveBusinessStatus(output);
+        result = {
+          toolName: resolvedName,
+          success: businessStatus !== "failure",
+          output,
+          durationMs: Date.now() - start,
+          traceId: opts?.traceId ?? "",
+          callId,
+          executionStatus: "completed",
+          businessStatus,
+          evidenceStatus: deriveEvidenceStatus(output),
+          ...(opts?.runId ? { runId: opts.runId } : {}),
+          ...(opts?.origin ? { origin: opts.origin } : {}),
+        };
+        breaker?.recordSuccess();
+      }
     } catch (err) {
       if (opts?.signal?.aborted) throw opts.signal.reason ?? err;
       const errorMessage = err instanceof Error ? err.message : String(err);
+      const isTimeout = err instanceof AgentError && err.code === ErrorCode.TIMEOUT;
       result = {
         toolName: resolvedName,
         success: false,
         error: errorMessage,
         durationMs: Date.now() - start,
         traceId: opts?.traceId ?? "",
-        callId: randomUUID(),
+        callId,
+        executionStatus: isTimeout ? "timeout" : "error",
+        businessStatus: "unknown",
+        evidenceStatus: "none",
+        ...(opts?.runId ? { runId: opts.runId } : {}),
+        ...(opts?.origin ? { origin: opts.origin } : {}),
       };
       breaker?.recordFailure();
 

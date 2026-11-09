@@ -4,10 +4,9 @@ import {
   type JournalTurnContext,
   type SlashCommandContext,
   deriveHistory,
-  finalizeJournalTurn,
 } from "@openintj/core";
 import { createToolCallGate } from "@openintj/plane-governance";
-import { runCompactCommand } from "@openintj/runtime";
+import { createTurnCoordinator, runCompactCommand, taoStatusToTurnEnd } from "@openintj/runtime";
 import type { ScheduleTrigger } from "@openintj/scheduler";
 import { withRootSpan } from "@openintj/telemetry-otel";
 import { BrowserWindow, type IpcMain, type WebContents, app, ipcMain, shell } from "electron";
@@ -150,7 +149,33 @@ export const registerIpcHandlers = (
   deps: IpcDeps = {},
 ): IpcRegistration => {
   const offs: Array<() => void> = [];
-  const activeChats = new Set<AbortController>();
+  // RFC-021 F02 (T04): chat abort controllers are scoped per conversation;
+  // a cancel for one conversation must never abort another's stream.
+  // App-restart / config-reload remain legitimately global aborts.
+  const activeChats = new Map<string, Set<AbortController>>();
+  const trackChat = (key: string, controller: AbortController): void => {
+    const set = activeChats.get(key) ?? new Set<AbortController>();
+    set.add(controller);
+    activeChats.set(key, set);
+  };
+  const untrackChat = (controller: AbortController): void => {
+    for (const [key, set] of activeChats) {
+      set.delete(controller);
+      if (set.size === 0) activeChats.delete(key);
+    }
+  };
+  const abortChatsFor = (key: string, reason: Error): void => {
+    for (const controller of activeChats.get(key) ?? []) controller.abort(reason);
+  };
+  const abortAllChats = (reason: Error): void => {
+    for (const set of activeChats.values()) {
+      for (const controller of set) controller.abort(reason);
+    }
+  };
+  // RFC-021 F01: IPC owns the journal final for CHAT turns; the loop runs
+  // with completionOwner="host" and this coordinator commits exactly the
+  // post-processed answer the user was shown.
+  const turnCoordinator = createTurnCoordinator();
   let restarting = false;
 
   const commandCtx = (conversationId?: string): Omit<SlashCommandContext, "raw"> => {
@@ -190,7 +215,7 @@ export const registerIpcHandlers = (
   api.handle(IPC.APP_RESTART, async () => {
     if (!deps.restart) return { ok: false, reason: "restart_unavailable" };
     restarting = true;
-    for (const controller of activeChats) controller.abort(new Error("app_restarting"));
+    abortAllChats(new Error("app_restarting"));
     await deps.restart();
     return { ok: true };
   });
@@ -370,7 +395,7 @@ export const registerIpcHandlers = (
     const parsed = AgentCancelRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     commandCtx(parsed.data.conversationId).handle.cancel(parsed.data.cause);
-    for (const controller of activeChats) controller.abort(new Error(parsed.data.cause));
+    abortChatsFor(parsed.data.conversationId, new Error(parsed.data.cause));
     return { ok: true };
   });
 
@@ -597,7 +622,9 @@ export const registerIpcHandlers = (
     }
     if (restarting) return { error: "app_restarting" };
     const controller = new AbortController();
-    activeChats.add(controller);
+    // Always tracked (pending key until the conversation id is known) so
+    // global aborts still reach brand-new conversations.
+    trackChat(parsed.data.conversationId ?? `chat:${randomUUID()}`, controller);
     let persistedConversationId: string | undefined;
     let journalCtx: JournalTurnContext | undefined;
     try {
@@ -630,6 +657,7 @@ export const registerIpcHandlers = (
       }
       if (selected && deps.workbench) {
         persistedConversationId = selected.conversation.id;
+        trackChat(selected.conversation.id, controller);
         journalCtx = {
           conversationId: selected.conversation.id,
           turnId: randomUUID(),
@@ -660,8 +688,8 @@ export const registerIpcHandlers = (
           ? `已在预览区打开：\`${path}\``
           : "工作区里还没有可预览的产物。请先生成图片或文件。";
         const artifacts = path ? artifactsFromAnswer(`\`${path}\``) : [];
-        if (selected && deps.workbench) {
-          finalizeJournalTurn(deps.workbench.journal(), journalCtx, {
+        if (selected && deps.workbench && journalCtx) {
+          turnCoordinator.commitTurn(deps.workbench.journal(), journalCtx, {
             userContent: parsed.data.query,
             originalInput: parsed.data.query,
             assistantContent: finalAnswer,
@@ -692,6 +720,7 @@ export const registerIpcHandlers = (
         () =>
           agent.run(parsed.data.query, {
             signal: controller.signal,
+            completionOwner: "host",
             ...(history ? { history } : {}),
             ...(journalCtx ? { journal: journalCtx } : {}),
             ...(selectedLlm ? { llm: selectedLlm } : {}),
@@ -710,6 +739,7 @@ export const registerIpcHandlers = (
       let finalAnswer = result.finalAnswer;
       if (
         selected &&
+        result.status === "completed" &&
         result.inputStructure?.action !== "clarify" &&
         requestsFileArtifact(parsed.data.query) &&
         !hasSuccessfulFileWrite(result.trajectory) &&
@@ -721,21 +751,34 @@ export const registerIpcHandlers = (
           selected.task.id,
           result.finalAnswer,
         );
-        await agent.workspace.tools.writeFile({
-          path: artifact.path,
-          content: artifact.content,
-        });
-        finalAnswer = `${result.finalAnswer}\n\n已写入工作区：\`${artifact.path}\``;
+        // RFC-021 F03 (T06): host fallback goes through the governed tool
+        // facade with an explicit origin ? never a silent direct write, and
+        // a failed/cancelled run never earns a "written" claim.
+        const writeResult = await agent.toolHub.call(
+          "write_file",
+          { path: artifact.path, content: artifact.content },
+          {
+            origin: "host_fallback",
+            ...(journalCtx
+              ? { runId: `run:${journalCtx.conversationId}:${journalCtx.turnId}` }
+              : {}),
+            signal: controller.signal,
+          },
+        );
+        finalAnswer =
+          writeResult.businessStatus !== "failure" && writeResult.success
+            ? result.finalAnswer + "\n\n已写入工作区：`" + artifact.path + "`"
+            : result.finalAnswer + "（自动补写文件失败：" + (writeResult.error ?? writeResult.businessStatus ?? "unknown") + "）";
       }
-      if (selected && deps.workbench) {
-        finalizeJournalTurn(deps.workbench.journal(), journalCtx, {
+      if (selected && deps.workbench && journalCtx) {
+        turnCoordinator.commitTurn(deps.workbench.journal(), journalCtx, {
           userContent: parsed.data.query,
           originalInput: parsed.data.query,
           ...(result.inputStructure ? { inputStructure: result.inputStructure } : {}),
           assistantContent: finalAnswer,
           messageKind: result.inputStructure?.action === "clarify" ? "clarification" : "answer",
           status: result.status,
-          endStatus: result.inputStructure?.action === "clarify" ? "clarify" : "completed",
+          endStatus: taoStatusToTurnEnd(result.status, result.inputStructure?.action === "clarify"),
           traceId: result.traceId,
         });
         deps.workbench.appendMessage({
@@ -763,9 +806,9 @@ export const registerIpcHandlers = (
         ...(artifacts.length > 0 ? { artifacts } : {}),
       };
     } catch (error) {
-      if (persistedConversationId && deps.workbench) {
+      if (persistedConversationId && deps.workbench && journalCtx) {
         const failed = error instanceof Error ? error.message : String(error);
-        finalizeJournalTurn(deps.workbench.journal(), journalCtx, {
+        turnCoordinator.commitTurn(deps.workbench.journal(), journalCtx, {
           userContent: parsed.data.query,
           originalInput: parsed.data.query,
           assistantContent: failed,
@@ -783,7 +826,7 @@ export const registerIpcHandlers = (
       }
       throw error;
     } finally {
-      activeChats.delete(controller);
+      untrackChat(controller);
     }
   });
 
@@ -884,7 +927,7 @@ export const registerIpcHandlers = (
       const root = await deps.pickDirectory();
       if (!root) return { canceled: true };
       if (deps.reloadAgent) {
-        for (const controller of activeChats) controller.abort(new Error("config_reloading"));
+        abortAllChats(new Error("config_reloading"));
         await deps.reloadAgent();
       }
       return { canceled: false, root };
@@ -951,7 +994,7 @@ export const registerIpcHandlers = (
         (key) => JSON.stringify(previous[key]) !== JSON.stringify(updated[key]),
       );
       if (deps.reloadAgent && runtimeChanged) {
-        for (const controller of activeChats) controller.abort(new Error("config_reloading"));
+        abortAllChats(new Error("config_reloading"));
         await deps.reloadAgent();
       }
       return updated;

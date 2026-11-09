@@ -9,6 +9,8 @@ export type HookCategory = "lifecycle" | "tool" | "event" | "policy" | "concurre
 export interface HookContext<P> {
   readonly eventName: string;
   readonly traceId: string;
+  /** RFC-021 F02: emitting run identity, when the emitter knows it. */
+  readonly runId?: string;
   payload: P;
   readonly executedCount: number;
   cancel(): void;

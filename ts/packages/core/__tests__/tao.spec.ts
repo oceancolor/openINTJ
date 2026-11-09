@@ -531,4 +531,42 @@ describe("TaoLoop.run (single iteration)", () => {
       tao.run("again", { history, journal: { conversationId: "c1", turnId: "turn-2", sink: throwingSink } }),
     ).resolves.toMatchObject({ finalAnswer: "found" });
   });
+
+  it("RFC-021 F01: completionOwner=host records process events but no final; host commit lands the shown answer", async () => {
+    const { createInMemoryJournal, commitHostTurn, deriveHistory } = await import(
+      "../src/index.js"
+    );
+    const hooks = new HookBus({ logger: silent });
+    const journal = createInMemoryJournal();
+    const tao = new TaoLoop({
+      config: { ...DEFAULT_TAO_CONFIG, maxTaoIterations: 1 },
+      hooks,
+      react: new ReactStateMachine({
+        config: DEFAULT_REACT_CONFIG,
+        hooks,
+        llm: makeLlm(["FINAL: raw"]),
+        toolRunner: passingRunner,
+      }),
+      availableTools: () => tools,
+    });
+    const ctx = { conversationId: "c1", turnId: "turn-host", sink: journal };
+    const result = await tao.run("look up", { journal: ctx, completionOwner: "host" });
+    expect(result.finalAnswer).toBe("raw");
+    const before = journal.list("c1").map((event) => event.type);
+    expect(before).toContain("turn.start");
+    expect(before).toContain("user");
+    expect(before).not.toContain("assistant");
+    expect(before).not.toContain("turn.end");
+
+    const receipt = commitHostTurn(journal, ctx, {
+      userContent: "look up",
+      assistantContent: "shown answer",
+      endStatus: "completed",
+    });
+    expect(receipt.outcome).toBe("committed");
+    expect(deriveHistory(journal.list("c1"))).toEqual([
+      { role: "user", content: "look up" },
+      { role: "assistant", content: "shown answer", metadata: { messageKind: "answer" } },
+    ]);
+  });
 });

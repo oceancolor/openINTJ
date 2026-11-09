@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   AssistantMessageKind,
   Journal,
@@ -140,6 +141,95 @@ export const recordClosedTurn = (
     ...(input.assistant.status ? { status: input.assistant.status } : {}),
   });
   journalTurnEnd(ctx, input.endStatus);
+};
+
+/**
+ * RFC-021 F01 (T01/T02): host-owned final commit.
+ *
+ * Unlike `finalizeJournalTurn` (which skips when ANY event exists), this is
+ * the single finalization point after host post-processing: partial process
+ * events never block it, and the committed assistant text is exactly the
+ * answer the user was shown. Re-committing the same final is a replay;
+ * committing a different final for an already-ended turn is a conflict and
+ * writes nothing. Appends go through the sink directly — a failed commit
+ * throws instead of being swallowed, so callers can report COMMIT_FAILED.
+ */
+export interface HostTurnCommitInput {
+  userContent: string;
+  originalInput?: string;
+  inputStructure?: unknown;
+  assistantContent: string;
+  messageKind?: AssistantMessageKind;
+  status?: string;
+  endStatus: TurnEndStatus;
+  traceId?: string;
+}
+
+export interface HostTurnCommitReceipt {
+  outcome: "committed" | "replayed" | "conflict";
+  finalHash: string;
+  durability: "journal";
+}
+
+export const hostTurnFinalHash = (
+  input: Pick<HostTurnCommitInput, "assistantContent" | "endStatus">,
+): string =>
+  createHash("sha256")
+    .update(JSON.stringify([input.assistantContent, input.endStatus]))
+    .digest("hex");
+
+export const commitHostTurn = (
+  journal: Journal,
+  ctx: JournalTurnContext,
+  input: HostTurnCommitInput,
+): HostTurnCommitReceipt => {
+  const finalHash = hostTurnFinalHash(input);
+  const events = journal.list(ctx.conversationId).filter((e) => e.turnId === ctx.turnId);
+  const existingEnd = events.find((e) => e.type === "turn.end");
+  if (existingEnd && existingEnd.type === "turn.end") {
+    const existingAssistant = [...events]
+      .reverse()
+      .find((e) => e.type === "assistant" && e.messageKind !== undefined);
+    const same =
+      existingAssistant !== undefined &&
+      existingAssistant.type === "assistant" &&
+      existingAssistant.content === input.assistantContent &&
+      existingEnd.status === input.endStatus;
+    return { outcome: same ? "replayed" : "conflict", finalHash, durability: "journal" };
+  }
+
+  const traceId = input.traceId ?? ctx.traceId;
+  const base = {
+    conversationId: ctx.conversationId,
+    turnId: ctx.turnId,
+    ...(traceId ? { traceId } : {}),
+  };
+  if (!events.some((e) => e.type === "turn.start")) {
+    journal.append({
+      type: "turn.start",
+      ...base,
+      queryPreview: input.userContent.slice(0, 120),
+    });
+  }
+  const hasUser = events.some((e) => e.type === "user" && (e.source ?? "user") === "user");
+  if (!hasUser) {
+    journal.append({
+      type: "user",
+      ...base,
+      content: input.userContent,
+      ...(input.originalInput !== undefined ? { originalInput: input.originalInput } : {}),
+      ...(input.inputStructure !== undefined ? { inputStructure: input.inputStructure } : {}),
+    });
+  }
+  journal.append({
+    type: "assistant",
+    ...base,
+    content: input.assistantContent,
+    messageKind: input.messageKind ?? "answer",
+    ...(input.status ? { status: input.status } : {}),
+  });
+  journal.append({ type: "turn.end", ...base, status: input.endStatus });
+  return { outcome: "committed", finalHash, durability: "journal" };
 };
 
 /** Write a closed turn only when this turnId has no events yet (clarify / preflight / preview). */

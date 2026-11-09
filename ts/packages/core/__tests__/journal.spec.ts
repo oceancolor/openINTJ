@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   appendSessionCleared,
   appendSessionCompacted,
+  commitHostTurn,
   createInMemoryJournal,
   deriveChatMessages,
   deriveHistory,
   deriveTrajectory,
+  journalTurnStart,
+  journalUser,
 } from "../src/index.js";
 
 const cid = "conv-1";
@@ -206,5 +209,94 @@ describe("Session Journal", () => {
       messageKind: "clarification",
       inputStructure: structure,
     });
+  });
+});
+
+describe("RFC-021 F01 commitHostTurn (T01/T02)", () => {
+  const ctx = (journal: ReturnType<typeof createInMemoryJournal>) => ({
+    conversationId: cid,
+    turnId: "t-host",
+    sink: journal,
+  });
+
+  it("T01: partial process events do not block the host final; committed text is the shown answer", () => {
+    const journal = createInMemoryJournal();
+    const c = ctx(journal);
+    journalTurnStart(c, "q");
+    journalUser(c, "q");
+    journal.append({
+      type: "react.thought",
+      conversationId: cid,
+      turnId: "t-host",
+      step: 1,
+      content: "thinking",
+    });
+    const receipt = commitHostTurn(journal, c, {
+      userContent: "q",
+      assistantContent: "post-processed answer",
+      endStatus: "completed",
+    });
+    expect(receipt.outcome).toBe("committed");
+    const history = deriveHistory(journal.list(cid));
+    expect(history).toEqual([
+      { role: "user", content: "q" },
+      { role: "assistant", content: "post-processed answer", metadata: { messageKind: "answer" } },
+    ]);
+    const ends = journal.list(cid).filter((e) => e.type === "turn.end");
+    expect(ends).toHaveLength(1);
+  });
+
+  it("T01: a clean turn with no prior events commits the full closed turn", () => {
+    const journal = createInMemoryJournal();
+    const receipt = commitHostTurn(journal, ctx(journal), {
+      userContent: "hello",
+      assistantContent: "hi",
+      endStatus: "clarify",
+      messageKind: "clarification",
+    });
+    expect(receipt.outcome).toBe("committed");
+    expect(journal.list(cid).map((e) => e.type)).toEqual([
+      "turn.start",
+      "user",
+      "assistant",
+      "turn.end",
+    ]);
+  });
+
+  it("T02: recommitting the same final replays; a different final conflicts and writes nothing", () => {
+    const journal = createInMemoryJournal();
+    const c = ctx(journal);
+    const input = {
+      userContent: "q",
+      assistantContent: "answer",
+      endStatus: "completed" as const,
+    };
+    expect(commitHostTurn(journal, c, input).outcome).toBe("committed");
+    const countAfterCommit = journal.list(cid).length;
+    expect(commitHostTurn(journal, c, input).outcome).toBe("replayed");
+    expect(
+      commitHostTurn(journal, c, { ...input, assistantContent: "rewritten" }).outcome,
+    ).toBe("conflict");
+    expect(
+      commitHostTurn(journal, c, { ...input, endStatus: "failed" }).outcome,
+    ).toBe("conflict");
+    expect(journal.list(cid).length).toBe(countAfterCommit);
+  });
+
+  it("T02: a throwing sink surfaces the failure instead of swallowing it", () => {
+    const journal = createInMemoryJournal();
+    const broken = {
+      ...journal,
+      append: () => {
+        throw new Error("disk full");
+      },
+    };
+    expect(() =>
+      commitHostTurn(broken as typeof journal, ctx(journal), {
+        userContent: "q",
+        assistantContent: "a",
+        endStatus: "completed",
+      }),
+    ).toThrow("disk full");
   });
 });

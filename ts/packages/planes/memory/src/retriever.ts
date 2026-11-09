@@ -10,6 +10,7 @@ import {
   tokenizeLexical,
 } from "@openintj/core";
 import type { MemoryStore } from "./store.js";
+import { type MemoryScope, isFragmentVisibleToScope } from "./scope.js";
 
 export interface RetrieveOptions {
   topK?: number;
@@ -17,6 +18,8 @@ export interface RetrieveOptions {
   minImportance?: number;
   /** 注入 query embedding；不传则用 simpleEmbedding 生成。 */
   queryEmbedding?: readonly number[];
+  /** RFC-021 F04: fail-closed scope eligibility, applied before topK. */
+  scope?: MemoryScope;
 }
 
 export interface RankedMemory {
@@ -78,6 +81,9 @@ export class MemoryRetriever {
     const scored: RankedMemory[] = [];
 
     for (const fragment of this.store.all) {
+      // RFC-021 F04: invisible fragments never enter scoring, never take a
+      // topK slot, and never accrue access statistics.
+      if (!isFragmentVisibleToScope(fragment, opts.scope)) continue;
       const decayed = decayImportance(fragment, halfLife, now);
       if (decayed < minImportance) continue;
 

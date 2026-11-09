@@ -27,6 +27,7 @@ import {
   type JournalTurnContext,
   type LlmClient,
   ReactStateMachine,
+  type RunContext,
   type SlashCommandRegistry,
   TaoLoop,
   TaskType,
@@ -96,6 +97,7 @@ import {
   type PersistentMemoryStore,
   createPersistentMemoryStore,
   fragmentsToRanked,
+  scopeFromContextTags,
 } from "@openintj/plane-memory";
 import { InMemoryProfileStore, JsonProfileStore, ProfileService } from "@openintj/profile";
 import {
@@ -553,6 +555,10 @@ export interface DesktopRunOptions {
   contextTags?: readonly string[];
   /** RFC-009 optional journal; missing or throwing sink never fails the loop. */
   journal?: JournalTurnContext;
+  /** RFC-021 F02: run identity minted by the handle; forwarded to the loop. */
+  run?: RunContext;
+  /** RFC-021 F01: "host" = IPC commits the post-processed journal final. */
+  completionOwner?: "loop" | "host";
   skipSlashCommand?: boolean;
 }
 
@@ -699,9 +705,12 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     embedder: runtime.embed.embedder,
     storeConfig: { embeddingDim },
     hooks,
+    // G2：真实数据已完成 legacy 对账迁移（2026-11-09，16/16 激活），启用 canonical 权威源。
+    ...(persistence.mode === "real" ? { useCanonical: true } : {}),
   });
 
-  const memory = new MemoryPlane({ hooks });
+  // G2/F07：构造注入同一 store 实例，取代旧的 defineProperty 反射替换。
+  const memory = new MemoryPlane({ hooks, store: persistentStore });
   const rememberTurn = async (
     userText: string,
     assistantText: string,
@@ -714,14 +723,6 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       console.warn("[OpenINTJ desktop] memory persist failed; continuing without it", error);
     }
   };
-  Object.defineProperty(memory, "store", {
-    value: persistentStore,
-    writable: false,
-  });
-  Object.defineProperty(memory.retriever, "store", {
-    value: persistentStore,
-    writable: false,
-  });
 
   // session 级共享 HybridRetriever：开局 seed + 订阅 change-feed 增量维护。
   const hybridIndex = new MemoryHybridIndex();
@@ -985,7 +986,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     systemPrompt: baseSystemPrompt,
     // 每轮注入：①已批准的钝化记忆 persona ②命中的技能包 ③检索到的 [记忆参考]。
     // personaEnabled 是 A/B 杠杆：关闭即得到无 persona 基线（RFC-003 §3.6 #3）。
-    contextProvider: async ({ query, history, taskType, topK, traceId, planAdviceBlock }) => {
+    contextProvider: async ({ query, history, taskType, topK, traceId, planAdviceBlock, run }) => {
       const prefix = await prompt.render({
         query,
         history,
@@ -1001,6 +1002,17 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
         systemPrompt: stacked,
         topK: topK ?? 6,
         ...(traceId ? { traceId } : {}),
+        // RFC-021 F04: only memories eligible in this run's scope may enter
+        // the prompt; eligibility is enforced before ranking truncation.
+        ...(run
+          ? {
+              scope: {
+                workspaceId: run.workspaceId,
+                taskId: run.taskId,
+                conversationId: run.conversationId,
+              },
+            }
+          : {}),
       });
       return snap.systemPrompt;
     },
@@ -1241,6 +1253,17 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
           didCompact = true;
         }
       }
+      // RFC-021 F04: the run's scope comes from verified host context tags
+      // when present (workspace/task/conversation), not from handle defaults.
+      const tagScope = scopeFromContextTags(runOpts.contextTags);
+      const effectiveRun: RunContext | undefined = runOpts.run
+        ? {
+            ...runOpts.run,
+            ...(tagScope.workspaceId ? { workspaceId: tagScope.workspaceId } : {}),
+            ...(tagScope.taskId ? { taskId: tagScope.taskId } : {}),
+            ...(tagScope.conversationId ? { conversationId: tagScope.conversationId } : {}),
+          }
+        : undefined;
       const taoOpts = (
         traceId?: string,
         signal: AbortSignal | undefined = runOpts.signal,
@@ -1255,6 +1278,8 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
         ...(signal ? { signal } : {}),
         ...(effectiveHistory ? { history: effectiveHistory } : {}),
         ...(runOpts.llm ? { llm: runOpts.llm } : {}),
+        ...(effectiveRun ? { run: effectiveRun } : {}),
+        completionOwner: runOpts.completionOwner ?? "loop",
         ...(planAdviceBlock ? { planAdviceBlock } : {}),
         ...(attachJournal && journalCtx ? { journal: journalCtx } : {}),
       });

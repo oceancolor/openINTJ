@@ -25,6 +25,19 @@ export const ToolCallResultSchema = z.object({
   durationMs: z.number().nonnegative().default(0),
   traceId: z.string().default(""),
   callId: z.string().default(() => randomUUID()),
+  /**
+   * RFC-021 F03: execution / business / evidence are separate axes.
+   * `success` is a legacy derived view (completed && business !== failure);
+   * learning and credit assignment must use these fields, not `success`.
+   */
+  executionStatus: z
+    .enum(["not_executed", "blocked", "completed", "error", "cancelled", "timeout"])
+    .optional(),
+  businessStatus: z.enum(["success", "failure", "unknown"]).optional(),
+  evidenceStatus: z.enum(["none", "observed", "verified"]).optional(),
+  /** Who caused the call: "model" | "host_fallback" | "user" | ... */
+  origin: z.string().optional(),
+  runId: z.string().optional(),
 });
 
 export type ToolCallResult = z.infer<typeof ToolCallResultSchema>;

@@ -659,15 +659,8 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
     hooks,
   });
 
-  const memory = new MemoryPlane({ hooks });
-  Object.defineProperty(memory, "store", {
-    value: persistentStore,
-    writable: false,
-  });
-  Object.defineProperty(memory.retriever, "store", {
-    value: persistentStore,
-    writable: false,
-  });
+  // G2/F07：构造注入同一 store 实例，取代旧的 defineProperty 反射替换。
+  const memory = new MemoryPlane({ hooks, store: persistentStore });
 
   // session 级共享 HybridRetriever：开局 seed 现有片段，之后订阅 change-feed 增量维护。
   const hybridIndex = new MemoryHybridIndex();
