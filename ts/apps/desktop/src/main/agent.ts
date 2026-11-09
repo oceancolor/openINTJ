@@ -847,6 +847,8 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     (opts.enableSkills ?? process.env["OPENINTJ_SKILLS"] === "1") || enableSkillLearning;
 
   let skillLearning: SkillLearningRuntime | undefined;
+  // F10：runId → 本轮技能 selectionId（onSelected 时登记，outcome 时按 id 结算，不再按 query 文本归因）。
+  const skillSelectionByRun = new Map<string, string>();
   if (enableSkillLearning) {
     const skillStore: SkillStore =
       persistence.mode === "real" && persistence.dataDir
@@ -872,9 +874,15 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     ? await assembleSkillContext({
         embedder: persistentStore.embedder,
         hooks,
-        onSelected: (query, taskType, ids, tools) => {
+        onSelected: (_query, _taskType, ids, tools) => {
           toolHub.setRunAllowlist(tools);
-          skillLearning?.noteSelected(query, taskType, ids);
+          if (skillLearning) {
+            const selectionId = skillLearning.beginSelection(ids);
+            if (selectionId) {
+              const runId = activeRunStorage.getStore()?.runId ?? "__last";
+              skillSelectionByRun.set(runId, selectionId);
+            }
+          }
         },
         ...(skillLearning
           ? {
@@ -1030,6 +1038,8 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
               },
             }
           : {}),
+        // F10：注入记使用以 run 为幂等键（同一 run 多次 build 不重复计数）。
+        ...(run ? { usageEventId: `run:${run.runId}` } : {}),
       });
       return snap.systemPrompt;
     },
@@ -1430,10 +1440,27 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
               .filter((n): n is string => Boolean(n)),
           ),
         ];
-        skillLearning.recordOutcome(query, cls?.label, result.status, {
-          finalAnswer: result.finalAnswer,
-          toolsUsed,
-        });
+        // F10：按 selectionId 结算。桌面暂无独立验证器，verified=false——
+        // completed 只记观察，不自动升权/进蒸馏（接验证器后在此传 verified）。
+        const runKey = activeRunStorage.getStore()?.runId ?? "__last";
+        const selectionId = skillSelectionByRun.get(runKey) ?? skillSelectionByRun.get("__last");
+        if (selectionId) {
+          skillSelectionByRun.delete(runKey);
+          skillSelectionByRun.delete("__last");
+          skillLearning.recordOutcomeForSelection(selectionId, {
+            status: result.status,
+            verified: false,
+            query,
+            ...(cls?.label ? { taskType: cls.label } : {}),
+            finalAnswer: result.finalAnswer,
+            toolsUsed,
+          });
+        } else {
+          skillLearning.recordOutcome(query, cls?.label, result.status, {
+            finalAnswer: result.finalAnswer,
+            toolsUsed,
+          });
+        }
       }
       if (dormant)
         dormant.record(result.finalAnswer, "agent", {

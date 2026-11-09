@@ -132,6 +132,8 @@ describe("G2 canonical memory (T10–T15)", () => {
       timestamp: Date.now(),
       accessCount: 0,
       lastAccessed: 0,
+      kind: "note",
+      assertion: "assistant",
     };
     const r1 = await repo.applyMutation({ writeKey: "w1", inputHash: "h1", kind: "upsert", record });
     const r2 = await repo.applyMutation({ writeKey: "w1", inputHash: "h1", kind: "upsert", record });

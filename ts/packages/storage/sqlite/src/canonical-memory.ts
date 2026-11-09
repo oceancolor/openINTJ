@@ -5,7 +5,7 @@
  * 单事务边界：记录变更 + mutation 收据 + index outbox 一起提交或一起回滚。
  */
 
-export type CanonicalRecordState = "active" | "tombstoned" | "quarantined";
+export type CanonicalRecordState = "active" | "tombstoned" | "quarantined" | "superseded";
 export type CanonicalMemoryType = "short_term" | "working" | "long_term";
 
 export interface CanonicalMemoryRecordRow {
@@ -24,18 +24,24 @@ export interface CanonicalMemoryRecordRow {
   timestamp: number;
   accessCount: number;
   lastAccessed: number;
+  kind: string;
+  assertion: string;
+  validUntil?: number;
+  canonicalKey?: string;
+  supersededBy?: string;
 }
 
 export interface CanonicalMutationRequest {
   writeKey: string;
   inputHash: string;
-  kind: "upsert" | "delete" | "clear_tier" | "reassign";
+  kind: "upsert" | "delete" | "clear_tier" | "reassign" | "mark_superseded";
   fragmentId?: string;
   record?: CanonicalMemoryRecordRow;
   tier?: CanonicalMemoryType;
   newType?: CanonicalMemoryType;
   expectedRevision?: number;
   initialState?: CanonicalRecordState;
+  supersededBy?: string;
 }
 
 export interface CanonicalMutationReceipt {
@@ -95,7 +101,12 @@ CREATE TABLE IF NOT EXISTS memory_records (
   revision INTEGER NOT NULL DEFAULT 1,
   timestamp REAL NOT NULL,
   accessCount INTEGER NOT NULL DEFAULT 0,
-  lastAccessed REAL NOT NULL DEFAULT 0
+  lastAccessed REAL NOT NULL DEFAULT 0,
+  kind TEXT NOT NULL DEFAULT 'note',
+  assertion TEXT NOT NULL DEFAULT 'assistant',
+  validUntil REAL,
+  canonicalKey TEXT,
+  supersededBy TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mem_state ON memory_records(state);
 CREATE INDEX IF NOT EXISTS idx_mem_type ON memory_records(memoryType);
@@ -167,6 +178,11 @@ interface RecordRowDb {
   timestamp: number;
   accessCount: number;
   lastAccessed: number;
+  kind: string | null;
+  assertion: string | null;
+  validUntil: number | null;
+  canonicalKey: string | null;
+  supersededBy: string | null;
 }
 
 const rowToRecord = (r: RecordRowDb): CanonicalMemoryRecordRow => ({
@@ -190,6 +206,11 @@ const rowToRecord = (r: RecordRowDb): CanonicalMemoryRecordRow => ({
   timestamp: r.timestamp,
   accessCount: r.accessCount,
   lastAccessed: r.lastAccessed,
+  kind: r.kind ?? "note",
+  assertion: r.assertion ?? "assistant",
+  ...(r.validUntil !== null && r.validUntil !== undefined ? { validUntil: r.validUntil } : {}),
+  ...(r.canonicalKey ? { canonicalKey: r.canonicalKey } : {}),
+  ...(r.supersededBy ? { supersededBy: r.supersededBy } : {}),
 });
 
 export class SqliteCanonicalMemoryStore {
@@ -213,6 +234,22 @@ export class SqliteCanonicalMemoryStore {
     if (this.dbPath !== ":memory:") this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
     this.db.exec(SCHEMA);
+    // F08 增量列迁移：G2 已建的库没有 lifecycle 列，逐列补齐（幂等）。
+    const existing = new Set(
+      (this.db.prepare("PRAGMA table_info(memory_records)").all() as Array<{ name: string }>).map(
+        (c) => c.name,
+      ),
+    );
+    const addColumns: Array<[string, string]> = [
+      ["kind", "TEXT NOT NULL DEFAULT 'note'"],
+      ["assertion", "TEXT NOT NULL DEFAULT 'assistant'"],
+      ["validUntil", "REAL"],
+      ["canonicalKey", "TEXT"],
+      ["supersededBy", "TEXT"],
+    ];
+    for (const [name, def] of addColumns) {
+      if (!existing.has(name)) this.db.exec(`ALTER TABLE memory_records ADD COLUMN ${name} ${def}`);
+    }
     this.db
       .prepare("INSERT OR IGNORE INTO memory_control (id, epoch, updatedAt) VALUES (1, 1, ?)")
       .run(Date.now());
@@ -290,13 +327,15 @@ export class SqliteCanonicalMemoryStore {
         revision = (existing?.revision ?? 0) + 1;
         const state = existing?.state ?? r.initialState ?? "active";
         db.prepare(
-          `INSERT INTO memory_records (fragmentId, content, memoryType, importance, taskTagsJson, scopeTagsJson, metadataJson, summariesJson, embeddingJson, source, state, revision, timestamp, accessCount, lastAccessed)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO memory_records (fragmentId, content, memoryType, importance, taskTagsJson, scopeTagsJson, metadataJson, summariesJson, embeddingJson, source, state, revision, timestamp, accessCount, lastAccessed, kind, assertion, validUntil, canonicalKey, supersededBy)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(fragmentId) DO UPDATE SET content=excluded.content, memoryType=excluded.memoryType,
              importance=excluded.importance, taskTagsJson=excluded.taskTagsJson, scopeTagsJson=excluded.scopeTagsJson,
              metadataJson=excluded.metadataJson, summariesJson=excluded.summariesJson, embeddingJson=excluded.embeddingJson,
              source=excluded.source, revision=excluded.revision, timestamp=excluded.timestamp,
-             accessCount=excluded.accessCount, lastAccessed=excluded.lastAccessed`,
+             accessCount=excluded.accessCount, lastAccessed=excluded.lastAccessed, kind=excluded.kind,
+             assertion=excluded.assertion, validUntil=excluded.validUntil, canonicalKey=excluded.canonicalKey,
+             supersededBy=excluded.supersededBy`,
         ).run(
           r.record.fragmentId,
           r.record.content,
@@ -313,6 +352,11 @@ export class SqliteCanonicalMemoryStore {
           r.record.timestamp,
           r.record.accessCount,
           r.record.lastAccessed,
+          r.record.kind ?? "note",
+          r.record.assertion ?? "assistant",
+          r.record.validUntil ?? null,
+          r.record.canonicalKey ?? null,
+          r.record.supersededBy ?? null,
         );
         enqueue(r.record.fragmentId, "upsert", revision);
         fragmentId = r.record.fragmentId;
@@ -355,6 +399,18 @@ export class SqliteCanonicalMemoryStore {
             fragmentId,
           );
           enqueue(fragmentId, "upsert", revision);
+        }
+      } else if (r.kind === "mark_superseded") {
+        if (!fragmentId || !r.supersededBy) throw new Error("mark_superseded requires fragmentId+supersededBy");
+        const existing = db
+          .prepare("SELECT revision FROM memory_records WHERE fragmentId = ?")
+          .get(fragmentId) as { revision: number } | undefined;
+        if (existing) {
+          revision = existing.revision + 1;
+          db.prepare(
+            "UPDATE memory_records SET state='superseded', supersededBy=?, revision=? WHERE fragmentId=?",
+          ).run(r.supersededBy, revision, fragmentId);
+          enqueue(fragmentId, "delete", revision);
         }
       }
       db.prepare(

@@ -12,6 +12,7 @@ import {
 } from "@openintj/core";
 import { MemoryRetriever, type RankedMemory } from "./retriever.js";
 import { type MemoryScope, isFragmentVisibleToScope } from "./scope.js";
+import { isCurrentlyValid } from "./validity.js";
 import { ShaderPipeline } from "./shader/pipeline.js";
 import type { MemoryStore } from "./store.js";
 
@@ -47,6 +48,11 @@ export interface BuildContextInput {
   traceId?: string;
   /** RFC-021 F04: verified read scope; invisible memories never enter the prompt. */
   scope?: MemoryScope;
+  /**
+   * F10：本次注入的使用事件 id（run/turn 级）。同一 id 重复 build 不重复记使用；
+   * 不传则不记使用（retrieval 本身永远不算使用）。
+   */
+  usageEventId?: string;
 }
 
 /**
@@ -64,6 +70,8 @@ export class ContextEngine {
   readonly pipeline: ShaderPipeline;
   private readonly hooks?: HookBus;
   private readonly candidateRetrieve?: ContextEngineOpts["candidateRetrieve"];
+  /** F10：已记过使用的 usageEventId 集合（同事件重复 build 幂等）。 */
+  private readonly recordedUsageEvents = new Set<string>();
 
   constructor(opts: ContextEngineOpts) {
     this.store = opts.store;
@@ -97,10 +105,12 @@ export class ContextEngine {
     // The default retriever filters before topK; an injected candidate
     // retriever only gets post-filtering here (defense in depth, and the
     // reason hosts should prefer pre-filtered candidate sources).
-    const ranked: RankedMemory[] =
-      input.scope !== undefined
-        ? unfiltered.filter((r) => isFragmentVisibleToScope(r.fragment, input.scope))
-        : unfiltered;
+    // F08: validity (expired/superseded) is filtered at every entry, same as scope.
+    const ranked: RankedMemory[] = unfiltered.filter(
+      (r) =>
+        isCurrentlyValid(r.fragment) &&
+        (input.scope === undefined || isFragmentVisibleToScope(r.fragment, input.scope)),
+    );
 
     // 2) 着色
     const shaderOpts = input.traceId ? { traceId: input.traceId } : undefined;
@@ -122,12 +132,13 @@ export class ContextEngine {
         (s, m) => s + estimateTokens(typeof m.content === "string" ? m.content : ""),
         0,
       );
-    // 只 patch memoryTokens；conversationTokens 由 caller 通过 patchBudget 管理
-    // （我们再加上本次推断的对话量到累积值，便于自动估算）
+    // 只 patch memoryTokens；conversationTokens 按 F09 改为「当前完整消息集」
+    // 的绝对量，不再逐轮累加同一历史（重复累加会虚报预算压力）。取与既有
+    // 基线（宿主预置/上一轮完整集）的较大值，避免覆盖宿主给的占用基线。
     const prevSnapshot = this.pipeline.budgetTracker.snapshot;
     this.pipeline.patchBudget({
       memoryTokens,
-      conversationTokens: prevSnapshot.conversationTokens + inferredConvTokens,
+      conversationTokens: Math.max(prevSnapshot.conversationTokens, inferredConvTokens),
     });
 
     const budget = this.pipeline.budgetTracker.snapshot;
@@ -144,6 +155,21 @@ export class ContextEngine {
         },
         hookOpts,
       );
+    }
+
+    // F10：真正进入最终 prompt 的片段才记使用；同 usageEventId 幂等。
+    if (input.usageEventId && !this.recordedUsageEvents.has(input.usageEventId)) {
+      this.recordedUsageEvents.add(input.usageEventId);
+      const injectedIds = shadeResult.shaded.map((s) => s.fragmentId);
+      if (injectedIds.length > 0) {
+        this.store.recordUsage(injectedIds);
+        if (this.hooks) {
+          await this.hooks.emit("event.MEMORY_INJECTED", {
+            fragmentIds: injectedIds,
+            usageEventId: input.usageEventId,
+          });
+        }
+      }
     }
 
     return {

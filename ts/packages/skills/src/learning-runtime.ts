@@ -217,6 +217,8 @@ export class SkillLearningRuntime {
   private readonly approved = new Map<string, Skill>();
   /** key(query,taskType) → 本轮命中的技能 id（recordOutcome 时消费）。 */
   private readonly selection = new Map<string, string[]>();
+  /** F10：selectionId → 本轮命中的技能 id（recordOutcomeForSelection 消费，一次性）。 */
+  private readonly selectionsById = new Map<string, { skillIds: string[]; createdAt: number }>();
   private buffer: TrajectorySample[] = [];
   private seq = 0;
 
@@ -259,6 +261,76 @@ export class SkillLearningRuntime {
     if (ids.length === 0) return;
     if (this.selection.size >= this.maxSelMemory) this.selection.clear();
     this.selection.set(this.keyOf(query, taskType), [...ids]);
+  }
+
+  /**
+   * F10 归因：为一次 selection 发行 selectionId，outcome 只按 id 归属，
+   * 不再以 query/taskType 文本作为 outcome 身份（防同 query 串奖）。
+   * 返回 selectionId；ids 为空时返回 undefined。
+   */
+  beginSelection(ids: readonly string[]): string | undefined {
+    if (ids.length === 0) return undefined;
+    this.seq += 1;
+    const selectionId = `sel-${this.seq}-${Math.random().toString(36).slice(2, 8)}`;
+    if (this.selectionsById.size >= this.maxSelMemory) this.selectionsById.clear();
+    this.selectionsById.set(selectionId, { skillIds: [...ids], createdAt: this.clock() });
+    return selectionId;
+  }
+
+  /**
+   * F10：按 selectionId 结算 outcome。
+   * - cancelled/clarify/preview/preflight/unknown/aborted：中性，只记观察。
+   * - failed/timeout：负信号（精确归因后保留）。
+   * - completed 等正向结果：只有 verified=true（独立验证/用户反馈确认）
+   *   才升权并进入蒸馏 buffer；未验证的 completed 只是观察，
+   *   不再自动当作"验证成功经验"（修 E12 的默认 +0.2/+1 串奖）。
+   * 未知/已结算的 selectionId 返回 false（幂等防重复结算）。
+   */
+  recordOutcomeForSelection(
+    selectionId: string,
+    outcome: {
+      status: string;
+      verified?: boolean;
+      query?: string;
+      taskType?: TaskTypeType;
+      finalAnswer?: string;
+      toolsUsed?: readonly string[];
+    },
+  ): boolean {
+    const entry = this.selectionsById.get(selectionId);
+    if (!entry) return false;
+    this.selectionsById.delete(selectionId);
+    if (this.learnMode === "observe") {
+      this.observedOutcomes += 1;
+      return true;
+    }
+    const neutral = new Set(["cancelled", "clarify", "preview", "preflight", "unknown", "aborted"]);
+    if (neutral.has(outcome.status)) {
+      this.observedOutcomes += 1;
+      return true;
+    }
+    if (outcome.status === "failed" || outcome.status === "timeout") {
+      for (const id of entry.skillIds) this.reinforce(id, -0.5);
+      return true;
+    }
+    if (outcome.verified === true) {
+      const signal = skillOutcomeSignal(outcome.status);
+      for (const id of entry.skillIds) this.reinforce(id, signal);
+      if (outcome.status === "completed") {
+        this.buffer.push({
+          query: this.redactor(outcome.query ?? ""),
+          ...(outcome.taskType ? { taskType: outcome.taskType } : {}),
+          finalAnswer: this.redactor(outcome.finalAnswer ?? ""),
+          toolsUsed: [...(outcome.toolsUsed ?? [])],
+          ts: this.clock(),
+        });
+        if (this.buffer.length > this.maxBuffer) this.buffer = this.buffer.slice(-this.maxBuffer);
+      }
+      return true;
+    }
+    // 未验证的正向结果：只记观察（基础阶段关闭自动正向升权）。
+    this.observedOutcomes += 1;
+    return true;
   }
 
   /** 已审批生效的学习技能（供 DbSkillSource 读活跃内存状态）。 */

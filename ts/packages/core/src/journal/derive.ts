@@ -43,11 +43,24 @@ export const deriveHistory = (events: readonly JournalEvent[]): ChatMessage[] =>
   const compacted = [...active].reverse().find((event) => event.type === "session.compacted");
   const coveredTurns = new Set<string>();
   if (compacted?.type === "session.compacted" && order.includes(compacted.upToTurnId)) {
-    for (const turnId of order) {
-      const turn = byTurn.get(turnId) ?? [];
-      if (!turn.some((event) => event.type === "turn.end")) break;
-      coveredTurns.add(turnId);
-      if (turnId === compacted.upToTurnId) break;
+    if (compacted.includedTurnIds && compacted.includedTurnIds.length > 0) {
+      // F09: exact coverage — only turns whose full text entered the summary
+      // input are hidden; the prefix shortcut must not hide uncovered turns.
+      const completed = new Set(
+        order.filter((turnId) =>
+          (byTurn.get(turnId) ?? []).some((event) => event.type === "turn.end"),
+        ),
+      );
+      for (const turnId of compacted.includedTurnIds) {
+        if (completed.has(turnId)) coveredTurns.add(turnId);
+      }
+    } else {
+      for (const turnId of order) {
+        const turn = byTurn.get(turnId) ?? [];
+        if (!turn.some((event) => event.type === "turn.end")) break;
+        coveredTurns.add(turnId);
+        if (turnId === compacted.upToTurnId) break;
+      }
     }
   }
 

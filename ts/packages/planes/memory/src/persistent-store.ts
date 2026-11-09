@@ -120,6 +120,11 @@ const fragmentToCanonicalRecord = (f: MemoryFragment): CanonicalMemoryRecord => 
   timestamp: f.timestamp,
   accessCount: f.accessCount,
   lastAccessed: f.lastAccessed,
+  kind: f.kind,
+  assertion: f.assertion,
+  ...(f.validUntil !== undefined ? { validUntil: f.validUntil } : {}),
+  ...(f.canonicalKey ? { canonicalKey: f.canonicalKey } : {}),
+  ...(f.supersededBy ? { supersededBy: f.supersededBy } : {}),
 });
 
 /**
@@ -139,6 +144,10 @@ const recordInputHash = (r: CanonicalMemoryRecord): string =>
         summaries: r.summaries,
         embedding: r.embedding,
         timestamp: r.timestamp,
+        kind: r.kind,
+        assertion: r.assertion,
+        validUntil: r.validUntil ?? null,
+        canonicalKey: r.canonicalKey ?? null,
       }),
     )
     .digest("hex");
@@ -156,6 +165,11 @@ const canonicalRecordToFragment = (r: CanonicalMemoryRecord): MemoryFragment =>
     timestamp: r.timestamp,
     accessCount: r.accessCount,
     lastAccessed: r.lastAccessed,
+    kind: r.kind,
+    assertion: r.assertion,
+    ...(r.validUntil !== undefined ? { validUntil: r.validUntil } : {}),
+    ...(r.canonicalKey ? { canonicalKey: r.canonicalKey } : {}),
+    ...(r.supersededBy ? { supersededBy: r.supersededBy } : {}),
   });
 
 /**
@@ -531,6 +545,64 @@ export class PersistentMemoryStore extends MemoryStore {
         this.vectorStore.dimension === 0 || this.vectorStore.dimension === this.embedder.dimension,
       ...(this.lastPersistError ? { lastPersistError: this.lastPersistError } : {}),
     };
+  }
+
+  /**
+   * F08 纠正：写入新值并 supersede 旧值（同事务边界内的两次 mutation）。
+   * 旧值即刻在所有召回入口不可见，canonical 中保留 superseded 审计态。
+   */
+  async correctMemory(
+    oldFragmentId: string,
+    newContent: string,
+    opts: AddOptions = {},
+  ): Promise<MemoryFragment> {
+    const replacement = await this.addLongTermAsync(newContent, opts);
+    const old = this.supersedeFragment(oldFragmentId, replacement);
+    if (old && this.canonical) {
+      await this.canonical.applyMutation({
+        writeKey: `supersede:${oldFragmentId}:${replacement.fragmentId}`,
+        inputHash: `${oldFragmentId}->${replacement.fragmentId}`,
+        kind: "mark_superseded",
+        fragmentId: oldFragmentId,
+        supersededBy: replacement.fragmentId,
+      });
+      await this.projectIndex();
+    } else if (old) {
+      this.scheduleDelete(oldFragmentId);
+    }
+    return replacement;
+  }
+
+  /** 按 canonicalKey 纠正全部当前主张（同 scope 内的旧值一并 supersede）。 */
+  async correctByCanonicalKey(
+    canonicalKey: string,
+    newContent: string,
+    opts: AddOptions = {},
+  ): Promise<{ replacement: MemoryFragment; superseded: string[] }> {
+    const olds = this.findByCanonicalKey(canonicalKey);
+    const replacement = await this.addLongTermAsync(newContent, {
+      ...opts,
+      canonicalKey,
+    });
+    const superseded: string[] = [];
+    for (const old of olds) {
+      if (old.fragmentId === replacement.fragmentId) continue;
+      this.supersedeFragment(old.fragmentId, replacement);
+      superseded.push(old.fragmentId);
+      if (this.canonical) {
+        await this.canonical.applyMutation({
+          writeKey: `supersede:${old.fragmentId}:${replacement.fragmentId}`,
+          inputHash: `${old.fragmentId}->${replacement.fragmentId}`,
+          kind: "mark_superseded",
+          fragmentId: old.fragmentId,
+          supersededBy: replacement.fragmentId,
+        });
+      } else {
+        this.scheduleDelete(old.fragmentId);
+      }
+    }
+    if (this.canonical) await this.projectIndex();
+    return { replacement, superseded };
   }
 
   /** F12 P0：forget 一个 fragment = suppression + tombstone，同走 mutation 边界。 */

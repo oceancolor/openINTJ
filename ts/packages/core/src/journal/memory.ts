@@ -72,6 +72,8 @@ export const appendSessionCompacted = (
     coveredTurns: number;
     upToTurnId: string;
     trigger: "pressure" | "overflow" | "command";
+    includedTurnIds?: string[];
+    inputHash?: string;
   },
 ): JournalEvent => {
   return journal.append({
@@ -81,5 +83,7 @@ export const appendSessionCompacted = (
     coveredTurns: input.coveredTurns,
     upToTurnId: input.upToTurnId,
     trigger: input.trigger,
+    ...(input.includedTurnIds ? { includedTurnIds: input.includedTurnIds } : {}),
+    ...(input.inputHash ? { inputHash: input.inputHash } : {}),
   });
 };

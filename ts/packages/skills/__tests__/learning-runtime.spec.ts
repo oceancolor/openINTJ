@@ -72,6 +72,50 @@ describe("SkillLearningRuntime · 止损开关（RFC-021 G0.3）", () => {
   });
 });
 
+describe("SkillLearningRuntime · F10 归因（selectionId + 验证门）", () => {
+  const make = () =>
+    new SkillLearningRuntime({ store: new InMemorySkillStore(), clock: () => 1_000_000 });
+
+  it("未验证 completed 只记观察：不升权、不进 buffer", () => {
+    const rt = make();
+    const id = rt.beginSelection(["s1"])!;
+    expect(rt.recordOutcomeForSelection(id, { status: "completed", query: "q" })).toBe(true);
+    expect(rt.weightFor("s1")).toBe(0);
+    expect(rt.bufferedCount()).toBe(0);
+    expect(rt.observedOutcomes).toBe(1);
+  });
+
+  it("verified completed 才升权 + 进蒸馏 buffer", () => {
+    const rt = make();
+    const id = rt.beginSelection(["s1"])!;
+    rt.recordOutcomeForSelection(id, { status: "completed", verified: true, query: "q" });
+    expect(rt.weightFor("s1")).toBe(1);
+    expect(rt.bufferedCount()).toBe(1);
+  });
+
+  it("failed 精确负信号；cancelled 中性；重复结算幂等拒绝", () => {
+    const rt = make();
+    const a = rt.beginSelection(["s1"])!;
+    rt.recordOutcomeForSelection(a, { status: "failed" });
+    expect(rt.weightFor("s1")).toBe(-0.5);
+    const b = rt.beginSelection(["s1"])!;
+    rt.recordOutcomeForSelection(b, { status: "cancelled" });
+    expect(rt.weightFor("s1")).toBe(-0.5);
+    expect(rt.recordOutcomeForSelection(b, { status: "completed", verified: true })).toBe(false);
+    expect(rt.recordOutcomeForSelection("sel-unknown", { status: "completed" })).toBe(false);
+  });
+
+  it("同 query 两次 selection 不串奖：outcome 只落到对应 id", () => {
+    const rt = make();
+    const first = rt.beginSelection(["winner"])!;
+    const second = rt.beginSelection(["loser"])!;
+    rt.recordOutcomeForSelection(second, { status: "failed" });
+    rt.recordOutcomeForSelection(first, { status: "completed", verified: true });
+    expect(rt.weightFor("winner")).toBe(1);
+    expect(rt.weightFor("loser")).toBe(-0.5);
+  });
+});
+
 describe("SkillLearningRuntime · 加权", () => {
   it("noteSelected + recordOutcome：成功升权、失败降权、写穿 store", () => {
     const store = new InMemorySkillStore();

@@ -101,6 +101,49 @@ describe("Compactor (RFC-012)", () => {
     expect(deriveHistory(journal.list(cid))).toHaveLength(4);
   });
 
+  it("T18 精确覆盖：cap 只容下部分 fold 时只宣称覆盖完整进入输入的轮次", async () => {
+    const journal = createInMemoryJournal();
+    seedTurns(journal, 6);
+    const compactor = createCompactor({ llm: fakeLlm, keepRecentTurns: 2 });
+    // 每轮 block 约 85 字；cap 200 只够前 2 轮完整进入
+    const out = await compactor.compactIfNeeded({
+      journal,
+      conversationId: cid,
+      trigger: "command",
+      maxSummaryInputChars: 200,
+    });
+    expect(out.compacted).toBe(true);
+    expect(out.coveredTurns).toBe(2);
+    expect(out.uncoveredTurns).toBe(2);
+    const compacted = journal.list(cid).find((e) => e.type === "session.compacted");
+    expect(compacted?.type).toBe("session.compacted");
+    if (compacted?.type === "session.compacted") {
+      expect(compacted.includedTurnIds).toEqual(["t1", "t2"]);
+      expect(compacted.inputHash).toBeTruthy();
+      expect(compacted.coveredTurns).toBe(2);
+    }
+    // 未覆盖的 t3/t4 原文必须仍在 history 中（旧实现会错误地一并隐藏）
+    const historyText = out.history.map((m) => m.content).join("\n");
+    expect(historyText).toContain("问题 3");
+    expect(historyText).toContain("问题 4");
+    expect(historyText).not.toContain("问题 1");
+  });
+
+  it("T19 单轮超 cap：不压缩、不写事件、报告 turn_too_large", async () => {
+    const journal = createInMemoryJournal();
+    seedTurns(journal, 6);
+    const compactor = createCompactor({ llm: fakeLlm, keepRecentTurns: 2 });
+    const out = await compactor.compactIfNeeded({
+      journal,
+      conversationId: cid,
+      trigger: "command",
+      maxSummaryInputChars: 40,
+    });
+    expect(out).toMatchObject({ compacted: false, reason: "turn_too_large" });
+    expect(journal.list(cid).some((e) => e.type === "session.compacted")).toBe(false);
+    expect(out.history).toHaveLength(12);
+  });
+
   it("LLM failure is fail-soft and appends nothing", async () => {
     const journal = createInMemoryJournal();
     seedTurns(journal, 6);

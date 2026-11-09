@@ -1,8 +1,10 @@
 import {
   type EmbeddingProvider,
   type HookBus,
+  type MemoryAssertion,
   type MemoryFragment,
   MemoryFragmentSchema,
+  type MemoryKind,
   type MemoryType,
   SimpleEmbedder,
 } from "@openintj/core";
@@ -30,7 +32,19 @@ export interface AddOptions {
   /** 用户自带 embedding；不传则用 store.embedder 生成。 */
   embedding?: readonly number[];
   summaries?: Record<number, string>;
+  // ---- F08 生命周期 ----
+  kind?: MemoryKind;
+  assertion?: MemoryAssertion;
+  validUntil?: number;
+  canonicalKey?: string;
 }
+
+const lifecycleOf = (opts: AddOptions): Record<string, unknown> => ({
+  ...(opts.kind ? { kind: opts.kind } : {}),
+  ...(opts.assertion ? { assertion: opts.assertion } : {}),
+  ...(opts.validUntil !== undefined ? { validUntil: opts.validUntil } : {}),
+  ...(opts.canonicalKey ? { canonicalKey: opts.canonicalKey } : {}),
+});
 
 const blankFragment = (
   content: string,
@@ -46,6 +60,7 @@ const blankFragment = (
     metadata: opts.metadata ?? {},
     summaries: opts.summaries ?? {},
     memoryType,
+    ...lifecycleOf(opts),
   });
 
 export interface MemoryStoreOpts {
@@ -150,6 +165,30 @@ export class MemoryStore {
     this.working.length = 0;
   }
 
+  /**
+   * F10：实际注入 prompt 后才记使用（retrieval 不算使用）。
+   * 返回实际命中的条数；幂等由调用方以 usageEventId 保证。
+   */
+  recordUsage(fragmentIds: readonly string[], nowSec: number = Date.now() / 1000): number {
+    const wanted = new Set(fragmentIds);
+    let recorded = 0;
+    for (const list of [this.shortTerm, this.working, this.longTerm]) {
+      for (const f of list) {
+        if (wanted.has(f.fragmentId)) {
+          f.accessCount += 1;
+          f.lastAccessed = nowSec;
+          recorded++;
+        }
+      }
+    }
+    return recorded;
+  }
+
+  /** F08：按 canonicalKey 查找当前主张（纠正/取代用）。 */
+  findByCanonicalKey(canonicalKey: string): MemoryFragment[] {
+    return this.all.filter((f) => f.canonicalKey === canonicalKey && !f.supersededBy);
+  }
+
   remove(fragmentId: string): boolean {
     for (const list of [this.shortTerm, this.working, this.longTerm]) {
       const idx = list.findIndex((f) => f.fragmentId === fragmentId);
@@ -227,6 +266,7 @@ export class MemoryStore {
       metadata: opts.metadata ?? {},
       summaries: opts.summaries ?? {},
       memoryType,
+      ...lifecycleOf(opts),
     });
   }
 
@@ -248,6 +288,26 @@ export class MemoryStore {
       metadata: opts.metadata ?? {},
       summaries: opts.summaries ?? {},
       memoryType,
+      ...lifecycleOf(opts),
     });
+  }
+
+  /**
+   * F08 纠正：以 replacement 取代 oldFragmentId——旧值标记 supersededBy
+   * 并移出三层（所有召回入口即刻不可见），新值保持 replacement 自身的 tier。
+   * 返回被取代的旧 fragment（不存在时 undefined）。
+   */
+  supersedeFragment(oldFragmentId: string, replacement: MemoryFragment): MemoryFragment | undefined {
+    for (const list of [this.shortTerm, this.working, this.longTerm]) {
+      const idx = list.findIndex((f) => f.fragmentId === oldFragmentId);
+      if (idx >= 0) {
+        const [old] = list.splice(idx, 1);
+        if (!old) return undefined;
+        old.supersededBy = replacement.fragmentId;
+        this.emitWrite(old, "remove");
+        return old;
+      }
+    }
+    return undefined;
   }
 }

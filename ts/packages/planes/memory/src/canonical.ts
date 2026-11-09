@@ -8,7 +8,7 @@ import type { MemoryType } from "@openintj/core";
  * 记录变更 + mutation 收据 + index outbox 在同一事务内提交，禁止内存先变、持久层后补。
  */
 
-export type CanonicalRecordState = "active" | "tombstoned" | "quarantined";
+export type CanonicalRecordState = "active" | "tombstoned" | "quarantined" | "superseded";
 
 export interface CanonicalMemoryRecord {
   fragmentId: string;
@@ -28,9 +28,15 @@ export interface CanonicalMemoryRecord {
   timestamp: number;
   accessCount: number;
   lastAccessed: number;
+  // ---- F08 生命周期 ----
+  kind: string;
+  assertion: string;
+  validUntil?: number;
+  canonicalKey?: string;
+  supersededBy?: string;
 }
 
-export type MutationKind = "upsert" | "delete" | "clear_tier" | "reassign";
+export type MutationKind = "upsert" | "delete" | "clear_tier" | "reassign" | "mark_superseded";
 
 export interface MutationRequest {
   /** 幂等写键：同键同 inputHash 重放返回原收据；同键异 hash 是冲突。 */
@@ -43,6 +49,8 @@ export interface MutationRequest {
   tier?: MemoryType;
   /** reassign 用。 */
   newType?: MemoryType;
+  /** mark_superseded 用：取代者 fragmentId。 */
+  supersededBy?: string;
   /** CAS：期望的当前 revision；不匹配是冲突，零写入。 */
   expectedRevision?: number;
   /** upsert 时的初始状态（迁移隔离用 quarantined）。缺省 active。 */
@@ -230,6 +238,19 @@ export class InMemoryCanonicalMemoryRepository implements CanonicalMemoryReposit
         revision = existing.revision + 1;
         this.records.set(fragmentId, { ...existing, memoryType: req.newType, revision });
         enqueue(fragmentId, "upsert", revision);
+      }
+    } else if (req.kind === "mark_superseded") {
+      if (!fragmentId || !req.supersededBy) throw new Error("mark_superseded requires fragmentId+supersededBy");
+      const existing = this.records.get(fragmentId);
+      if (existing) {
+        revision = existing.revision + 1;
+        this.records.set(fragmentId, {
+          ...existing,
+          state: "superseded",
+          supersededBy: req.supersededBy,
+          revision,
+        });
+        enqueue(fragmentId, "delete", revision);
       }
     }
     const receipt: MutationReceipt = {

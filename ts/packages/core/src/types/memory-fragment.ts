@@ -5,6 +5,21 @@ import { LODLevel, type LODLevelType } from "./shader.js";
 export const MemoryTypeSchema = z.enum(["short_term", "working", "long_term"]);
 export type MemoryType = z.infer<typeof MemoryTypeSchema>;
 
+export const MemoryKindSchema = z.enum([
+  "fact",
+  "preference",
+  "intention",
+  "episode",
+  "state_reference",
+  "procedure",
+  "note",
+]);
+export type MemoryKind = z.infer<typeof MemoryKindSchema>;
+
+/** 断言来源：用户显式断言优先于推断；被引用陈述不等于本人断言（F08）。 */
+export const MemoryAssertionSchema = z.enum(["user", "assistant", "inferred", "quoted", "tool"]);
+export type MemoryAssertion = z.infer<typeof MemoryAssertionSchema>;
+
 export const MemoryFragmentSchema = z.object({
   fragmentId: z.string().default(() => randomUUID()),
   content: z.string().default(""),
@@ -17,6 +32,15 @@ export const MemoryFragmentSchema = z.object({
   lastAccessed: z.number().default(() => Date.now() / 1000),
   metadata: z.record(z.string(), z.unknown()).default({}),
   memoryType: MemoryTypeSchema.default("short_term"),
+  // ---- F08 生命周期（默认值保证旧数据可解析） ----
+  kind: MemoryKindSchema.default("note"),
+  assertion: MemoryAssertionSchema.default("assistant"),
+  /** 有效期（秒 epoch）；到期后在所有召回入口不可见。fact/preference 默认无 TTL。 */
+  validUntil: z.number().optional(),
+  /** 同一主张的规范键；纠正时按 (scope, canonicalKey) supersede 旧值。 */
+  canonicalKey: z.string().optional(),
+  /** 被哪条 fragment 取代；非空即已失效，不可召回。 */
+  supersededBy: z.string().optional(),
 });
 
 export type MemoryFragment = z.infer<typeof MemoryFragmentSchema>;

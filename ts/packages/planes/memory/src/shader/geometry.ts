@@ -28,6 +28,11 @@ export const geometryShader = (
   const halfLife = config.recencyHalfLifeHours;
 
   const filtered = assignments.filter((a) => {
+    // F08：稳定 long_term 不做统一硬时间淘汰——时间只参与排名（vertex 已计
+    // recency 分量），不用 24h 半衰期把旧事实直接剔除。短期/工作记忆保留衰减门。
+    if (a.ranked.fragment.memoryType === "long_term") {
+      return a.ranked.fragment.importance >= config.importanceThreshold;
+    }
     const decayed = decayImportance(a.ranked.fragment, halfLife, now);
     return decayed >= config.importanceThreshold;
   });

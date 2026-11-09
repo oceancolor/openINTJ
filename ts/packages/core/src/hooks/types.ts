@@ -138,6 +138,8 @@ export interface HookEventMap {
    * op=add 新增；op=update 已存在片段元数据变化（如短期溢出晋升为长期）；op=remove 移除。
    */
   "event.MEMORY_WRITTEN": { fragment: MemoryFragment; op: "add" | "update" | "remove" };
+  /** F10：记忆真正注入 prompt 后发出（retrieval 不发）；同 usageEventId 只发一次。 */
+  "event.MEMORY_INJECTED": { fragmentIds: string[]; usageEventId: string };
   "event.CONTEXT_COMPACTED": {
     compactedMessages: number;
     newBudgetUsage: number;

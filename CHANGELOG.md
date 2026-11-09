@@ -8,6 +8,15 @@
 
 ### Changed
 
+- **可靠记忆闭环 G3（RFC-021）**：记忆生命周期与有效性落地——fragment
+  新增 kind/assertion/validUntil/canonicalKey/supersededBy，稳定长期事实
+  不再被 24h 半衰期硬淘汰，过期与被纠正取代的记忆在所有召回入口不可见，
+  纠正经 canonical supersede 事务完成且重启不回潮；压缩改为精确覆盖
+  （只隐藏完整进入摘要输入的轮次，单轮超限不压缩）；反馈归因修正——
+  检索不再算使用（注入才记、按事件幂等），技能 outcome 按 selectionId
+  归属且未验证的 completed 不再自动升权或进蒸馏。实施记录见
+  `docs/rfcs/RFC-021-reliable-memory-loop.md`。
+
 - **RFC-021 G0–G2 复核收口**：修复 canonical 晋升/丢弃 tier 漂移（复核中
   另发现并修复 mutation 输入哈希只覆盖正文、会静默吞掉 tier 变更的真
   bug）；技能学习止损开关 `OPENINTJ_SKILLS_LEARN_MODE=observe` 落地

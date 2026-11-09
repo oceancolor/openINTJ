@@ -28,6 +28,8 @@ const record = (id: string, content: string): CanonicalMemoryRecordRow => ({
   timestamp: Date.now(),
   accessCount: 0,
   lastAccessed: 0,
+  kind: "note",
+  assertion: "assistant",
 });
 
 describe("SqliteCanonicalMemoryStore", () => {

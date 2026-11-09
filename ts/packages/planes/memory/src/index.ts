@@ -10,6 +10,7 @@ export * from "./shader/pipeline.js";
 export * from "./context-engine.js";
 export * from "./persistent-store.js";
 export * from "./canonical.js";
+export * from "./validity.js";
 export * from "./embedding-space.js";
 export * from "./legacy-migration.js";
 export * from "./persistence-factory.js";

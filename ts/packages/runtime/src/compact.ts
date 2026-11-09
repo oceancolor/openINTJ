@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   type ChatMessage,
   type Journal,
@@ -24,8 +25,10 @@ export interface CompactorOpts {
 
 export interface CompactOutcome {
   compacted: boolean;
-  reason?: "too_short" | "below_pressure" | "llm_failed" | "empty_summary";
+  reason?: "too_short" | "below_pressure" | "llm_failed" | "empty_summary" | "turn_too_large";
   coveredTurns?: number;
+  /** F09: fold 轮次中因 cap 未被完整覆盖、仍保留原文的轮数。 */
+  uncoveredTurns?: number;
   /** Post-compaction derived history (unchanged input history when skipped). */
   history: ChatMessage[];
 }
@@ -61,21 +64,18 @@ const textOf = (message: ChatMessage): string =>
     ? message.content
     : message.content.map((part) => (part.type === "text" ? part.text : "")).join("");
 
-const serializeForSummary = (messages: readonly ChatMessage[], cap: number): string => {
-  const lines: string[] = [];
-  let used = 0;
-  for (const message of messages) {
-    const label = ROLE_LABELS[message.role] ?? message.role;
-    const name = message.role === "tool" && message.name ? `(${message.name})` : "";
-    const raw = textOf(message);
-    const content = raw.length > 3_000 ? `${raw.slice(0, 3_000)}…` : raw;
-    const line = `${label}${name}：${content}`;
-    if (used + line.length > cap) break;
-    lines.push(line);
-    used += line.length + 1;
-  }
-  return lines.join("\n");
-};
+/**
+ * F09：按完整 turn 序列化——不截断单条消息、不跨轮截断。
+ * 一个 turn 要么整体进入摘要输入（计入 coverage），要么整体留在原文里。
+ */
+const serializeTurn = (turn: CompletedTurn): string =>
+  turn.messages
+    .map((message) => {
+      const label = ROLE_LABELS[message.role] ?? message.role;
+      const name = message.role === "tool" && message.name ? `(${message.name})` : "";
+      return `${label}${name}：${textOf(message)}`;
+    })
+    .join("\n");
 
 interface CompletedTurn {
   turnId: string;
@@ -176,16 +176,30 @@ export const createCompactor = (opts: CompactorOpts): Compactor => {
         return { compacted: false, reason: "below_pressure", history };
       }
       const fold = turns.slice(0, turns.length - keepRecentTurns);
-      const toSummarize = fold.flatMap((turn) => turn.messages);
+      // F09 精确覆盖：只折叠能完整进入摘要输入的连续前缀；cap 容不下的
+      // 尾部轮次保留原文，绝不宣称覆盖。单轮超 cap 则停在它之前。
+      const cap = capOverride ?? maxSummaryInputChars;
+      const included: CompletedTurn[] = [];
+      const blocks: string[] = [];
+      let used = 0;
+      for (const turn of fold) {
+        const block = serializeTurn(turn);
+        if (used + block.length > cap) break;
+        included.push(turn);
+        blocks.push(block);
+        used += block.length + 1;
+      }
+      if (included.length === 0) {
+        return { compacted: false, reason: "turn_too_large", history };
+      }
+      const summaryInput = blocks.join("\n");
+      const inputHash = createHash("sha256").update(summaryInput, "utf8").digest("hex");
       let summary: string;
       try {
         summary = (
           await (llm ?? opts.llm).chat([
             { role: "system", content: SUMMARY_SYSTEM_PROMPT },
-            {
-              role: "user",
-              content: serializeForSummary(toSummarize, capOverride ?? maxSummaryInputChars),
-            },
+            { role: "user", content: summaryInput },
           ])
         ).trim();
       } catch {
@@ -194,13 +208,16 @@ export const createCompactor = (opts: CompactorOpts): Compactor => {
       if (!summary) return { compacted: false, reason: "empty_summary", history };
       appendSessionCompacted(journal, conversationId, {
         summary,
-        coveredTurns: fold.length,
-        upToTurnId: fold.at(-1)!.turnId,
+        coveredTurns: included.length,
+        upToTurnId: included.at(-1)!.turnId,
         trigger,
+        includedTurnIds: included.map((t) => t.turnId),
+        inputHash,
       });
       return {
         compacted: true,
-        coveredTurns: fold.length,
+        coveredTurns: included.length,
+        uncoveredTurns: fold.length - included.length,
         history: deriveHistory(journal.list(conversationId)),
       };
     },

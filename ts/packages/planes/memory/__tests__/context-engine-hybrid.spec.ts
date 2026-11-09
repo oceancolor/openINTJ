@@ -45,7 +45,7 @@ describe("ContextEngine candidateRetrieve (A1.3)", () => {
     expect(win.memoryFragments.length).toBe(1);
   });
 
-  it("fragmentsToRanked：解析回片段、taskType 命中加成、bump accessCount", () => {
+  it("fragmentsToRanked：解析回片段、taskType 命中加成、检索不记使用（F10）", () => {
     const store = new MemoryStore();
     const tagged = store.addLongTerm("topic A", { taskTags: [TaskType.CODE_GENERATION] });
     const plain = store.addLongTerm("topic B");
@@ -63,7 +63,7 @@ describe("ContextEngine candidateRetrieve (A1.3)", () => {
     // 命中 taskType 的片段 ×1.3
     expect(ranked[0]?.score).toBeCloseTo(1.3, 6);
     expect(ranked[1]?.score).toBe(1);
-    // 命中即 bump
-    expect(tagged.accessCount).toBe(before + 1);
+    // F10：检索不算使用，accessCount 不动（注入时由 ContextEngine 记）
+    expect(tagged.accessCount).toBe(before);
   });
 });

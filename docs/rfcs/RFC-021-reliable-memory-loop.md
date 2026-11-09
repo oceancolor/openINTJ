@@ -2,7 +2,7 @@
 
 设计规格：[`docs/openintj-reliable-memory-design.md`](../openintj-reliable-memory-design.md)（v0.1，2026-11-09）
 设计基线：`main@2326b4b02ad578363fd470317ce733a039c775e0`
-状态：**实施中**（G0/G1/G2 已完成并于 2026-11-09 复核收口，G3 未启动）
+状态：**实施中**（G0/G1/G2 已完成并复核收口，G3 已完成，G4 未启动）
 
 本文件是实施记录，不是设计规格。每个阶段记录：核实结论、实际改动、测试证据、
 未解决问题与门控确认。阶段顺序与门控以设计文档 §7 为准；每阶段结束暂停，
@@ -233,8 +233,81 @@ taskpool 49、profile 6、server 77/11、cli 54/6、desktop typecheck +
 
 ---
 
+## G3 实施明细（2026-11-09）
+
+范围：F08 生命周期与有效性、F09 压缩精确覆盖、F10 反馈归因。验收 T16–T21
+（T18/T19 归 F09、T20/T21 归 F10）。不接真实 writer（G5），不把 completed
+当验证通过。
+
+**F08 语义生命周期（T16/T17）**
+- core `MemoryFragment` 新增生命周期字段（默认值兼容旧数据）：kind
+  （fact/preference/intention/episode/state_reference/procedure/note）、
+  assertion（user/assistant/inferred/quoted/tool）、validUntil、canonicalKey、
+  supersededBy。
+- 新增 `validity.ts`：validity 与 recency 分离；expired/superseded 在
+  Retriever、ContextEngine（候选路径）、fragmentsToRanked 全部入口预过滤，
+  不是只靠 shader 不显示；`isVerifiedAssertion` 区分已验证断言与带标签
+  历史陈述。
+- shader geometry 与 retriever 评分：stable long_term 不再被 24h 半衰期
+  硬淘汰，时间只参与排名；短期/工作记忆保留衰减门（T16a：90 天前的
+  long_term 用户事实仍可召回；T16b：过期 intention 全入口不可见）。
+- 纠正语义：`PersistentMemoryStore.correctMemory` /
+  `correctByCanonicalKey`——新值生效 + 旧值 `mark_superseded` mutation
+  （canonical 保留 superseded 审计态 + 索引删除 job），重启不回潮（T17）。
+- canonical 记录增 kind/assertion/validUntil/canonicalKey/supersededBy
+  五列；SQLite 对 G2 已建库做 PRAGMA 增量列迁移（幂等）。
+
+**F09 压缩精确覆盖（T18/T19）**
+- journal `session.compacted` 新增 `includedTurnIds` + `inputHash`；
+  deriveHistory 优先按精确覆盖集隐藏，未覆盖轮次保留原文（旧前缀假设
+  仅作无 includedTurnIds 的兼容路径）。
+- runtime compactor：按完整 turn 打包（不再单条 3000 字截断、不跨轮
+  截断）；cap 只容部分 fold 时只宣称覆盖完整进入输入的前缀，
+  `uncoveredTurns` 如实报告；单轮超 cap → `turn_too_large` 不压缩（T18/T19）。
+- ContextEngine 预算：conversationTokens 改为当前完整消息集量（与既有
+  基线取大），不再逐轮重复累加同一历史。
+
+**F10 反馈归因（T20/T21）**
+- retrieved ≠ used：Retriever/fragmentsToRanked 不再 bump accessCount；
+  `MemoryStore.recordUsage` 只在真正注入 prompt 后调用，ContextEngine
+  以 `usageEventId`（桌面传 run 级 id）幂等记使用并发出
+  `event.MEMORY_INJECTED`。
+- 技能归因修 E12：新增 `beginSelection → selectionId` 与
+  `recordOutcomeForSelection`——outcome 按 selectionId/runId 归属（同
+  query 不串奖、重复结算幂等拒绝）；cancelled/clarify/preview 等中性；
+  **未验证的 completed 只记观察，不自动升权、不进蒸馏 buffer**；verified
+  才走正向信号。桌面接线已切 selectionId（暂无独立验证器，传
+  verified=false，待验证器接线后开启正向学习）；server/cli 保留
+  recordOutcome 宿主断言路径（显式调用语义不变）。
+
+**验证（2026-11-09 实测）**
+- 新增测试：plane-memory lifecycle.spec 4 例（T16/T17）、runtime compact
+  +2（T18/T19）、skills F10 归因 4 例；既有 2 例 accessCount 旧语义测试
+  按 F10 改写。
+- 结果：core 176、runtime 20、plane-memory 101/3、skills 65、
+  storage-sqlite 37、taskpool 49、plane-execution 65/1、governance 41、
+  profile 6、server 77/11、cli 54/6、desktop typecheck + 109/2 + 生产
+  构建全绿，零基线回归。
+
+**G3 遗留 / 说明**
+- 桌面技能正向学习待独立验证器（工具证据核验或用户反馈信号）接线后
+  以 verified=true 开启；当前行为是 F10 规定的"基础阶段关闭自动正向
+  升权"，不是故障。止损开关 observe 与此叠加生效。
+  **【2026-11-09 用户决策：验证器放 G5 与 writer 一起做】**——G5 范围
+  因此包含：writer 候选接口 + 影子验证 + **技能正向学习的验证器**
+  （verified 信号来源：工具证据核验/用户反馈），在此之前桌面技能只记
+  观察与负信号。
+- assertion/kind 目前由写入方（宿主/AddOptions）标注；自动分类标注
+  属于 writer（G5）职责，本阶段不猜。
+- 第二次压缩的"前摘要+新增轮"继承覆盖（inheritedCoverage）未做：
+  当前 derive 按最近一条 session.compacted 的精确集隐藏，重复压缩的
+  覆盖继承留待 G4 与管理面一并处理。
+
+---
+
 ## 待决策 / 未解决问题
 
+- 技能正向学习的验证器：已决策放 **G5** 与 writer 一起做（2026-11-09）。
 - 止损开关默认值何时翻转 observe（建议 G3 的 F10 归因修好后评估）。
 - CLI/server 持久 journal adapter 的排期（当前决策：桌面优先，两端标注
   `durability=memory`）。

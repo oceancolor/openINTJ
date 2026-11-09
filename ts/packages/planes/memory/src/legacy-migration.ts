@@ -94,6 +94,8 @@ export const migrateLegacyMemory = async (
         timestamp: r.timestamp,
         accessCount: r.accessCount,
         lastAccessed: r.lastAccessed,
+        kind: "note",
+        assertion: "assistant",
       };
       await deps.canonical.applyMutation({
         writeKey: `migration:${r.fragmentId}`,

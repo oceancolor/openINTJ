@@ -11,6 +11,7 @@ import {
 } from "@openintj/core";
 import type { MemoryStore } from "./store.js";
 import { type MemoryScope, isFragmentVisibleToScope } from "./scope.js";
+import { isCurrentlyValid } from "./validity.js";
 
 export interface RetrieveOptions {
   topK?: number;
@@ -84,7 +85,13 @@ export class MemoryRetriever {
       // RFC-021 F04: invisible fragments never enter scoring, never take a
       // topK slot, and never accrue access statistics.
       if (!isFragmentVisibleToScope(fragment, opts.scope)) continue;
-      const decayed = decayImportance(fragment, halfLife, now);
+      // RFC-021 F08: expired/superseded fragments are invisible at every entry.
+      if (!isCurrentlyValid(fragment, now)) continue;
+      // F08: stable long-term facts are not hard-decayed by age; recency only ranks.
+      const decayed =
+        fragment.memoryType === "long_term"
+          ? fragment.importance
+          : decayImportance(fragment, halfLife, now);
       if (decayed < minImportance) continue;
 
       const relevance = cosineSimilarity(qEmb, fragment.embedding);
@@ -117,12 +124,9 @@ export class MemoryRetriever {
 
     scored.sort((a, b) => b.score - a.score);
 
-    const top = scored.slice(0, topK);
-    for (const r of top) {
-      r.fragment.accessCount += 1;
-      r.fragment.lastAccessed = now;
-    }
-    return top;
+    // F10: retrieval is not usage. accessCount/lastAccessed move only when a
+    // fragment is actually injected into a prompt (ContextEngine.recordUsage).
+    return scored.slice(0, topK);
   }
 
   async retrieveAsync(query: string, opts: RetrieveOptions = {}): Promise<RankedMemory[]> {
@@ -143,7 +147,7 @@ export { SimpleEmbedder };
  *
  * - 从 store 按 id 查回完整 MemoryFragment（含 importance/summaries/timestamp，供后续着色/衰减）。
  * - 复用 MemoryRetriever 的 taskType 命中 ×1.3 加成，保持与默认路径行为一致。
- * - 命中片段 bump accessCount / lastAccessed（与默认路径一致，强化「常用更近」）。
+ * - F08/F10：失效片段在此剔除；检索不算使用，不 bump accessCount（注入时才记）。
  * - 命中不到的 id 跳过（容忍 change-feed 与 store 之间的瞬时不一致）。
  */
 export const fragmentsToRanked = (
@@ -157,10 +161,9 @@ export const fragmentsToRanked = (
   for (const s of scored) {
     const fragment = byId.get(s.id);
     if (!fragment) continue;
+    if (!isCurrentlyValid(fragment, now)) continue;
     let score = s.score;
     if (opts.taskType && fragment.taskTags.includes(opts.taskType)) score *= 1.3;
-    fragment.accessCount += 1;
-    fragment.lastAccessed = now;
     out.push({ fragment, score, components: { relevance: s.score, keyword: 0, recency: 0 } });
   }
   return out;

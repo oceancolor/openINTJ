@@ -98,6 +98,10 @@ export const JournalEventSchema = z.discriminatedUnion("type", [
     /** Last covered turn (inclusive); the fold boundary for deriveHistory. */
     upToTurnId: z.string().min(1),
     trigger: z.enum(["pressure", "overflow", "command"]),
+    /** F09: exact set of turns whose full text entered the summarizer input. */
+    includedTurnIds: z.array(z.string()).optional(),
+    /** F09: hash of the exact summarizer input (audit that coverage matches input). */
+    inputHash: z.string().optional(),
   }),
 ]);
 export type JournalEvent = z.infer<typeof JournalEventSchema>;

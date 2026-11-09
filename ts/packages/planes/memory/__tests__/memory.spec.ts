@@ -177,14 +177,15 @@ describe("MemoryRetriever", () => {
     expect(veryOldLong!.components.recency).toBeGreaterThan(veryOldShort!.components.recency);
   });
 
-  it("increments accessCount on retrieved fragments", () => {
+  it("F10：retrieve 不记使用，recordUsage（注入）才记", () => {
     const s = new MemoryStore();
     const f = s.addShortTerm("hit me");
     const r = new MemoryRetriever(s);
     r.retrieve("hit me");
-    expect(f.accessCount).toBe(1);
     r.retrieve("hit me");
-    expect(f.accessCount).toBe(2);
+    expect(f.accessCount).toBe(0);
+    expect(s.recordUsage([f.fragmentId])).toBe(1);
+    expect(f.accessCount).toBe(1);
   });
 });
 
