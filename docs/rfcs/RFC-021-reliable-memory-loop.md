@@ -374,6 +374,34 @@ taskpool 49、profile 6、server 77/11、cli 54/6、desktop typecheck +
 - dormant 包内部撤销仍走 profile service 语义入口，未深入改造其
   internalization-manager 内部状态机（E13 的 dormant 侧）。
 
+**G4 遗留决策（2026-11-10，用户拍板）**
+1. **purge 边界：维持声明制。** `backups: "unsupported"` 保持不变；
+   桌面当前无应用内自动备份机制，副本（手工备份目录、用户导出件）
+   不在应用掌控内。新增约束：**今后任何应用内产生的记忆副本
+   （备份/导出/同步包），创建时必须登记位置**，使 purge 传播有据
+   可循；功能立项时同步实现，不预先建空登记表。
+2. **F14 状态面并入 G5。** memoryStatus 与 G5 的 writer 候选审核面
+   共用一个 IPC 通道与面板（状态面作审核台页眉），不单独先行。
+3. **inheritedCoverage：G5 前先行修复（已完成，见下）。**
+4. **dormant 深方案并入 G5。** dormant 降为 profile ledger 的
+   dormant 层写入方，PersonaConfig 变投影；内化提议并入 G5 候选
+   审核通道（提议→批准流与 writer 候选同构），撤销/恢复统一走
+   G4 ledger 语义。G5 启动时与 writer 候选接口一并设计。
+
+**inheritedCoverage 先行修复（2026-11-10，G5 前）**
+- 背景核实：compactor 每次从原始 journal 事件重折叠全部轮次，
+  当前配置下覆盖集"碰巧"单调递增，derive 只看最后一条 compacted
+  事件才未出故障；该不变量隐含且无强制（改 keepRecentTurns/cap、
+  将来 compactor 不再重序列化已覆盖轮次、或外来 journal 都会让
+  已压缩轮次以原文回潮）。
+- 修复：`core/src/journal/derive.ts` 改为按 seq 顺序遍历全部
+  `session.compacted` 事件、并集覆盖集（F09 精确集与 legacy 前缀
+  路径可混合），只展示最新一条摘要，计数为并集总数。旧 journal
+  无需迁移。
+- 测试：core journal.spec +2（覆盖非单调、legacy/新格式混合），
+  core 178、runtime 20、server 77/11、cli 54/6、desktop
+  typecheck + 109/2 全绿。
+
 ---
 
 ## 待决策 / 未解决问题
@@ -382,8 +410,8 @@ taskpool 49、profile 6、server 77/11、cli 54/6、desktop typecheck +
 - 止损开关默认值何时翻转 observe（建议 G3 的 F10 归因修好后评估）。
 - CLI/server 持久 journal adapter 的排期（当前决策：桌面优先，两端标注
   `durability=memory`）。
-- 物理 purge 的完整度承诺：G4 已交付基础版（本体 + outbox 清除 +
-  barrier 保留，备份/导出副本明确 `unsupported`）；是否要求 purge
-  连带物理清理备份目录，仍待决策。
+- 物理 purge 的完整度承诺：已决策（2026-11-10）维持声明制——
+  canonical 本体 + outbox 清除 + barrier 保留，备份/导出副本明确
+  `unsupported`；未来应用内副本创建时必须登记位置（见 G4 遗留决策 1）。
 - ~~真实用户数据迁移~~ 已于 2026-11-09 经备份 + dry-run 确认后完成
   （16/16 激活，见 G2 门控说明）。

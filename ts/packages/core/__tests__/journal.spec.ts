@@ -121,6 +121,94 @@ describe("Session Journal", () => {
     expect(deriveHistory(journal.list(cid))).toEqual([]);
   });
 
+  it("repeated compaction unions coverage across compacted events (inheritedCoverage)", () => {
+    const journal = createInMemoryJournal();
+    const turn = (turnId: string, user: string, assistant: string): void => {
+      journal.append({ type: "turn.start", conversationId: cid, turnId });
+      journal.append({ type: "user", conversationId: cid, turnId, content: user });
+      journal.append({
+        type: "assistant",
+        conversationId: cid,
+        turnId,
+        content: assistant,
+        messageKind: "answer",
+      });
+      journal.append({ type: "turn.end", conversationId: cid, turnId, status: "completed" });
+    };
+    turn("t1", "u1", "a1");
+    turn("t2", "u2", "a2");
+    turn("t3", "u3", "a3");
+    appendSessionCompacted(journal, cid, {
+      summary: "第一次摘要",
+      coveredTurns: 3,
+      upToTurnId: "t3",
+      trigger: "pressure",
+      includedTurnIds: ["t1", "t2", "t3"],
+    });
+    turn("t4", "u4", "a4");
+    // Second compaction covers only t4 (fold window/cap changed): the union
+    // must keep t1–t3 hidden instead of resurrecting them, and only the
+    // latest summary is shown.
+    appendSessionCompacted(journal, cid, {
+      summary: "第二次摘要",
+      coveredTurns: 1,
+      upToTurnId: "t4",
+      trigger: "pressure",
+      includedTurnIds: ["t4"],
+    });
+    turn("t5", "u5", "a5");
+
+    const history = deriveHistory(journal.list(cid));
+    expect(history).toHaveLength(3);
+    expect(history[0]!.content).toContain("此前 4 轮对话已压缩");
+    expect(history[0]!.content).toContain("第二次摘要");
+    expect(history[0]!.content).not.toContain("第一次摘要");
+    expect(history.slice(1).map((m) => m.content)).toEqual(["u5", "a5"]);
+  });
+
+  it("compaction union mixes legacy prefix events with exact-coverage events", () => {
+    const journal = createInMemoryJournal();
+    const turn = (turnId: string, user: string, assistant: string): void => {
+      journal.append({ type: "turn.start", conversationId: cid, turnId });
+      journal.append({ type: "user", conversationId: cid, turnId, content: user });
+      journal.append({
+        type: "assistant",
+        conversationId: cid,
+        turnId,
+        content: assistant,
+        messageKind: "answer",
+      });
+      journal.append({ type: "turn.end", conversationId: cid, turnId, status: "completed" });
+    };
+    turn("t1", "u1", "a1");
+    turn("t2", "u2", "a2");
+    // Legacy event (pre-F09, no includedTurnIds): prefix coverage up to t2.
+    appendSessionCompacted(journal, cid, {
+      summary: "旧格式摘要",
+      coveredTurns: 2,
+      upToTurnId: "t2",
+      trigger: "command",
+    });
+    turn("t3", "u3", "a3");
+    turn("t4", "u4", "a4");
+    appendSessionCompacted(journal, cid, {
+      summary: "新格式摘要",
+      coveredTurns: 1,
+      upToTurnId: "t4",
+      trigger: "pressure",
+      includedTurnIds: ["t4"],
+    });
+
+    const history = deriveHistory(journal.list(cid));
+    // t1/t2 (legacy prefix) + t4 (exact) hidden; t3 was never covered.
+    expect(history.map((m) => m.content)).toEqual([
+      expect.stringContaining("新格式摘要"),
+      "u3",
+      "a3",
+    ]);
+    expect(history[0]!.content).toContain("此前 3 轮对话已压缩");
+  });
+
   it("session.cleared truncates all projections", () => {
     const journal = createInMemoryJournal();
     journal.append({ type: "turn.start", conversationId: cid, turnId: "t1" });

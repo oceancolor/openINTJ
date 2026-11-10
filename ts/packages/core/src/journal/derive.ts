@@ -20,10 +20,13 @@ const textContent = (value: string): string => value;
  * Model history for the next Tao/ReAct `run()`. Thought / tool.call never leak in.
  * Completed turns → user + assistant. In-progress turns → user + tool observations.
  *
- * RFC-012 compaction: the last `session.compacted` event folds every turn that
- * fully ended before it into a single summary message. Committed events are
- * never rewritten — compaction is purely a projection change, and
- * deriveChatMessages (the UI view) is unaffected.
+ * RFC-012 compaction: `session.compacted` events fold completed turns into a
+ * summary message. Coverage is the UNION of all compacted events in seq order
+ * (G4 inheritedCoverage fix): the latest event's coverage is not guaranteed to
+ * be a superset of earlier ones (fold window / cap changes, foreign journals),
+ * so only the latest summary is displayed while every turn ever covered stays
+ * hidden. Committed events are never rewritten — compaction is purely a
+ * projection change, and deriveChatMessages (the UI view) is unaffected.
  */
 export const deriveHistory = (events: readonly JournalEvent[]): ChatMessage[] => {
   const active = activeJournalEvents(events);
@@ -40,35 +43,37 @@ export const deriveHistory = (events: readonly JournalEvent[]): ChatMessage[] =>
     bucket.push(event);
   }
 
-  const compacted = [...active].reverse().find((event) => event.type === "session.compacted");
+  const completed = new Set(
+    order.filter((turnId) =>
+      (byTurn.get(turnId) ?? []).some((event) => event.type === "turn.end"),
+    ),
+  );
   const coveredTurns = new Set<string>();
-  if (compacted?.type === "session.compacted" && order.includes(compacted.upToTurnId)) {
-    if (compacted.includedTurnIds && compacted.includedTurnIds.length > 0) {
+  let latestSummary: string | undefined;
+  for (const event of active) {
+    if (event.type !== "session.compacted") continue;
+    if (!order.includes(event.upToTurnId)) continue;
+    if (event.includedTurnIds && event.includedTurnIds.length > 0) {
       // F09: exact coverage — only turns whose full text entered the summary
       // input are hidden; the prefix shortcut must not hide uncovered turns.
-      const completed = new Set(
-        order.filter((turnId) =>
-          (byTurn.get(turnId) ?? []).some((event) => event.type === "turn.end"),
-        ),
-      );
-      for (const turnId of compacted.includedTurnIds) {
+      for (const turnId of event.includedTurnIds) {
         if (completed.has(turnId)) coveredTurns.add(turnId);
       }
     } else {
       for (const turnId of order) {
-        const turn = byTurn.get(turnId) ?? [];
-        if (!turn.some((event) => event.type === "turn.end")) break;
+        if (!completed.has(turnId)) break;
         coveredTurns.add(turnId);
-        if (turnId === compacted.upToTurnId) break;
+        if (turnId === event.upToTurnId) break;
       }
     }
+    latestSummary = event.summary;
   }
 
   const history: ChatMessage[] = [];
-  if (compacted?.type === "session.compacted" && coveredTurns.size > 0) {
+  if (latestSummary !== undefined && coveredTurns.size > 0) {
     history.push({
       role: "user",
-      content: `[历史摘要]（此前 ${coveredTurns.size} 轮对话已压缩，细节省略）\n${compacted.summary}`,
+      content: `[历史摘要]（此前 ${coveredTurns.size} 轮对话已压缩，细节省略）\n${latestSummary}`,
     });
   }
   for (const turnId of order) {
