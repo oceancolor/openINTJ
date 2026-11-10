@@ -75,7 +75,7 @@ export class CanonicalCandidateConflictError extends Error {
 export interface CanonicalCandidateOutcomeRecord {
   candidateId: string;
   receiveKey: string;
-  status: "shadow_only" | "rejected" | "conflicted";
+  status: "shadow_only" | "rejected" | "conflicted" | "applied" | "dismissed";
   reasons: string[];
   candidateJson: string;
   updatedAt: number;

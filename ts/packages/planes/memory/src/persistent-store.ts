@@ -19,10 +19,27 @@ import {
   type CanonicalMemoryRepository,
   CandidateConflictError,
   candidateReceiveKeyString,
+  type CandidateOutcomeRecord,
   type CandidateReceiveKey,
 } from "./canonical.js";
 import { type EmbeddingSpace, embeddingSpaceForEmbedder } from "./embedding-space.js";
 import { type AddOptions, MemoryStore, type MemoryStoreConfig } from "./store.js";
+import type { MemoryCandidate } from "./writer.js";
+
+export type CandidateReviewErrorCode =
+  | "candidate_not_found"
+  | "candidate_not_reviewable"
+  | "candidate_revision_conflict"
+  | "canonical_unavailable";
+
+export class CandidateReviewError extends Error {
+  readonly code: CandidateReviewErrorCode;
+  constructor(code: CandidateReviewErrorCode, message: string) {
+    super(message);
+    this.name = "CandidateReviewError";
+    this.code = code;
+  }
+}
 
 export interface PersistentMemoryStoreOpts {
   vectorStore: VectorStore;
@@ -733,6 +750,84 @@ export class PersistentMemoryStore extends MemoryStore {
       outcome: receipt.outcome,
       candidateCount: receipt.candidateCount,
     };
+  }
+
+  /** G5.2 审核台数据源：候选结局列表（无 canonical 时空列表，不伪造）。 */
+  async listMemoryCandidates(opts?: {
+    status?: CandidateOutcomeRecord["status"];
+    limit?: number;
+  }): Promise<CandidateOutcomeRecord[]> {
+    if (!this.canonical) return [];
+    return this.canonical.listCandidateOutcomes(opts);
+  }
+
+  /**
+   * G5.2 人工审核：只有 shadow_only（已校验、未生效）可被审核。
+   * approve 由 **host 代码** 执行 mutation（add/supersede/retract），
+   * writer/模型无权直接生效；supersede/retract 在 apply 时复查目标
+   * revision，漂移则保持 shadow_only 并报冲突。reject 记 dismissed，
+   * 与校验 rejected 区分（人工决定 vs 管线拒绝）。
+   */
+  async reviewMemoryCandidate(
+    candidateId: string,
+    decision: "approve" | "reject",
+    principalId: string,
+  ): Promise<{ candidateId: string; status: "applied" | "dismissed"; fragmentId?: string }> {
+    if (!this.canonical) {
+      throw new CandidateReviewError("canonical_unavailable", "reviewMemoryCandidate requires canonical repository");
+    }
+    const outcome = await this.canonical.candidateOutcome(candidateId);
+    if (!outcome) {
+      throw new CandidateReviewError("candidate_not_found", `candidate ${candidateId} not found`);
+    }
+    if (outcome.status !== "shadow_only") {
+      throw new CandidateReviewError(
+        "candidate_not_reviewable",
+        `candidate ${candidateId} is ${outcome.status}, only shadow_only is reviewable`,
+      );
+    }
+    if (decision === "reject") {
+      await this.canonical.upsertCandidateOutcomes([
+        { ...outcome, status: "dismissed", updatedAt: Date.now() },
+      ]);
+      return { candidateId, status: "dismissed" };
+    }
+
+    const candidate = JSON.parse(outcome.candidateJson) as MemoryCandidate;
+    let fragmentId: string | undefined;
+    if (candidate.operation === "add") {
+      const frag = await this.addLongTermAsync(candidate.content, {
+        kind: candidate.kind,
+        ...(candidate.proposedKey ? { canonicalKey: candidate.proposedKey } : {}),
+        ...(candidate.proposedValidity?.validUntilMs !== undefined
+          ? { validUntil: candidate.proposedValidity.validUntilMs }
+          : {}),
+        metadata: { viaCandidate: candidateId, sourceRefs: [...candidate.sourceRefs] },
+      });
+      fragmentId = frag.fragmentId;
+    } else if (candidate.operation === "supersede" || candidate.operation === "retract") {
+      const target = await this.canonical.getRecord(candidate.targetRecordId ?? "");
+      if (!target || target.revision !== candidate.expectedRevision) {
+        throw new CandidateReviewError(
+          "candidate_revision_conflict",
+          `candidate ${candidateId} target revision drifted; re-propose required`,
+        );
+      }
+      if (candidate.operation === "supersede") {
+        const frag = await this.correctMemory(candidate.targetRecordId!, candidate.content, {
+          kind: candidate.kind,
+          ...(candidate.proposedKey ? { canonicalKey: candidate.proposedKey } : {}),
+        });
+        fragmentId = frag.fragmentId;
+      } else {
+        await this.forgetFragment(candidate.targetRecordId!, principalId, "candidate-retract-approved");
+        fragmentId = candidate.targetRecordId;
+      }
+    }
+    await this.canonical.upsertCandidateOutcomes([
+      { ...outcome, status: "applied", updatedAt: Date.now() },
+    ]);
+    return { candidateId, status: "applied", ...(fragmentId ? { fragmentId } : {}) };
   }
 
   /** 用 fragmentId 显式重新指派 memoryType（短期 → 长期 promotion 时用）。 */

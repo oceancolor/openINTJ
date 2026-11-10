@@ -122,7 +122,8 @@ export const candidateReceiveKeyString = (k: CandidateReceiveKey): string =>
 export interface CandidateOutcomeRecord {
   candidateId: string;
   receiveKey: string;
-  status: "shadow_only" | "rejected" | "conflicted";
+  /** applied/dismissed 为 G5.2 人工审核终态（仅 shadow_only 可被审核）。 */
+  status: "shadow_only" | "rejected" | "conflicted" | "applied" | "dismissed";
   reasons: string[];
   candidateJson: string;
   updatedAt: number;

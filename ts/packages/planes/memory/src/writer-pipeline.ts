@@ -9,9 +9,54 @@ import {
   type CandidateValidation,
   type CandidateValidationContext,
   type MemoryWriter,
+  type RecordSnapshot,
   type WriterInput,
   validateCandidateBatch,
 } from "./writer.js";
+import type { MemoryScope } from "./scope.js";
+
+/**
+ * host 标准校验上下文：以 canonical 当前状态构造（记录快照全集、
+ * user 占位 key、suppression 集合、当前 epoch），证据以本次 input
+ * 的 host 签发 span 解析。G5.2 桌面审核台与后续宿主共用。
+ */
+export const buildCanonicalValidationContext = async (
+  repository: CanonicalMemoryRepository,
+  input: WriterInput,
+  scope: MemoryScope,
+): Promise<CandidateValidationContext> => {
+  const records = await repository.listRecords({ includeInactive: true });
+  const recordsById = new Map<string, RecordSnapshot>(
+    records.map((r) => [
+      r.fragmentId,
+      {
+        fragmentId: r.fragmentId,
+        revision: r.revision,
+        state: r.state,
+        kind: r.kind,
+        assertion: r.assertion,
+        ...(r.canonicalKey ? { canonicalKey: r.canonicalKey } : {}),
+        scopeTags: [...r.scopeTags],
+      },
+    ]),
+  );
+  const userOwnedKeys = new Set(
+    records
+      .filter((r) => r.state === "active" && r.assertion === "user" && r.canonicalKey)
+      .map((r) => r.canonicalKey!),
+  );
+  const suppressions = await repository.listSuppressions();
+  const suppressed = new Set(suppressions.map((s) => s.fragmentId));
+  return {
+    scope,
+    currentEpoch: await repository.memoryEpoch(),
+    allowedKinds: [...input.allowedKinds],
+    resolveEvidence: (id) => input.evidence.find((s) => s.evidenceId === id),
+    recordsById,
+    userOwnedKeys,
+    isSuppressed: (fragmentId) => suppressed.has(fragmentId),
+  };
+};
 
 /**
  * G5.1 / F13 影子管线：committed 轮次 → writer 提名 → G5.0 校验 →
@@ -26,6 +71,8 @@ import {
 export interface WriterShadowJob {
   key: CandidateReceiveKey;
   input: WriterInput;
+  /** host 固定 scope（候选无权决定）；缺省为空 scope（仅用户级可见）。 */
+  scope?: MemoryScope;
 }
 
 export type ShadowDeadLetterReason = "WRITER_FAILED" | "OVER_BUDGET" | "RECEIVE_CONFLICT";
@@ -46,7 +93,7 @@ export interface ShadowWriterPipelineOptions {
   repository: CanonicalMemoryRepository;
   writer: MemoryWriter;
   /** host 按当前 canonical 状态构造校验上下文（证据解析/记录快照/epoch）。 */
-  buildContext: (input: WriterInput) => CandidateValidationContext | Promise<CandidateValidationContext>;
+  buildContext: (input: WriterInput, job: WriterShadowJob) => CandidateValidationContext | Promise<CandidateValidationContext>;
   maxCandidatesPerBatch?: number;
   maxEvidenceChars?: number;
   /** 含首次尝试的总尝试次数（同 extractionRevision 重试）。 */
@@ -128,7 +175,7 @@ export class ShadowWriterPipeline {
       return this.deadLetter({ status: "dead_letter", receiveKey, reason: "OVER_BUDGET", attempts });
     }
 
-    const ctx = await this.opts.buildContext(job.input);
+    const ctx = await this.opts.buildContext(job.input, job);
     const validations = validateCandidateBatch(batch, job.input, ctx);
 
     let receipt: Awaited<ReturnType<CanonicalMemoryRepository["receiveCandidates"]>>;
