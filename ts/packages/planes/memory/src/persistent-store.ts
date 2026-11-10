@@ -172,6 +172,18 @@ const canonicalRecordToFragment = (r: CanonicalMemoryRecord): MemoryFragment =>
     ...(r.supersededBy ? { supersededBy: r.supersededBy } : {}),
   });
 
+/** F12：run 携带的 memory epoch 已落后（期间发生过 forget），授权点必须重建或拒绝。 */
+export class MemoryEpochStaleError extends Error {
+  readonly code = "MEMORY_EPOCH_STALE";
+  constructor(
+    readonly runEpoch: number,
+    readonly currentEpoch: number,
+  ) {
+    super(`memory epoch stale: run=${runEpoch} current=${currentEpoch}; rebuild context before injecting`);
+    this.name = "MemoryEpochStaleError";
+  }
+}
+
 /**
  * PersistentMemoryStore —— 在 MemoryStore 之上叠加双写到 VectorStore + MetadataStore。
  *
@@ -605,16 +617,101 @@ export class PersistentMemoryStore extends MemoryStore {
     return { replacement, superseded };
   }
 
-  /** F12 P0：forget 一个 fragment = suppression + tombstone，同走 mutation 边界。 */
-  async forgetFragment(fragmentId: string, principalId: string, reason: string): Promise<void> {
+  /**
+   * F12 有效遗忘：suppression + tombstone + epoch 递增同事务提交（applyForget），
+   * 内存即刻移除，向量投影由 delete job 清理。返回新 epoch。
+   */
+  async forgetFragment(fragmentId: string, principalId: string, reason: string): Promise<number> {
     if (!this.canonical) throw new Error("forgetFragment requires canonical repository");
-    await this.canonical.addSuppression(fragmentId, principalId, reason);
+    const { epoch } = await this.canonical.applyForget({ fragmentId, principalId, reason });
     this.remove(fragmentId);
     await this.awaitPendingWrites();
+    await this.projectIndex();
+    return epoch;
+  }
+
+  /**
+   * F12 purge（物理删除基础版）：删 canonical 记录本体与未投影 outbox，
+   * 同步清理向量/metadata 投影；suppression barrier（不含正文）保留防回潮。
+   * 备份与已导出副本不在物理删除承诺内，报告中如实标注 unsupported。
+   */
+  async purgeMemory(
+    fragmentId: string,
+    principalId: string,
+  ): Promise<{
+    recordDeleted: boolean;
+    pendingJobsPurged: number;
+    vectorProjectionDeleted: boolean;
+    barrierRetained: boolean;
+    backups: "unsupported";
+  }> {
+    if (!this.canonical) throw new Error("purgeMemory requires canonical repository");
+    await this.canonical.addSuppression(fragmentId, principalId, "purge");
+    const result = await this.canonical.purgeFragment(fragmentId);
+    this.remove(fragmentId);
+    await this.awaitPendingWrites();
+    await this.vectorStore.delete([fragmentId]);
+    await this.metadataStore.deleteFragmentMeta([fragmentId]);
+    return {
+      ...result,
+      vectorProjectionDeleted: true,
+      barrierRetained: await this.canonical.isSuppressed(fragmentId),
+      backups: "unsupported",
+    };
+  }
+
+  /** F12 授权门：run 的 epoch 落后于当前 control epoch 时拒绝用旧上下文注入。 */
+  async assertMemoryEpoch(runEpoch: number | undefined): Promise<void> {
+    if (!this.canonical || runEpoch === undefined) return;
+    const current = await this.canonical.memoryEpoch();
+    if (runEpoch < current) {
+      throw new MemoryEpochStaleError(runEpoch, current);
+    }
   }
 
   async memoryEpoch(): Promise<number> {
     return this.canonical ? this.canonical.memoryEpoch() : 0;
+  }
+
+  /**
+   * F14 记忆状态面：canonical/索引/向量空间/epoch/计数一次读清，
+   * 供宿主状态栏与诊断接口展示（各维度独立，不合并成一个模糊的健康值）。
+   */
+  async memoryStatus(): Promise<{
+    canonicalEnabled: boolean;
+    activeCount: number;
+    tombstonedCount: number;
+    quarantinedCount: number;
+    supersededCount: number;
+    suppressedCount: number;
+    memoryEpoch: number;
+    index: Awaited<ReturnType<PersistentMemoryStore["indexStatus"]>>;
+  }> {
+    const index = await this.indexStatus();
+    if (!this.canonical) {
+      return {
+        canonicalEnabled: false,
+        activeCount: this.totalCount,
+        tombstonedCount: 0,
+        quarantinedCount: 0,
+        supersededCount: 0,
+        suppressedCount: 0,
+        memoryEpoch: 0,
+        index,
+      };
+    }
+    const all = await this.canonical.listRecords({ includeInactive: true });
+    const suppressions = await this.canonical.listSuppressions();
+    return {
+      canonicalEnabled: true,
+      activeCount: all.filter((r) => r.state === "active").length,
+      tombstonedCount: all.filter((r) => r.state === "tombstoned").length,
+      quarantinedCount: all.filter((r) => r.state === "quarantined").length,
+      supersededCount: all.filter((r) => r.state === "superseded").length,
+      suppressedCount: suppressions.length,
+      memoryEpoch: await this.canonical.memoryEpoch(),
+      index,
+    };
   }
 
   /** F06 接收边界：候选批次幂等接收（只存待审）。 */

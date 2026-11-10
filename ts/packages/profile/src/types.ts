@@ -24,6 +24,10 @@ export interface ProfileEntry {
   validUntil?: number;
   createdAt: number;
   updatedAt: number;
+  /** F11 assertion ledger：提交顺序（同 key 多层断言的裁决依据）。 */
+  appliedSeq?: number;
+  /** F11：被撤销时间（epoch ms）；撤销只撤该来源层，不删历史。 */
+  revokedAt?: number;
 }
 
 export interface ProfileEntryInput {

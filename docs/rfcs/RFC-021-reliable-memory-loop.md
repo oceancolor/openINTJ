@@ -2,7 +2,7 @@
 
 设计规格：[`docs/openintj-reliable-memory-design.md`](../openintj-reliable-memory-design.md)（v0.1，2026-11-09）
 设计基线：`main@2326b4b02ad578363fd470317ce733a039c775e0`
-状态：**实施中**（G0/G1/G2 已完成并复核收口，G3 已完成，G4 未启动）
+状态：**实施中**（G0/G1/G2 已完成并复核收口，G3/G4 已完成，G5 未启动）
 
 本文件是实施记录，不是设计规格。每个阶段记录：核实结论、实际改动、测试证据、
 未解决问题与门控确认。阶段顺序与门控以设计文档 §7 为准；每阶段结束暂停，
@@ -305,12 +305,85 @@ taskpool 49、profile 6、server 77/11、cli 54/6、desktop typecheck +
 
 ---
 
+## G4 实施明细（2026-11-09）
+
+范围：F11 Profile/Persona 撤销恢复、F12 有效遗忘传播、F14 记忆状态面。
+验收 T22–T25。口径：重启/旧任务/导入不回潮；purge 只承诺"canonical
+本体 + 未投影 outbox 清除 + 抑制屏障保留"，**不宣称**备份/导出副本或
+已发送上下文已物理清理。
+
+**F11 Profile/Persona assertion ledger（T22/T23）**
+- `ProfileService` 从"单值覆盖"改造成断言账本的投影：user / plugin /
+  dormant（internalized）多层断言并存，`project()` 按 user 层优先、
+  否则应用序（`appliedSeq`）最新胜出，且 revoked/expired/dismissed 的
+  非 user 层不参与投影。
+- 撤销语义：`revokeAssertion` 按来源撤销单层，撤销 user 层后下层
+  （如已学到的 persona）自动复活（T22）；撤销层不会再被旧 upsert
+  覆盖式"复活"——非 user 写入在同 key 有 live user 层时直接拒绝。
+- 防回潮：`dismissInferredKey` 抑制键抑制后续同 key 推断复活（T23）；
+  `removeUserOverride` 默认 `suppress` 模式（移除用户覆盖但保留抑制，
+  下层不自动回潮），`restore` 模式才显式允许回潮。
+- 导出/导入：`exportJSON` 升至 version 2，导出**全部断言层** +
+  dismissed 抑制键，导入 v2 原样恢复账本（T23b：导出导入不回潮）；
+  v1 旧格式仍走 upsert 兼容路径。
+- 桌面 `DesktopAgent` 暴露 `memoryStatus()` 已就绪（见 F14），profile
+  服务本身经既有 RPC 面使用，本阶段未改 dormant 包内部撤销逻辑
+  （dormant 走 profile service 的 `remove`/dismiss 语义入口）。
+
+**F12 有效遗忘传播（T24/T25）**
+- canonical 契约新增 `applyForget({fragmentId, principalId, reason})`：
+  suppression + tombstone + epoch+1 在同一事务提交，返回新 epoch；
+  InMemory 与 SQLite 两实现一致。`PersistentMemoryStore.forgetFragment`
+  改走 applyForget 并同步移除内存投影。
+- epoch 门：`assertMemoryEpoch(runEpoch)` / `MemoryEpochStaleError`；
+  桌面 contextProvider 在 `run.memoryEpoch` 落后时整表重播种
+  `MemoryHybridIndex`（forget 后旧 run 不再读到已遗忘记忆）。
+- purge 基础版：`purgeMemory(fragmentId, principalId)` 先立 "purge"
+  抑制屏障，再 `purgeFragment` 删除 canonical 记录本体与未投影
+  outbox job，清理向量/metadata 投影；抑制屏障**保留**以防旧备份/
+  导入重建同 id。报告明确返回 `backups: "unsupported"`（T25：
+  本体消失、barrier 保留、备份未承诺）。
+- T24（forget 原子性 + epoch 门 + 重启不可见）、T25 在
+  `planes/memory/__tests__/control.spec.ts`，用真实 SQLite 临时库验证。
+
+**F14 记忆状态面**
+- `PersistentMemoryStore.memoryStatus()`：聚合 canonical 状态计数
+  （active/tombstoned/quarantined/superseded）、suppression 计数、
+  memory epoch、indexStatus；无 canonical 的降级部署返回降级形状，
+  不伪造 canonical 健康。
+- 桌面 `DesktopAgent.memoryStatus()` 透传该状态面。**IPC/UI 未接**，
+  留待 UI 工作接线（本阶段只交付数据面，不新增渲染面）。
+
+**验证（2026-11-09 实测）**
+- 新增测试：profile +4（T22 恢复矩阵、T22b、T23、T23b），
+  plane-memory control.spec 2 例（T24/T25）；G2 forget 用例按新
+  epoch 语义更新。
+- 结果：core 176、runtime 20、plane-memory 103/3、skills 65、
+  storage-sqlite 37、taskpool 49、plane-execution 65/1、governance 41、
+  profile 10、server 77/11、cli 54/6、desktop typecheck + 109/2 +
+  生产构建全绿，零基线回归。注：批量回归首轮 core 曾出现 1 次
+  perf 守护阈值抖动失败（hook-bus-bench，机器并发负载下），单跑
+  176 全绿，与 G4 改动无关。
+
+**G4 遗留 / 说明**
+- purge 不覆盖：备份目录、导出 JSON、已发送给 LLM 的上下文副本；
+  报告以 `backups: "unsupported"` 明示，需物理清理备份时另行决策。
+- F14 状态面尚未接 IPC/UI；memoryStatus 仅桌面主进程方法就绪。
+- 第二次压缩 inheritedCoverage 仍未做（G3 遗留延续）：derive 仍按
+  最近一条 compacted 精确集隐藏，留待后续与管理面一并处理。
+- dormant 包内部撤销仍走 profile service 语义入口，未深入改造其
+  internalization-manager 内部状态机（E13 的 dormant 侧）。
+
+---
+
 ## 待决策 / 未解决问题
 
 - 技能正向学习的验证器：已决策放 **G5** 与 writer 一起做（2026-11-09）。
 - 止损开关默认值何时翻转 observe（建议 G3 的 F10 归因修好后评估）。
 - CLI/server 持久 journal adapter 的排期（当前决策：桌面优先，两端标注
   `durability=memory`）。
-- 物理 purge 的完整度承诺（F12/G4 决策，基础版先交付有效撤回 + barrier）。
+- 物理 purge 的完整度承诺：G4 已交付基础版（本体 + outbox 清除 +
+  barrier 保留，备份/导出副本明确 `unsupported`）；是否要求 purge
+  连带物理清理备份目录，仍待决策。
 - ~~真实用户数据迁移~~ 已于 2026-11-09 经备份 + dry-run 确认后完成
   （16/16 激活，见 G2 门控说明）。

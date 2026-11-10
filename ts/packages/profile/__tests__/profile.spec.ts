@@ -4,6 +4,81 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { JsonProfileStore, ProfileService } from "../src/index.js";
 
+describe("ProfileService F11 assertion ledger (T22/T23)", () => {
+  it("T22 恢复矩阵：多层断言撤销逐层回退，过期层不恢复", () => {
+    const profile = new ProfileService();
+    // P1=A（dormant），P2=B（import）→ 最新者 B 胜
+    profile.upsert({ section: "preferences", key: "theme", value: "A", source: "dormant" });
+    const p2 = profile.upsert({ section: "preferences", key: "theme", value: "B", source: "import" })!;
+    // import 层在 dormant 之上需要绕过 user 守卫——两者都非 user，最新 appliedSeq 胜
+    expect(profile.get("preferences", "theme")?.value).toBe("B");
+    // 撤 P2 → 回到 A
+    expect(profile.revokeAssertion(p2.id)).toBe(true);
+    expect(profile.get("preferences", "theme")?.value).toBe("A");
+    // 撤 P1 → 无值
+    const p1 = profile.listAssertions("preferences", "theme").find((e) => e.value === "A")!;
+    profile.revokeAssertion(p1.id);
+    expect(profile.get("preferences", "theme")).toBeUndefined();
+    // 审计层仍在（撤销不删历史）
+    expect(profile.listAssertions("preferences", "theme")).toHaveLength(2);
+  });
+
+  it("T22b 用户层不受 proposal 撤销影响；过期推断不复活", () => {
+    const profile = new ProfileService();
+    profile.upsert({
+      section: "preferences",
+      key: "font",
+      value: "旧推断",
+      source: "dormant",
+      validUntil: Date.now() - 1000,
+    });
+    const proposal = profile.upsert({
+      section: "preferences",
+      key: "font",
+      value: "提案值",
+      source: "import",
+    })!;
+    profile.upsert({ section: "preferences", key: "font", value: "用户值" });
+    expect(profile.get("preferences", "font")?.value).toBe("用户值");
+    profile.revokeAssertion(proposal.id);
+    expect(profile.get("preferences", "font")?.value).toBe("用户值");
+    // 移除用户层（restore 模式）：过期推断不得复活 → 无值
+    profile.removeUserOverride("preferences", "font", { mode: "restore" });
+    expect(profile.get("preferences", "font")).toBeUndefined();
+  });
+
+  it("T23 dismissInferredKey 持久抑制；removeUserOverride 默认防复活", () => {
+    const profile = new ProfileService();
+    profile.importPersona({ preferences: { tea: "绿茶" } });
+    profile.upsert({ section: "preferences", key: "tea", value: "红茶" });
+    // 默认 suppress：撤用户层后推断不回来，且再导入也被抑制
+    profile.removeUserOverride("preferences", "tea");
+    expect(profile.get("preferences", "tea")).toBeUndefined();
+    profile.importPersona({ preferences: { tea: "绿茶" } });
+    expect(profile.get("preferences", "tea")).toBeUndefined();
+    // 用户仍可显式重设
+    profile.upsert({ section: "preferences", key: "tea", value: "乌龙" });
+    expect(profile.get("preferences", "tea")?.value).toBe("乌龙");
+  });
+
+  it("T23b 导出/导入携带撤销与 suppression，导入端不回潮", () => {
+    const profile = new ProfileService();
+    const layer = profile.upsert({
+      section: "preferences",
+      key: "editor",
+      value: "Vim",
+      source: "dormant",
+    })!;
+    profile.revokeAssertion(layer.id);
+    profile.dismissInferredKey("preferences", "editor");
+    const other = new ProfileService();
+    other.importJSON(profile.exportJSON());
+    expect(other.get("preferences", "editor")).toBeUndefined();
+    other.importPersona({ preferences: { editor: "Vim" } });
+    expect(other.get("preferences", "editor")).toBeUndefined();
+  });
+});
+
 describe("ProfileService (RFC-014)", () => {
   it("user entries win over dormant writes for the same key", () => {
     const profile = new ProfileService();

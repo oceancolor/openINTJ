@@ -150,6 +150,16 @@ export interface CanonicalMemoryRepository {
   addSuppression(fragmentId: string, principalId: string, reason: string): Promise<void>;
   isSuppressed(fragmentId: string): Promise<boolean>;
   listSuppressions(): Promise<Array<{ fragmentId: string; principalId: string; reason: string }>>;
+  /**
+   * F12 原子遗忘：suppression + tombstone + epoch 递增在同一事务提交，
+   * 迟到 writer/旧 outbox 不能让被遗忘内容回潮。返回新 epoch。
+   */
+  applyForget(input: { fragmentId: string; principalId: string; reason: string }): Promise<{ epoch: number }>;
+  /**
+   * F12 purge（物理删除基础版）：删记录本体与未投影 outbox payload；
+   * suppression barrier 保留（不含正文）防回潮。备份/导出副本不在此承诺内。
+   */
+  purgeFragment(fragmentId: string): Promise<{ recordDeleted: boolean; pendingJobsPurged: number }>;
 }
 
 /** 测试用内存实现：与 SQLite 实现共享语义（幂等/CAS/outbox 同事务近似）。 */
@@ -347,5 +357,38 @@ export class InMemoryCanonicalMemoryRepository implements CanonicalMemoryReposit
 
   async listSuppressions(): Promise<Array<{ fragmentId: string; principalId: string; reason: string }>> {
     return [...this.suppressions.values()];
+  }
+
+  async applyForget(input: {
+    fragmentId: string;
+    principalId: string;
+    reason: string;
+  }): Promise<{ epoch: number }> {
+    await this.addSuppression(input.fragmentId, input.principalId, input.reason);
+    const existing = this.records.get(input.fragmentId);
+    if (existing) {
+      const revision = existing.revision + 1;
+      this.records.set(input.fragmentId, { ...existing, state: "tombstoned", revision });
+      this.jobs.push({
+        jobId: this.nextJobId++,
+        fragmentId: input.fragmentId,
+        kind: "delete",
+        revision,
+        generation: this.generation,
+        attempts: 0,
+        createdAt: Date.now(),
+      });
+    }
+    this.epoch += 1;
+    return { epoch: this.epoch };
+  }
+
+  async purgeFragment(
+    fragmentId: string,
+  ): Promise<{ recordDeleted: boolean; pendingJobsPurged: number }> {
+    const recordDeleted = this.records.delete(fragmentId);
+    const before = this.jobs.length;
+    this.jobs = this.jobs.filter((j) => j.fragmentId !== fragmentId);
+    return { recordDeleted, pendingJobsPurged: before - this.jobs.length };
   }
 }

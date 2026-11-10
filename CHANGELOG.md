@@ -8,6 +8,16 @@
 
 ### Changed
 
+- **可靠记忆闭环 G4（RFC-021）**：Profile/Persona 改断言账本投影——
+  user/plugin/dormant 多层断言并存、按来源撤销与恢复，撤销用户层后
+  已学到的下层自动复活，抑制键阻止被否定的推断回潮，导出升 v2 全层
+  账本（导入不回潮）；遗忘传播——forget 改 suppression+tombstone+
+  epoch+1 原子事务，run 携带的 epoch 落后时整表重播种 hybrid 索引，
+  purge 基础版删除 canonical 本体与未投影 outbox 并保留抑制屏障
+  （备份/导出副本明确不在承诺内）；记忆状态面 `memoryStatus()` 聚合
+  canonical 状态计数/epoch/索引状态（桌面主进程已就绪，IPC/UI 未接）。
+  实施记录见 `docs/rfcs/RFC-021-reliable-memory-loop.md`。
+
 - **可靠记忆闭环 G3（RFC-021）**：记忆生命周期与有效性落地——fragment
   新增 kind/assertion/validUntil/canonicalKey/supersededBy，稳定长期事实
   不再被 24h 半衰期硬淘汰，过期与被纠正取代的记忆在所有召回入口不可见，

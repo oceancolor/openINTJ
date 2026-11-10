@@ -265,15 +265,16 @@ describe("G2 canonical memory (T10–T15)", () => {
     const first = await makeStore(canonical);
     const f = await first.addLongTermAsync("需要被遗忘的条目");
     const epochBefore = await first.memoryEpoch();
-    await first.forgetFragment(f.fragmentId, "user:local", "user request");
+    const newEpoch = await first.forgetFragment(f.fragmentId, "user:local", "user request");
+    expect(newEpoch).toBe(epochBefore + 1);
     await first.close();
 
     const second = await makeStore(canonical);
     expect(second.all.map((x) => x.content)).not.toContain("需要被遗忘的条目");
-    expect(await second.memoryEpoch()).toBe(epochBefore);
+    expect(await second.memoryEpoch()).toBe(epochBefore + 1);
     expect(await canonical.isSuppressed(f.fragmentId)).toBe(true);
     const bumped = await canonical.bumpMemoryEpoch();
-    expect(bumped).toBe(epochBefore + 1);
+    expect(bumped).toBe(epochBefore + 2);
     await second.close();
   });
 });

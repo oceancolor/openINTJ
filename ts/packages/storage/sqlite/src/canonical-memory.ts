@@ -570,4 +570,55 @@ export class SqliteCanonicalMemoryStore {
       reason: string;
     }>;
   }
+
+  async applyForget(input: {
+    fragmentId: string;
+    principalId: string;
+    reason: string;
+  }): Promise<{ epoch: number }> {
+    const db = this.requireDb();
+    const tx = db.transaction((arg: unknown) => {
+      const { fragmentId, principalId, reason } = arg as {
+        fragmentId: string;
+        principalId: string;
+        reason: string;
+      };
+      const now = Date.now();
+      db.prepare(
+        "INSERT INTO memory_suppressions (fragmentId, principalId, reason, createdAt) VALUES (?, ?, ?, ?) ON CONFLICT(fragmentId) DO UPDATE SET principalId=excluded.principalId, reason=excluded.reason",
+      ).run(fragmentId, principalId, reason, now);
+      const existing = db
+        .prepare("SELECT revision FROM memory_records WHERE fragmentId = ?")
+        .get(fragmentId) as { revision: number } | undefined;
+      if (existing) {
+        const revision = existing.revision + 1;
+        db.prepare("UPDATE memory_records SET state='tombstoned', revision=? WHERE fragmentId=?").run(
+          revision,
+          fragmentId,
+        );
+        db.prepare(
+          "INSERT INTO memory_index_outbox (fragmentId, kind, revision, generation, createdAt) VALUES (?, 'delete', ?, ?, ?)",
+        ).run(fragmentId, revision, this.currentGeneration(db), now);
+      }
+      db.prepare("UPDATE memory_control SET epoch = epoch + 1, updatedAt = ? WHERE id = 1").run(now);
+      const row = db.prepare("SELECT epoch FROM memory_control WHERE id = 1").get() as { epoch: number };
+      return { epoch: row.epoch };
+    });
+    return tx(input);
+  }
+
+  async purgeFragment(
+    fragmentId: string,
+  ): Promise<{ recordDeleted: boolean; pendingJobsPurged: number }> {
+    const db = this.requireDb();
+    const tx = db.transaction((arg: unknown) => {
+      const id = arg as string;
+      const jobs = db
+        .prepare("DELETE FROM memory_index_outbox WHERE fragmentId = ? AND appliedAt IS NULL")
+        .run(id);
+      const record = db.prepare("DELETE FROM memory_records WHERE fragmentId = ?").run(id);
+      return { recordDeleted: record.changes > 0, pendingJobsPurged: jobs.changes };
+    });
+    return tx(fragmentId);
+  }
 }

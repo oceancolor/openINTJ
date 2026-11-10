@@ -517,6 +517,8 @@ export interface DesktopAgent {
   subagents: SubagentSpawner;
   handleFor(conversationId: string, journal?: Journal): AgentHandle;
   run(query: string, opts?: DesktopRunOptions): Promise<InputStructuredTaoResult>;
+  /** F14: canonical memory status surface (async; canonical/index/vector/epoch). */
+  memoryStatus(): Promise<Awaited<ReturnType<PersistentMemoryStore["memoryStatus"]>>>;
   status(): {
     llm: ReturnType<LlmClient["getStatus"]> & { runtime?: ModelRuntimeStatus["llm"] };
     embed?: ModelRuntimeStatus["embed"];
@@ -736,6 +738,8 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
   const hybridIndex = new MemoryHybridIndex();
   hybridIndex.seed(persistentStore.all);
   hybridIndex.subscribe(hooks);
+  // F12：hybrid 索引最后对齐的 memory epoch；forget 后 epoch 变化触发重播种。
+  let hybridEpochSeen = -1;
 
   const control = new ControlPlane();
   // A1.3 opt-in：OPENINTJ_LOOP_HYBRID=1 时主循环检索改走 session 级增量 HybridRetriever。
@@ -1012,6 +1016,15 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     // 每轮注入：①已批准的钝化记忆 persona ②命中的技能包 ③检索到的 [记忆参考]。
     // personaEnabled 是 A/B 杠杆：关闭即得到无 persona 基线（RFC-003 §3.6 #3）。
     contextProvider: async ({ query, history, taskType, topK, traceId, planAdviceBlock, run }) => {
+      // F12 授权门：run 的 memoryEpoch 落后（期间发生 forget）→ 先失效派生
+      // 缓存（hybrid 索引全量重播种），再基于当前权威状态构建上下文。
+      if (run) {
+        const epochNow = await persistentStore.memoryEpoch();
+        if (run.memoryEpoch < epochNow && epochNow !== hybridEpochSeen) {
+          hybridEpochSeen = epochNow;
+          hybridIndex.seed(persistentStore.all);
+        }
+      }
       const prefix = await prompt.render({
         query,
         history,
@@ -1163,6 +1176,9 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       });
       handles.set(conversationId, created);
       return created;
+    },
+    async memoryStatus() {
+      return persistentStore.memoryStatus();
     },
     async run(query: string, runOpts: DesktopRunOptions = {}) {
       const conversationId = runOpts.journal?.conversationId ?? "desktop";
