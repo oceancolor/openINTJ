@@ -1137,6 +1137,11 @@ export const IPC = {
   STATUS: "openintj:status",
   CHAT: "openintj:chat",
   MEMORY_QUERY: "openintj:memory.query",
+  // G5.2 记忆审核台：状态面 + 影子候选审核（approve 由 host 执行 mutation）
+  MEMORY_STATUS: "openintj:memory.status",
+  MEMORY_CANDIDATES: "openintj:memory.candidates",
+  MEMORY_CANDIDATE_APPROVE: "openintj:memory.candidate.approve",
+  MEMORY_CANDIDATE_REJECT: "openintj:memory.candidate.reject",
   AUDIT_RECENT: "openintj:audit.recent",
   // RFC-003 ?? 3?Dormant Memory Learning
   DORMANT_MINE: "openintj:dormant.mine",
@@ -1153,6 +1158,8 @@ export const IPC = {
   SKILLS_REVOKE: "openintj:skills.revoke",
   SKILLS_ACTIVE: "openintj:skills.active",
   SKILLS_CATALOG: "openintj:skills.catalog",
+  // G5.3 技能验证器：用户对最近一轮回答的反馈（事后追认/否决）
+  SKILLS_FEEDBACK: "openintj:skills.feedback",
   // #6 ????
   UPDATE_CHECK: "openintj:update.check",
   UPDATE_INSTALL: "openintj:update.install",

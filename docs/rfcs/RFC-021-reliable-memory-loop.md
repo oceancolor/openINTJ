@@ -502,6 +502,90 @@ canonical 契约扩展候选结局存储（InMemory + SQLite 两实现，
   快照 records/suppression/user keys）届时一并提供。
 - 通用/Hy writer 的同协议对照（T27 后半）归 G5.4。
 
+### G5.2 实施明细（2026-11-10 完成）
+
+范围：审核台（W4）+ 桌面宿主触发接线。兑现 G4 遗留决策 2
+（F14 状态面与审核面共用 IPC 通道，状态面作页眉）。
+
+- **store 审核 API**（plane-memory，`PersistentMemoryStore`）：
+  `listMemoryCandidates`（无 canonical 返回空列表不伪造）+
+  `reviewMemoryCandidate(candidateId, approve|reject, principalId)`。
+  只有 `shadow_only` 可审核；approve 由 host 代码执行 mutation——
+  add → `addLongTermAsync`（带 kind/canonicalKey/validUntil 与
+  viaCandidate 来源 metadata），supersede → apply 时复查目标
+  revision 后 `correctMemory`（漂移报 `candidate_revision_conflict`
+  且保持 shadow_only），retract → `forgetFragment`（走 G4 有效
+  遗忘），noop 直接转 applied。reject 记新终态 `dismissed`（与
+  校验 rejected 区分）。结局状态联合扩展 applied/dismissed
+  （canonical 契约 + SQLite 本地类型同步）。
+- **管线小改**：`WriterShadowJob` 加 host 固定 `scope`；
+  `buildContext(input, job)`；新增标准上下文构造
+  `buildCanonicalValidationContext`（canonical 全量快照 + user
+  占位 key + suppression + 当前 epoch）。
+- **桌面接线**：canonical 启用且 `OPENINTJ_MEMORY_WRITER != off`
+  时装配影子管线（fixture writer）；每次 `rememberTurn` 落盘后以
+  用户原文为证据 fire-and-forget 入队（commitId 为内容哈希，
+  同文重放幂等），失败只 warn 不影响回答。新增 IPC 四通道
+  （memory.status / memory.candidates / memory.candidate.approve /
+  memory.candidate.reject）+ preload 四方法 + DesktopAgent 三方法。
+- **审核台 UI**：`MemoryPanel` 顶部加状态面页眉（canonical 启用
+  态、各状态计数、epoch、索引待投影/失败/代次），中部待审候选
+  区（kind/operation/证据数/正文/理由 + 通过并写入/驳回），已决
+  候选只读展示状态与原因；原语义检索保留在下方。
+- **验收**：新增 `review.spec.ts` 5 例（真实 SQLite：approve add
+  生效/重复审核被拒、reject 零落盘、supersede 生效 + revision
+  漂移冲突、retract 走有效遗忘 epoch+1、无 canonical 降级）。
+  结果：plane-memory 127/3、storage-sqlite 37、server 77/11、
+  desktop typecheck + 109/2 + 生产构建全绿，零基线回归。
+
+**G5.2 遗留 / 说明**
+- 影子触发只覆盖 `rememberTurn` 路径（主对话/生图后处理）；证据
+  span 只含用户原文（助手文本不作证据，防助手回声自证——与 §10
+  "助手回声"样本口径一致）。
+- 审核 apply 的 add 路径 assertion 默认 assistant 层：候选证据
+  虽来自用户原文，但经 writer 转述后不直接标 user 断言；用户在
+  审核台点"通过"即人工背书，来源记在 metadata.viaCandidate。
+- 审核台为桌面单端；server/cli 无候选审核面（两端本就无持久
+  canonical 桌面式部署）。
+
+### G5.3 实施明细（2026-11-10 完成）
+
+范围：技能正向学习验证器（W3），兑现 G3 决策（与 writer 同批做）
+与 G5 启动决策（工具证据为主 + 用户反馈可覆盖）。
+
+- **验证器**（skills 新增 `src/verifier.ts`，纯函数）：`verifySkillOutcome
+  (status, toolOutcomes, feedback?)`。规则：用户负反馈一票否决 →
+  非 completed 不验证 → 任一 business=failure 在场不验证 → 存在
+  business=success + evidence=verified 的工具证据则 verified
+  （tool_evidence）→ 否则用户正反馈可独立构成 verified
+  （user_feedback）→ 其余未验证。原因码稳定可诊断。
+- **反馈追认**（learning-runtime）：结算时把 selection 保留进有界
+  `settledById`；`recordFeedbackForSelection(selectionId, sentiment)`
+  一次性消费——positive 把"未验证 completed"补升为 verified 同
+  路径（升权 + 蒸馏 buffer），negative 记一次 -0.5（与已生效正向
+  相抵）；observe 模式只记观察。重复/未知反馈返回 false。
+- **桌面接线**：结算点从 trajectory 提取 ToolCallResult 三轴喂
+  验证器，`verified` 不再恒 false（更新 G3 遗留注释）；新增
+  conversationId → 最近已结算 selectionId 的有界映射与
+  `recordSkillFeedback` agent 方法；IPC `skills.feedback` +
+  preload；ChatPanel 在最近一条助手消息下提供「有帮助/没帮助」
+  反馈（App 以 activeConversationId 绑定）。
+- **验收**：skills 新增 `verifier.spec.ts` 7 例（证据门四分支、
+  失败否决、反馈独立构成/一票否决、事后追认补升权 + 一次性、
+  负反馈相抵、observe 只记观察）。结果：skills 72、desktop
+  typecheck + 109/2 + 生产构建、cli 54/6 全绿；server 首轮
+  rate-limited-llm 计时 flake 1 例，重跑 77/11 全绿（与本批改动
+  无关）。零基线回归。
+
+**G5.3 遗留 / 说明**
+- 反馈锚定"会话最近一次已结算 selection"：同会话连续两轮后只
+  能反馈最后一轮（UI 也只在最后一条助手消息下出现）——按轮精确
+  反馈需 runId/turnId 贯通到渲染消息，留待需要时再做。
+- 证据门对纯提示类技能（无工具调用）只能靠用户正反馈构成
+  verified，这是"证据为主"决策的预期结果，不是缺陷。
+- 负反馈与已蒸馏样本的关系：权重可相抵，已进 buffer 的样本不
+  回滚删除（蒸馏提案仍有人工审批兜底）。
+
 ---
 
 ## 待决策 / 未解决问题

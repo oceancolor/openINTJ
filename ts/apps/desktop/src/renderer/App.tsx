@@ -592,6 +592,16 @@ export const App = (): JSX.Element => {
                   setSelectedWorkspacePath(path);
                   setRightTab("preview");
                 }}
+                onSkillFeedback={
+                  activeConversationId
+                    ? (sentiment) => {
+                        void window.openintj.skillsFeedback({
+                          conversationId: activeConversationId,
+                          sentiment,
+                        });
+                      }
+                    : undefined
+                }
               />
             ) : rightTab === "tasks" ? (
               <TaskSidebar

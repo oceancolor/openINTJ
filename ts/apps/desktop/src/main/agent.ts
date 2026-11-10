@@ -93,14 +93,20 @@ import {
   riskAtLeast,
 } from "@openintj/plane-governance";
 import {
+  type CandidateOutcomeRecord,
   ContextEngine,
   MemoryPlane,
   type PersistenceMode,
   type PersistentMemoryStore,
+  ShadowWriterPipeline,
+  buildCanonicalValidationContext,
+  createFixtureWriter,
   createPersistentMemoryStore,
   fragmentsToRanked,
+  hashEvidenceText,
   isFragmentVisibleToScope,
   type MemoryScope,
+  type WriterInput,
   scopeFromContextTags,
 } from "@openintj/plane-memory";
 import { InMemoryProfileStore, JsonProfileStore, ProfileService } from "@openintj/profile";
@@ -147,6 +153,7 @@ import {
   assembleSkillContext,
   createLlmSkillDistiller,
   resolveSkillWeightHalfLifeSec,
+  verifySkillOutcome,
 } from "@openintj/skills";
 import {
   SqliteTaskStore,
@@ -519,6 +526,20 @@ export interface DesktopAgent {
   run(query: string, opts?: DesktopRunOptions): Promise<InputStructuredTaoResult>;
   /** F14: canonical memory status surface (async; canonical/index/vector/epoch). */
   memoryStatus(): Promise<Awaited<ReturnType<PersistentMemoryStore["memoryStatus"]>>>;
+  /** G5.2: shadow writer candidate outcomes for the review console. */
+  memoryCandidates(): Promise<CandidateOutcomeRecord[]>;
+  /** G5.2: host-applied candidate review (approve executes the mutation). */
+  approveMemoryCandidate(
+    candidateId: string,
+  ): Promise<{ candidateId: string; status: string; fragmentId?: string } | { error: string }>;
+  rejectMemoryCandidate(
+    candidateId: string,
+  ): Promise<{ candidateId: string; status: string; fragmentId?: string } | { error: string }>;
+  /** G5.3：对该会话最近一次技能 selection 的用户反馈（事后追认/一票否决）。 */
+  recordSkillFeedback(
+    conversationId: string,
+    sentiment: "positive" | "negative",
+  ): Promise<{ applied: boolean } | { error: string }>;
   status(): {
     llm: ReturnType<LlmClient["getStatus"]> & { runtime?: ModelRuntimeStatus["llm"] };
     embed?: ModelRuntimeStatus["embed"];
@@ -732,6 +753,61 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     } catch (error) {
       console.warn("[OpenINTJ desktop] memory persist failed; continuing without it", error);
     }
+    // G5.2：影子 writer 提名（只落 shadow_only 待审，零行为影响）。
+    enqueueShadowTurn(userText, tags);
+  };
+
+  // G5.1/G5.2 影子 writer 管线：fixture writer 仅认显式标记（记住：/我偏好），
+  // 候选经校验后只以 shadow_only 落盘，永不自动生效；审核台 approve 才由
+  // host 执行 mutation。OPENINTJ_MEMORY_WRITER=off 关闭整条影子链。
+  const shadowPipeline =
+    persistentStore.canonical && process.env["OPENINTJ_MEMORY_WRITER"] !== "off"
+      ? new ShadowWriterPipeline({
+          repository: persistentStore.canonical,
+          writer: createFixtureWriter(),
+          buildContext: (input, job) =>
+            buildCanonicalValidationContext(persistentStore.canonical!, input, job.scope ?? {}),
+        })
+      : undefined;
+  const enqueueShadowTurn = (userText: string, tags: readonly string[]): void => {
+    if (!shadowPipeline || !persistentStore.canonical) return;
+    void (async () => {
+      try {
+        const commitId = `turn:${hashEvidenceText(`${userText}\n${tags.join(",")}`).slice(0, 24)}`;
+        const input: WriterInput = {
+          committedTurnRef: commitId,
+          evidence: [
+            {
+              evidenceId: `ev:${commitId}`,
+              journalId: "desktop",
+              commitId,
+              turnId: commitId,
+              contentHash: hashEvidenceText(userText),
+              text: userText,
+            },
+          ],
+          scopedCurrentRecords: [],
+          allowedKinds: ["fact", "preference"],
+          policyVersion: "g5-fixture-v1",
+          inputHash: hashEvidenceText(userText),
+          memoryEpoch: await persistentStore.canonical!.memoryEpoch(),
+          extractionRevision: 1,
+        };
+        await shadowPipeline.enqueue({
+          key: {
+            sourceJournalId: "desktop",
+            sourceCommitId: commitId,
+            consumer: "memory-writer",
+            policyVersion: "g5-fixture-v1",
+            extractionRevision: 1,
+          },
+          input,
+          scope: scopeFromContextTags(tags),
+        });
+      } catch (error) {
+        console.warn("[OpenINTJ desktop] shadow writer enqueue failed; continuing", error);
+      }
+    })();
   };
 
   // session 级共享 HybridRetriever：开局 seed + 订阅 change-feed 增量维护。
@@ -853,6 +929,8 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
   let skillLearning: SkillLearningRuntime | undefined;
   // F10：runId → 本轮技能 selectionId（onSelected 时登记，outcome 时按 id 结算，不再按 query 文本归因）。
   const skillSelectionByRun = new Map<string, string>();
+  // G5.3：conversationId → 最近一次已结算的 selectionId（用户反馈按会话事后追认）。
+  const lastSelectionByConversation = new Map<string, string>();
   if (enableSkillLearning) {
     const skillStore: SkillStore =
       persistence.mode === "real" && persistence.dataDir
@@ -1180,6 +1258,29 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     async memoryStatus() {
       return persistentStore.memoryStatus();
     },
+    async memoryCandidates() {
+      return persistentStore.listMemoryCandidates({ limit: 100 });
+    },
+    async approveMemoryCandidate(candidateId: string) {
+      try {
+        return await persistentStore.reviewMemoryCandidate(candidateId, "approve", "desktop-user");
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    async rejectMemoryCandidate(candidateId: string) {
+      try {
+        return await persistentStore.reviewMemoryCandidate(candidateId, "reject", "desktop-user");
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    async recordSkillFeedback(conversationId: string, sentiment: "positive" | "negative") {
+      if (!skillLearning) return { error: "skills_not_enabled" };
+      const selectionId = lastSelectionByConversation.get(conversationId);
+      if (!selectionId) return { applied: false };
+      return { applied: skillLearning.recordFeedbackForSelection(selectionId, sentiment) };
+    },
     async run(query: string, runOpts: DesktopRunOptions = {}) {
       const conversationId = runOpts.journal?.conversationId ?? "desktop";
       const sink = runOpts.journal?.sink;
@@ -1456,8 +1557,26 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
               .filter((n): n is string => Boolean(n)),
           ),
         ];
-        // F10：按 selectionId 结算。桌面暂无独立验证器，verified=false——
-        // completed 只记观察，不自动升权/进蒸馏（接验证器后在此传 verified）。
+        // F10+G5.3：按 selectionId 结算；verified 由验证器判定——
+        // 工具证据为主（business=success + evidence=verified 且无 business
+        // 失败），未达标只记观察；用户反馈经 recordSkillFeedback 事后追认。
+        const toolOutcomes = result.trajectory
+          .map(
+            (e) =>
+              (
+                e as {
+                  state?: {
+                    toolResult?: {
+                      toolName?: string;
+                      businessStatus?: "success" | "failure" | "unknown";
+                      evidenceStatus?: "none" | "observed" | "verified";
+                    };
+                  };
+                }
+              ).state?.toolResult,
+          )
+          .filter((t): t is NonNullable<typeof t> => Boolean(t));
+        const verification = verifySkillOutcome({ status: result.status, toolOutcomes });
         const runKey = activeRunStorage.getStore()?.runId ?? "__last";
         const selectionId = skillSelectionByRun.get(runKey) ?? skillSelectionByRun.get("__last");
         if (selectionId) {
@@ -1465,12 +1584,17 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
           skillSelectionByRun.delete("__last");
           skillLearning.recordOutcomeForSelection(selectionId, {
             status: result.status,
-            verified: false,
+            verified: verification.verified,
             query,
             ...(cls?.label ? { taskType: cls.label } : {}),
             finalAnswer: result.finalAnswer,
             toolsUsed,
           });
+          if (lastSelectionByConversation.size >= 200) {
+            const oldest = lastSelectionByConversation.keys().next().value;
+            if (oldest) lastSelectionByConversation.delete(oldest);
+          }
+          lastSelectionByConversation.set(conversationId, selectionId);
         } else {
           skillLearning.recordOutcome(query, cls?.label, result.status, {
             finalAnswer: result.finalAnswer,

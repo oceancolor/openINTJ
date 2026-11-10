@@ -871,6 +871,31 @@ export const registerIpcHandlers = (
     }));
   });
 
+  // ---------- G5.2 记忆审核台（F14 状态面 + 影子候选审核） ----------
+  api.handle(IPC.MEMORY_STATUS, async () => agent.memoryStatus());
+
+  api.handle(IPC.MEMORY_CANDIDATES, async () => agent.memoryCandidates());
+
+  const candidateDecision = async (
+    raw: unknown,
+    decide: (candidateId: string) => Promise<{ candidateId: string; status: string; fragmentId?: string } | { error: string }>,
+  ): Promise<{ candidateId: string; status: string; fragmentId?: string } | { error: string }> => {
+    const candidateId =
+      typeof raw === "object" && raw !== null ? (raw as { candidateId?: unknown }).candidateId : undefined;
+    if (typeof candidateId !== "string" || candidateId.length === 0) {
+      return { error: "invalid_request" };
+    }
+    return decide(candidateId);
+  };
+
+  api.handle(IPC.MEMORY_CANDIDATE_APPROVE, async (_evt, raw: unknown) =>
+    candidateDecision(raw, (id) => agent.approveMemoryCandidate(id)),
+  );
+
+  api.handle(IPC.MEMORY_CANDIDATE_REJECT, async (_evt, raw: unknown) =>
+    candidateDecision(raw, (id) => agent.rejectMemoryCandidate(id)),
+  );
+
   api.handle(IPC.AUDIT_RECENT, async (_evt, rawLimit: unknown) => {
     const limit =
       typeof rawLimit === "number" && Number.isFinite(rawLimit)
@@ -1104,6 +1129,21 @@ export const registerIpcHandlers = (
     evidence: p.evidence,
   });
 
+  api.handle(IPC.SKILLS_FEEDBACK, async (_evt, raw: unknown) => {
+    const body = (typeof raw === "object" && raw !== null ? raw : {}) as {
+      conversationId?: unknown;
+      sentiment?: unknown;
+    };
+    if (
+      typeof body.conversationId !== "string" ||
+      body.conversationId.length === 0 ||
+      (body.sentiment !== "positive" && body.sentiment !== "negative")
+    ) {
+      return { error: "invalid_request" };
+    }
+    return agent.recordSkillFeedback(body.conversationId, body.sentiment);
+  });
+
   api.handle(IPC.SKILLS_DISTILL, async () => {
     if (!agent.skillLearning) return SKILLS_LEARNING_NOT_ENABLED;
     const produced = await agent.skillLearning.distill();
@@ -1297,6 +1337,10 @@ export const registerIpcHandlers = (
       api.removeHandler(IPC.CONNECTORS_LIST);
       api.removeHandler(IPC.CHAT);
       api.removeHandler(IPC.MEMORY_QUERY);
+      api.removeHandler(IPC.MEMORY_STATUS);
+      api.removeHandler(IPC.MEMORY_CANDIDATES);
+      api.removeHandler(IPC.MEMORY_CANDIDATE_APPROVE);
+      api.removeHandler(IPC.MEMORY_CANDIDATE_REJECT);
       api.removeHandler(IPC.AUDIT_RECENT);
       api.removeHandler(IPC.WORKSPACE_INFO);
       api.removeHandler(IPC.WORKSPACE_READ);
@@ -1314,6 +1358,7 @@ export const registerIpcHandlers = (
       api.removeHandler(IPC.DORMANT_REVOKE);
       api.removeHandler(IPC.DORMANT_PERSONA);
       api.removeHandler(IPC.SKILLS_DISTILL);
+      api.removeHandler(IPC.SKILLS_FEEDBACK);
       api.removeHandler(IPC.SKILLS_LIST);
       api.removeHandler(IPC.SKILLS_APPROVE);
       api.removeHandler(IPC.SKILLS_REJECT);

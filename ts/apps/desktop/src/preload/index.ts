@@ -243,6 +243,30 @@ const api = {
   memoryQuery(req: MemoryQueryRequest): Promise<MemoryQueryResult[]> {
     return ipcRenderer.invoke(IPC.MEMORY_QUERY, req);
   },
+  // G5.2 记忆审核台
+  memoryStatus(): Promise<unknown> {
+    return ipcRenderer.invoke(IPC.MEMORY_STATUS);
+  },
+  memoryCandidates(): Promise<unknown[]> {
+    return ipcRenderer.invoke(IPC.MEMORY_CANDIDATES);
+  },
+  memoryCandidateApprove(
+    candidateId: string,
+  ): Promise<{ candidateId: string; status: string; fragmentId?: string } | { error: string }> {
+    return ipcRenderer.invoke(IPC.MEMORY_CANDIDATE_APPROVE, { candidateId });
+  },
+  memoryCandidateReject(
+    candidateId: string,
+  ): Promise<{ candidateId: string; status: string; fragmentId?: string } | { error: string }> {
+    return ipcRenderer.invoke(IPC.MEMORY_CANDIDATE_REJECT, { candidateId });
+  },
+  // G5.3 技能反馈（对该会话最近一轮回答）
+  skillsFeedback(req: {
+    conversationId: string;
+    sentiment: "positive" | "negative";
+  }): Promise<{ applied: boolean } | { error: string }> {
+    return ipcRenderer.invoke(IPC.SKILLS_FEEDBACK, req);
+  },
   auditRecent(limit?: number): Promise<{
     stats: { totalEvents: number; blockedCount: number };
     recent: unknown[];

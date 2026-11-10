@@ -149,6 +149,8 @@ export const ChatPanel: React.FC<{
   onModelChange?: ((profileId: string) => void) | undefined;
   context?: ContextUsage | undefined;
   onOpenWorkspacePath?: ((path: string) => void) | undefined;
+  /** G5.3：对最近一轮回答的用户反馈（技能验证器的反馈通道）。 */
+  onSkillFeedback?: ((sentiment: "positive" | "negative") => void) | undefined;
 }> = ({
   messages,
   onSend,
@@ -158,8 +160,10 @@ export const ChatPanel: React.FC<{
   onModelChange,
   context,
   onOpenWorkspacePath,
+  onSkillFeedback,
 }) => {
   const [input, setInput] = React.useState("");
+  const [feedbackGivenAt, setFeedbackGivenAt] = React.useState<number | undefined>();
   const scrollRef = React.useRef<HTMLDivElement>(null);
   // RFC-019: transcripts are appended to the input for review, never auto-sent.
   const voice = useVoiceInput({
@@ -181,6 +185,10 @@ export const ChatPanel: React.FC<{
   const localUsed = messages.reduce((sum, message) => sum + estimateTokens(message.content), 0);
   const used = Math.max(localUsed + estimateTokens(input), context?.used ?? 0);
   const max = context?.max ?? 128_000;
+  const lastAssistantIdx = messages.reduce(
+    (acc, m, idx) => (m.role === "assistant" && !m.streaming ? idx : acc),
+    -1,
+  );
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col bg-panel" data-testid="chat-panel">
@@ -292,6 +300,35 @@ export const ChatPanel: React.FC<{
                       <MessageBody content={m.content} onOpenPath={onOpenWorkspacePath} />
                     )}
                   </div>
+                  {!isUser && i === lastAssistantIdx && onSkillFeedback ? (
+                    feedbackGivenAt === i ? (
+                      <div className="mt-1 text-[10px] text-muted">已记录反馈，谢谢。</div>
+                    ) : (
+                      <div className="mt-1 flex items-center gap-2 text-[10px] text-muted">
+                        <span>这条回答：</span>
+                        <button
+                          type="button"
+                          className="rounded border border-linedark px-2 py-0.5 hover:text-ink"
+                          onClick={() => {
+                            onSkillFeedback("positive");
+                            setFeedbackGivenAt(i);
+                          }}
+                        >
+                          有帮助
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded border border-linedark px-2 py-0.5 hover:text-ink"
+                          onClick={() => {
+                            onSkillFeedback("negative");
+                            setFeedbackGivenAt(i);
+                          }}
+                        >
+                          没帮助
+                        </button>
+                      </div>
+                    )
+                  ) : null}
                 </div>
               </div>
             );
