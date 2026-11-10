@@ -101,6 +101,7 @@ import {
   ShadowWriterPipeline,
   buildCanonicalValidationContext,
   createFixtureWriter,
+  createLlmWriter,
   createPersistentMemoryStore,
   fragmentsToRanked,
   hashEvidenceText,
@@ -757,14 +758,23 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     enqueueShadowTurn(userText, tags);
   };
 
-  // G5.1/G5.2 影子 writer 管线：fixture writer 仅认显式标记（记住：/我偏好），
-  // 候选经校验后只以 shadow_only 落盘，永不自动生效；审核台 approve 才由
-  // host 执行 mutation。OPENINTJ_MEMORY_WRITER=off 关闭整条影子链。
+  // G5.1/G5.2 影子 writer 管线：候选经校验后只以 shadow_only 落盘，
+  // 永不自动生效；审核台 approve 才由 host 执行 mutation。writer 选择：
+  // fixture（默认，仅认显式标记「记住：/我偏好」）| llm（G5.4 通用模型
+  // writer，同协议 opt-in）| off（关闭整条影子链）。
+  const shadowWriterMode = process.env["OPENINTJ_MEMORY_WRITER"] ?? "fixture";
+  const shadowPolicyVersion = `g5-${shadowWriterMode}-v1`;
   const shadowPipeline =
-    persistentStore.canonical && process.env["OPENINTJ_MEMORY_WRITER"] !== "off"
+    persistentStore.canonical && shadowWriterMode !== "off"
       ? new ShadowWriterPipeline({
           repository: persistentStore.canonical,
-          writer: createFixtureWriter(),
+          writer:
+            shadowWriterMode === "llm"
+              ? createLlmWriter({
+                  writerId: "llm:desktop",
+                  generate: (prompt) => llm.chat([{ role: "user", content: prompt }]),
+                })
+              : createFixtureWriter(),
           buildContext: (input, job) =>
             buildCanonicalValidationContext(persistentStore.canonical!, input, job.scope ?? {}),
         })
@@ -788,7 +798,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
           ],
           scopedCurrentRecords: [],
           allowedKinds: ["fact", "preference"],
-          policyVersion: "g5-fixture-v1",
+          policyVersion: shadowPolicyVersion,
           inputHash: hashEvidenceText(userText),
           memoryEpoch: await persistentStore.canonical!.memoryEpoch(),
           extractionRevision: 1,
@@ -798,7 +808,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
             sourceJournalId: "desktop",
             sourceCommitId: commitId,
             consumer: "memory-writer",
-            policyVersion: "g5-fixture-v1",
+            policyVersion: shadowPolicyVersion,
             extractionRevision: 1,
           },
           input,

@@ -272,6 +272,29 @@ describe("G5.1 F13 影子管线 (T27)", () => {
     });
   });
 
+  it("writer 调用超时按失败重试并死信（防挂死堵住单 worker）", async () => {
+    const repo = new InMemoryCanonicalMemoryRepository();
+    const slow: MemoryWriter = {
+      writerId: "slow",
+      async propose() {
+        await new Promise((r) => setTimeout(r, 500));
+        return { candidates: [] };
+      },
+    };
+    const pipeline = new ShadowWriterPipeline({
+      repository: repo,
+      writer: slow,
+      buildContext: buildContext(),
+      writerTimeoutMs: 30,
+      maxAttempts: 2,
+    });
+    const started = Date.now();
+    const result = await pipeline.enqueue({ key, input: makeInput("记住：不会等到") });
+    expect(result).toMatchObject({ status: "dead_letter", reason: "WRITER_FAILED", attempts: 2 });
+    expect(Date.now() - started).toBeLessThan(400);
+    expect(await repo.candidateBatchStatus(key)).toBeUndefined();
+  });
+
   it("单 worker 串行：并发 enqueue 按入队顺序结算", async () => {
     const repo = new InMemoryCanonicalMemoryRepository();
     const pipeline = new ShadowWriterPipeline({

@@ -98,16 +98,22 @@ export interface ShadowWriterPipelineOptions {
   maxEvidenceChars?: number;
   /** 含首次尝试的总尝试次数（同 extractionRevision 重试）。 */
   maxAttempts?: number;
+  /** 单次 writer 调用超时（真实模型可达数十秒；挂死不能堵死单 worker）。 */
+  writerTimeoutMs?: number;
   now?: () => number;
 }
 
 const DEFAULT_MAX_CANDIDATES = 20;
 const DEFAULT_MAX_EVIDENCE_CHARS = 24_000;
 const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_WRITER_TIMEOUT_MS = 120_000;
 
 export class ShadowWriterPipeline {
   private readonly opts: Required<
-    Pick<ShadowWriterPipelineOptions, "maxCandidatesPerBatch" | "maxEvidenceChars" | "maxAttempts">
+    Pick<
+      ShadowWriterPipelineOptions,
+      "maxCandidatesPerBatch" | "maxEvidenceChars" | "maxAttempts" | "writerTimeoutMs"
+    >
   > &
     ShadowWriterPipelineOptions;
   private chain: Promise<unknown> = Promise.resolve();
@@ -118,6 +124,7 @@ export class ShadowWriterPipeline {
       maxCandidatesPerBatch: DEFAULT_MAX_CANDIDATES,
       maxEvidenceChars: DEFAULT_MAX_EVIDENCE_CHARS,
       maxAttempts: DEFAULT_MAX_ATTEMPTS,
+      writerTimeoutMs: DEFAULT_WRITER_TIMEOUT_MS,
       ...options,
     };
   }
@@ -156,7 +163,7 @@ export class ShadowWriterPipeline {
       attempts += 1;
       try {
         // 重试复用同一 input（同 extractionRevision/同 inputHash），不换版本偷跑。
-        batch = await writer.propose(job.input);
+        batch = await this.callWriter(writer, job.input);
         break;
       } catch (err) {
         lastError = err;
@@ -222,5 +229,23 @@ export class ShadowWriterPipeline {
   private deadLetter(result: ShadowJobResult): ShadowJobResult {
     this.deadLetters.push(result);
     return result;
+  }
+
+  /** 单次 writer 调用超时保护：超时按失败计入重试，防挂死堵住单 worker。 */
+  private async callWriter(
+    writer: MemoryWriter,
+    input: WriterInput,
+  ): Promise<Awaited<ReturnType<MemoryWriter["propose"]>>> {
+    const timeoutMs = this.opts.writerTimeoutMs;
+    if (!timeoutMs || timeoutMs <= 0) return writer.propose(input);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`writer timeout after ${timeoutMs}ms`)), timeoutMs);
+    });
+    try {
+      return await Promise.race([writer.propose(input), timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 }

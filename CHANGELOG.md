@@ -8,6 +8,15 @@
 
 ### Changed
 
+- **可靠记忆闭环 G5.4（RFC-021）**：真实 writer 首轮对照完成——
+  通用 LLM writer 接入同一候选协议（桌面可
+  `OPENINTJ_MEMORY_WRITER=llm` opt-in 影子运行，默认仍 fixture）；
+  §10 十四样本对照实测：原文直存基线误存 9 条、确定性 fixture
+  零误存但召回 25%、本地 qwen2.5:7b 召回 100% 且零误存（含纠正
+  与跨项目边界）。结论与激活建议已记入 RFC：暂不自动激活，先以
+  影子+人审积累真实分布，再与 Hy-Memory 第二轮对照后决策。
+  实施记录见 `docs/rfcs/RFC-021-reliable-memory-loop.md`。
+
 - **可靠记忆闭环 G5.3（RFC-021）**：技能正向学习验证器接线——桌面
   技能 outcome 的 verified 不再恒为假：本轮工具结果达到「业务成功
   且证据已核验」且无业务失败时才自动升权/进蒸馏；用户可在最近
