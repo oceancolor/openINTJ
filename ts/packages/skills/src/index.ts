@@ -17,4 +17,5 @@ export * from "./agent-helper.js";
 export * from "./store.js";
 export * from "./db-source.js";
 export * from "./learning-runtime.js";
+export * from "./verifier.js";
 export * from "./llm-distill.js";

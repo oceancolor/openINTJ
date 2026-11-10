@@ -219,6 +219,23 @@ export class SkillLearningRuntime {
   private readonly selection = new Map<string, string[]>();
   /** F10：selectionId → 本轮命中的技能 id（recordOutcomeForSelection 消费，一次性）。 */
   private readonly selectionsById = new Map<string, { skillIds: string[]; createdAt: number }>();
+  /**
+   * G5.3：已结算 selection 的有界保留（供用户反馈事后追认）。
+   * verifiedApplied=正向信号已生效；feedbackApplied=反馈已消费（一次性）。
+   */
+  private readonly settledById = new Map<
+    string,
+    {
+      skillIds: string[];
+      status: string;
+      verifiedApplied: boolean;
+      feedbackApplied: boolean;
+      query?: string;
+      taskType?: TaskTypeType;
+      finalAnswer?: string;
+      toolsUsed?: readonly string[];
+    }
+  >();
   private buffer: TrajectorySample[] = [];
   private seq = 0;
 
@@ -300,36 +317,104 @@ export class SkillLearningRuntime {
     const entry = this.selectionsById.get(selectionId);
     if (!entry) return false;
     this.selectionsById.delete(selectionId);
+    let verifiedApplied = false;
+    try {
+      if (this.learnMode === "observe") {
+        this.observedOutcomes += 1;
+        return true;
+      }
+      const neutral = new Set(["cancelled", "clarify", "preview", "preflight", "unknown", "aborted"]);
+      if (neutral.has(outcome.status)) {
+        this.observedOutcomes += 1;
+        return true;
+      }
+      if (outcome.status === "failed" || outcome.status === "timeout") {
+        for (const id of entry.skillIds) this.reinforce(id, -0.5);
+        return true;
+      }
+      if (outcome.verified === true) {
+        verifiedApplied = true;
+        const signal = skillOutcomeSignal(outcome.status);
+        for (const id of entry.skillIds) this.reinforce(id, signal);
+        if (outcome.status === "completed") {
+          this.buffer.push({
+            query: this.redactor(outcome.query ?? ""),
+            ...(outcome.taskType ? { taskType: outcome.taskType } : {}),
+            finalAnswer: this.redactor(outcome.finalAnswer ?? ""),
+            toolsUsed: [...(outcome.toolsUsed ?? [])],
+            ts: this.clock(),
+          });
+          if (this.buffer.length > this.maxBuffer) this.buffer = this.buffer.slice(-this.maxBuffer);
+        }
+        return true;
+      }
+      // 未验证的正向结果：只记观察（基础阶段关闭自动正向升权）。
+      this.observedOutcomes += 1;
+      return true;
+    } finally {
+      this.retainSettled(selectionId, entry, outcome, verifiedApplied);
+    }
+  }
+
+  private retainSettled(
+    selectionId: string,
+    entry: { skillIds: string[] },
+    outcome: {
+      status: string;
+      query?: string;
+      taskType?: TaskTypeType;
+      finalAnswer?: string;
+      toolsUsed?: readonly string[];
+    },
+    verifiedApplied: boolean,
+  ): void {
+    if (this.settledById.size >= this.maxSelMemory) {
+      const oldest = this.settledById.keys().next().value;
+      if (oldest) this.settledById.delete(oldest);
+    }
+    this.settledById.set(selectionId, {
+      skillIds: [...entry.skillIds],
+      status: outcome.status,
+      verifiedApplied,
+      feedbackApplied: false,
+      ...(outcome.query !== undefined ? { query: outcome.query } : {}),
+      ...(outcome.taskType ? { taskType: outcome.taskType } : {}),
+      ...(outcome.finalAnswer !== undefined ? { finalAnswer: outcome.finalAnswer } : {}),
+      ...(outcome.toolsUsed ? { toolsUsed: [...outcome.toolsUsed] } : {}),
+    });
+  }
+
+  /**
+   * G5.3 用户反馈事后追认（一次性，重复反馈返回 false）：
+   * - positive：把"当时未验证生效的 completed"补升为 verified 正向
+   *   （升权 + 进蒸馏 buffer，与结算时 verified 同路径同信号）。
+   * - negative：一票否决/纠正，记一次 -0.5（与已生效正向相抵）。
+   * observe 模式下只记观察。未知/已消费的 selectionId 返回 false。
+   */
+  recordFeedbackForSelection(selectionId: string, feedback: "positive" | "negative"): boolean {
+    const settled = this.settledById.get(selectionId);
+    if (!settled || settled.feedbackApplied) return false;
+    settled.feedbackApplied = true;
     if (this.learnMode === "observe") {
       this.observedOutcomes += 1;
       return true;
     }
-    const neutral = new Set(["cancelled", "clarify", "preview", "preflight", "unknown", "aborted"]);
-    if (neutral.has(outcome.status)) {
-      this.observedOutcomes += 1;
+    if (feedback === "negative") {
+      for (const id of settled.skillIds) this.reinforce(id, -0.5);
       return true;
     }
-    if (outcome.status === "failed" || outcome.status === "timeout") {
-      for (const id of entry.skillIds) this.reinforce(id, -0.5);
-      return true;
-    }
-    if (outcome.verified === true) {
-      const signal = skillOutcomeSignal(outcome.status);
-      for (const id of entry.skillIds) this.reinforce(id, signal);
-      if (outcome.status === "completed") {
-        this.buffer.push({
-          query: this.redactor(outcome.query ?? ""),
-          ...(outcome.taskType ? { taskType: outcome.taskType } : {}),
-          finalAnswer: this.redactor(outcome.finalAnswer ?? ""),
-          toolsUsed: [...(outcome.toolsUsed ?? [])],
-          ts: this.clock(),
-        });
-        if (this.buffer.length > this.maxBuffer) this.buffer = this.buffer.slice(-this.maxBuffer);
-      }
-      return true;
-    }
-    // 未验证的正向结果：只记观察（基础阶段关闭自动正向升权）。
-    this.observedOutcomes += 1;
+    if (settled.verifiedApplied || settled.status !== "completed") return true;
+    settled.verifiedApplied = true;
+    const signal = skillOutcomeSignal(settled.status);
+    for (const id of settled.skillIds) this.reinforce(id, signal);
+    this.buffer.push({
+      query: this.redactor(settled.query ?? ""),
+      ...(settled.taskType ? { taskType: settled.taskType } : {}),
+      finalAnswer: this.redactor(settled.finalAnswer ?? ""),
+      toolsUsed: [...(settled.toolsUsed ?? [])],
+      ts: this.clock(),
+    });
+    if (this.buffer.length > this.maxBuffer) this.buffer = this.buffer.slice(-this.maxBuffer);
     return true;
   }
 
