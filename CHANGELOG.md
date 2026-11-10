@@ -8,6 +8,15 @@
 
 ### Changed
 
+- **可靠记忆闭环 Hy-Memory 第二轮对照（RFC-021）**：Hy-Memory-
+  30B-A3B 官方 8.03GB 混合精度 GGUF 已在本机 Ollama 部署
+  （`hy-memory:8g`，模型目录迁至 F 盘），与通用 writer 同提示词
+  drop-in 跑完 §10 十四样本：召回 75%、误存 4、总准确 57%，
+  未胜过 qwen2.5:7b（100%/零误存）；两个纠正类漏记均为
+  `expectedRevision` 字符串类型被校验层拦下。结论：不作通用
+  writer 换装，原生提示词适配臂与激活决策门一并议；桌面默认
+  行为不变。实施记录见 `docs/rfcs/RFC-021-reliable-memory-loop.md`。
+
 - **可靠记忆闭环 G5.5（RFC-021）**：蛰伏学习（dormant）内化并入
   个人档案断言账本——批准的内化提议以 dormant 来源层写入档案，
   人格配置降为账本投影；撤销只撤该来源层并登记抑制，同一模式
