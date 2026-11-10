@@ -8,6 +8,21 @@
 
 ### Changed
 
+- **可靠记忆闭环 G5.1（RFC-021）**：writer 影子管线落地——committed
+  轮次经单 worker 管线提名/校验后，候选只以 shadow_only 持久化
+  （含真实 SQLite 结局表，重启可读），永不生效、不建索引投影；
+  writer 异常同版本有限重试，超预算/接收冲突进死信（原因明确、
+  不自动重投），ACK 只确认完整接收不代表批准。尚未接宿主触发，
+  桌面记忆行为无变化。实施记录见
+  `docs/rfcs/RFC-021-reliable-memory-loop.md`。
+
+- **可靠记忆闭环 G5.0（RFC-021）**：writer 候选契约与确定性校验器
+  落地——严格 schema（未知字段/自带 scope 拒绝）、candidateId 由
+  host 生成、来源 hash/span 与 epoch/revision/scope/用户值优先/敏感
+  内容逐项校验并给稳定原因码，过期 epoch 整批拒绝；确定性 fixture
+  writer 仅凭显式标记产候选。影子管线与真实 writer 尚未接线，记忆
+  行为无变化。实施记录见 `docs/rfcs/RFC-021-reliable-memory-loop.md`。
+
 - **可靠记忆闭环 G4（RFC-021）**：Profile/Persona 改断言账本投影——
   user/plugin/dormant 多层断言并存、按来源撤销与恢复，撤销用户层后
   已学到的下层自动复活，抑制键阻止被否定的推断回潮，导出升 v2 全层

@@ -114,6 +114,20 @@ export interface CandidateReceiveKey {
 export const candidateReceiveKeyString = (k: CandidateReceiveKey): string =>
   [k.sourceJournalId, k.sourceCommitId, k.consumer, k.policyVersion, String(k.extractionRevision)].join(":");
 
+/**
+ * G5.1 影子管线：单个候选的校验结局（与批次接收分开存——批次 ACK 只确认
+ * 完整接收，结局供审核台/对照实验读取）。candidateJson 为规范化候选
+ * （validated）或原始候选（rejected/conflicted，留作诊断）。
+ */
+export interface CandidateOutcomeRecord {
+  candidateId: string;
+  receiveKey: string;
+  status: "shadow_only" | "rejected" | "conflicted";
+  reasons: string[];
+  candidateJson: string;
+  updatedAt: number;
+}
+
 export interface CanonicalMemoryRepository {
   init(): Promise<void>;
   close(): Promise<void>;
@@ -134,6 +148,14 @@ export interface CanonicalMemoryRepository {
   candidateBatchStatus(
     key: CandidateReceiveKey,
   ): Promise<{ status: string; candidateCount: number } | undefined>;
+
+  /** G5.1：按 candidateId upsert 候选结局（重放同批次不重复计数）。 */
+  upsertCandidateOutcomes(records: readonly CandidateOutcomeRecord[]): Promise<void>;
+  listCandidateOutcomes(opts?: {
+    status?: CandidateOutcomeRecord["status"];
+    limit?: number;
+  }): Promise<CandidateOutcomeRecord[]>;
+  candidateOutcome(candidateId: string): Promise<CandidateOutcomeRecord | undefined>;
 
   pendingIndexJobs(limit?: number): Promise<IndexJob[]>;
   markIndexJobApplied(jobId: number): Promise<void>;
@@ -167,6 +189,7 @@ export class InMemoryCanonicalMemoryRepository implements CanonicalMemoryReposit
   private records = new Map<string, CanonicalMemoryRecord>();
   private mutations = new Map<string, { inputHash: string; receipt: MutationReceipt }>();
   private candidates = new Map<string, { inputHash: string; status: string; count: number; receivedAt: number }>();
+  private candidateOutcomes = new Map<string, CandidateOutcomeRecord>();
   private jobs: IndexJob[] = [];
   private nextJobId = 1;
   private generation = 1;
@@ -302,6 +325,25 @@ export class InMemoryCanonicalMemoryRepository implements CanonicalMemoryReposit
   ): Promise<{ status: string; candidateCount: number } | undefined> {
     const found = this.candidates.get(candidateReceiveKeyString(key));
     return found ? { status: found.status, candidateCount: found.count } : undefined;
+  }
+
+  async upsertCandidateOutcomes(records: readonly CandidateOutcomeRecord[]): Promise<void> {
+    for (const record of records) this.candidateOutcomes.set(record.candidateId, { ...record });
+  }
+
+  async listCandidateOutcomes(opts?: {
+    status?: CandidateOutcomeRecord["status"];
+    limit?: number;
+  }): Promise<CandidateOutcomeRecord[]> {
+    const all = [...this.candidateOutcomes.values()].filter(
+      (r) => !opts?.status || r.status === opts.status,
+    );
+    return (opts?.limit ? all.slice(0, opts.limit) : all).map((r) => ({ ...r }));
+  }
+
+  async candidateOutcome(candidateId: string): Promise<CandidateOutcomeRecord | undefined> {
+    const found = this.candidateOutcomes.get(candidateId);
+    return found ? { ...found } : undefined;
   }
 
   async pendingIndexJobs(limit = 100): Promise<IndexJob[]> {

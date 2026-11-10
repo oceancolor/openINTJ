@@ -13,6 +13,8 @@ export * from "./canonical.js";
 export * from "./validity.js";
 export * from "./embedding-space.js";
 export * from "./legacy-migration.js";
+export * from "./writer.js";
+export * from "./writer-pipeline.js";
 export * from "./persistence-factory.js";
 export * from "./eval/retrieval-metrics.js";
 export * from "./eval/retrieval-benchmark.js";

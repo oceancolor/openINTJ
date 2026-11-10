@@ -71,6 +71,16 @@ export class CanonicalCandidateConflictError extends Error {
   readonly code = "MEMORY_CANDIDATE_CONFLICT";
 }
 
+/** G5.1：与 plane-memory CandidateOutcomeRecord 结构兼容的候选结局行。 */
+export interface CanonicalCandidateOutcomeRecord {
+  candidateId: string;
+  receiveKey: string;
+  status: "shadow_only" | "rejected" | "conflicted";
+  reasons: string[];
+  candidateJson: string;
+  updatedAt: number;
+}
+
 interface BetterSqliteStmt {
   run(...params: unknown[]): { changes: number; lastInsertRowid: number };
   get(...params: unknown[]): unknown;
@@ -128,6 +138,16 @@ CREATE TABLE IF NOT EXISTS memory_candidates (
   payloadJson TEXT NOT NULL DEFAULT '[]',
   receivedAt REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS memory_candidate_outcomes (
+  candidateId TEXT PRIMARY KEY,
+  receiveKey TEXT NOT NULL,
+  status TEXT NOT NULL,
+  reasonsJson TEXT NOT NULL DEFAULT '[]',
+  candidateJson TEXT NOT NULL DEFAULT '{}',
+  updatedAt REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cand_outcome_status ON memory_candidate_outcomes(status, updatedAt);
 
 CREATE TABLE IF NOT EXISTS memory_index_outbox (
   jobId INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -467,6 +487,80 @@ export class SqliteCanonicalMemoryStore {
       | { status: string; candidateCount: number }
       | undefined;
     return row;
+  }
+
+  async upsertCandidateOutcomes(records: readonly CanonicalCandidateOutcomeRecord[]): Promise<void> {
+    const db = this.requireDb();
+    const stmt = db.prepare(
+      "INSERT INTO memory_candidate_outcomes (candidateId, receiveKey, status, reasonsJson, candidateJson, updatedAt) VALUES (?, ?, ?, ?, ?, ?) " +
+        "ON CONFLICT(candidateId) DO UPDATE SET receiveKey = excluded.receiveKey, status = excluded.status, reasonsJson = excluded.reasonsJson, candidateJson = excluded.candidateJson, updatedAt = excluded.updatedAt",
+    );
+    for (const r of records) {
+      stmt.run(r.candidateId, r.receiveKey, r.status, JSON.stringify(r.reasons), r.candidateJson, r.updatedAt);
+    }
+  }
+
+  async listCandidateOutcomes(opts?: {
+    status?: CanonicalCandidateOutcomeRecord["status"];
+    limit?: number;
+  }): Promise<CanonicalCandidateOutcomeRecord[]> {
+    const db = this.requireDb();
+    const rows = (
+      opts?.status
+        ? db
+            .prepare(
+              "SELECT candidateId, receiveKey, status, reasonsJson, candidateJson, updatedAt FROM memory_candidate_outcomes WHERE status = ? ORDER BY updatedAt, candidateId",
+            )
+            .all(opts.status)
+        : db
+            .prepare(
+              "SELECT candidateId, receiveKey, status, reasonsJson, candidateJson, updatedAt FROM memory_candidate_outcomes ORDER BY updatedAt, candidateId",
+            )
+            .all()
+    ) as Array<{
+      candidateId: string;
+      receiveKey: string;
+      status: CanonicalCandidateOutcomeRecord["status"];
+      reasonsJson: string;
+      candidateJson: string;
+      updatedAt: number;
+    }>;
+    const mapped = rows.map((r) => ({
+      candidateId: r.candidateId,
+      receiveKey: r.receiveKey,
+      status: r.status,
+      reasons: JSON.parse(r.reasonsJson) as string[],
+      candidateJson: r.candidateJson,
+      updatedAt: r.updatedAt,
+    }));
+    return opts?.limit ? mapped.slice(0, opts.limit) : mapped;
+  }
+
+  async candidateOutcome(candidateId: string): Promise<CanonicalCandidateOutcomeRecord | undefined> {
+    const db = this.requireDb();
+    const row = db
+      .prepare(
+        "SELECT candidateId, receiveKey, status, reasonsJson, candidateJson, updatedAt FROM memory_candidate_outcomes WHERE candidateId = ?",
+      )
+      .get(candidateId) as
+      | {
+          candidateId: string;
+          receiveKey: string;
+          status: CanonicalCandidateOutcomeRecord["status"];
+          reasonsJson: string;
+          candidateJson: string;
+          updatedAt: number;
+        }
+      | undefined;
+    if (!row) return undefined;
+    return {
+      candidateId: row.candidateId,
+      receiveKey: row.receiveKey,
+      status: row.status,
+      reasons: JSON.parse(row.reasonsJson) as string[],
+      candidateJson: row.candidateJson,
+      updatedAt: row.updatedAt,
+    };
   }
 
   async pendingIndexJobs(limit = 100): Promise<CanonicalIndexJob[]> {

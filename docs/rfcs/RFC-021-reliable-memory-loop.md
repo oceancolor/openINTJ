@@ -2,7 +2,7 @@
 
 设计规格：[`docs/openintj-reliable-memory-design.md`](../openintj-reliable-memory-design.md)（v0.1，2026-11-09）
 设计基线：`main@2326b4b02ad578363fd470317ce733a039c775e0`
-状态：**实施中**（G0/G1/G2 已完成并复核收口，G3/G4 已完成，G5 未启动）
+状态：**实施中**（G0–G4 已完成，G5 进行中——子阶段门控，G5.0 契约与校验器先行）
 
 本文件是实施记录，不是设计规格。每个阶段记录：核实结论、实际改动、测试证据、
 未解决问题与门控确认。阶段顺序与门控以设计文档 §7 为准；每阶段结束暂停，
@@ -401,6 +401,106 @@ taskpool 49、profile 6、server 77/11、cli 54/6、desktop typecheck +
 - 测试：core journal.spec +2（覆盖非单调、legacy/新格式混合），
   core 178、runtime 20、server 77/11、cli 54/6、desktop
   typecheck + 109/2 全绿。
+
+---
+
+## G5 启动：范围与子阶段（2026-11-10，用户拍板）
+
+范围 = 设计 F13（writer 影子闭环）+ 后续并入四项：技能正向学习
+验证器（G3 决策）、Hy-Memory-30B writer 候选对照（§10)、F14 审核台
+（G4 遗留决策 2)、dormant 深方案（G4 遗留决策 4）。
+
+**子阶段划分与门控（逐个暂停汇报）**
+
+| 子阶段 | 内容 | 验收 |
+| --- | --- | --- |
+| G5.0 契约与校验器 | MemoryWriter/MemoryCandidate 严格 schema、host 生成 candidateId、校验管线（来源 hash/span、scope、epoch、revision、用户值优先、敏感项、大小/未知字段）、fixture writer | T26 全拒绝/隔离有原因，不进活跃投影 |
+| G5.1 影子管线 | derivation writer 任务（单 worker、预算、重试上限、死信）、validated → shadow_only（不 apply、不建索引投影）、shadow ACK 只确认完整接收 | T27（fixture 部分）；影子零影响（回答/Profile/技能/权限逐项不变） |
+| G5.2 审核台（F14） | IPC + 面板：memoryStatus 页眉、待审候选（来源/证据）列表，approve 才由 host 执行 mutation | T28（桌面部分）；模型只能建议，mutation 由代码/用户批准 |
+| G5.3 技能验证器 | verified 信号源接线桌面（现恒传 false） | 证据通过才升权；completed 照旧中性 |
+| G5.4 真实 writer 对照 | 通用 writer 首轮 + 原文基线（固定 reader/retriever/预算、§10 十类样本人工复核）→ 激活建议报告；Hy-Memory 第二轮补入 | §10 指标；产出激活决策依据，不在 G5 内激活 |
+| G5.5 dormant 并入 | dormant 降为 profile ledger 的 dormant 层写入方；PersonaConfig 变投影；内化提议复用审核台通道 | 撤销/恢复走 G4 ledger 语义；提议经审核不直写 |
+
+**已确认的 G5 边界决策（2026-11-10）**
+- 门控：子阶段逐个暂停汇报，不连跑。
+- 验证器信号源：**工具证据为主 + 用户反馈可覆盖**——ToolOutcome 的
+  business/evidence 核验通过才 verified；用户显式否定可撤销已记的
+  正向信号。
+- Hy-Memory 时机：**第二轮补对照**。协议预留同接口，首轮只做原文
+  基线 vs 通用 writer，避免 8–25GB GGUF 部署阻塞主线。
+- 激活边界：**G5 只到激活决策**（影子 + 对照 + 报告）。实际开放
+  自动 apply（哪怕低风险白名单）另开门控；人格/程序性策略始终
+  需审批（设计 §10）。
+
+### G5.0 实施明细（2026-11-10 完成）
+
+范围：候选契约与校验器（W1）。纯确定性、零模型、零既有路径改动
+（新增 `planes/memory/src/writer.ts` + 导出一行）。
+
+- **契约**：`MemoryWriter.propose(input) → { candidates: unknown[] }`
+  （输出按未受信处理）；`WriterInput` 只含 committed 证据 span、
+  scoped 记录快照、allowedKinds、policyVersion、inputHash、
+  memoryEpoch、extractionRevision，scope 由 host 固定、不入候选。
+- **严格 schema**：`MemoryCandidateSchema`（zod strict）——operation/
+  kind 枚举、content ≤2000、sourceRefs ≤8、未知字段（包括试图自带
+  `scope`）一律 `SCHEMA_INVALID`。
+- **host 身份**：`hostCandidateId = cand_ + sha256(extractionRevision:
+  inputHash:ordinal)[..24]`，模型自报 candidateId 被覆盖。
+- **校验管线**（顺序确定，稳定原因码）：noop 短路 → NO_SOURCE /
+  EVIDENCE_NOT_FOUND / EVIDENCE_SPAN_INVALID / EVIDENCE_HASH_MISMATCH
+  （以 host 存储重算 span 哈希，writer 自带文本不作数）→
+  KIND_NOT_ALLOWED → SENSITIVE_CONTENT（保守秘密模式，拒绝而非脱敏
+  通过）→ VALIDITY_INVALID → supersede/retract 目标链（MISSING_TARGET
+  / TARGET_NOT_FOUND / TARGET_SUPPRESSED / SCOPE_VIOLATION /
+  MISSING_EXPECTED_REVISION，revision 不符为 **conflicted** 可重提）
+  → USER_VALUE_PROTECTED（user 占位 key、user 断言目标）。批次层先查
+  epoch，过期整批 STALE_EPOCH（T24 迟到 writer 口径）。候选内容只作
+  数据保存，本子阶段不存在任何 apply/执行路径。
+- **fixture writer**：只认显式标记（记住：→fact，我偏好→preference），
+  无标记零候选，同输入同输出、host id 稳定可重放。
+- **验收 T26**：`__tests__/writer.spec.ts` 10 例覆盖无来源、hash/span
+  错、越 scope（字段注入 + 跨 workspace 目标）、过期 epoch、错
+  revision、未知字段、敏感内容、用户值保护、指令内容惰性。
+  plane-memory 113/3 全绿，零基线回归。
+
+**G5.0 遗留 / 说明**
+- 校验器是纯函数，尚未与 G2 `receiveCandidates` 串联（影子管线
+  G5.1 接线：validated → shadow_only 存储，不建索引投影）。
+- 敏感检测为保守正则（密钥/口令模式），不做语义级敏感分类；
+  真实 writer 接入（G5.4）时以人工复核样本校准。
+
+### G5.1 实施明细（2026-11-10 完成）
+
+范围：影子管线（W2）。新增 `planes/memory/src/writer-pipeline.ts`；
+canonical 契约扩展候选结局存储（InMemory + SQLite 两实现，
+`memory_candidate_outcomes` 表，重启可读）。
+
+- **管线**：`ShadowWriterPipeline.enqueue(job)` 串行链单 worker；
+  job = 五元接收键 + WriterInput。流程：证据预算预检 → writer 提名
+  （异常以同一 extractionRevision/inputHash 重试，默认共 3 次）→
+  G5.0 批次校验 → G2 `receiveCandidates` 持久化批次 → 结局逐条
+  upsert（validated→`shadow_only`、rejected/conflicted 原样）。
+- **ACK 语义**：`shadow_recorded` 只确认"批次完整接收 + 结局已
+  记录"；被拒候选与空批次同样 ACK，不代表生效。重放同键同 hash
+  返回 `replayed` 不重复记结局；同键异 hash 死信 `RECEIVE_CONFLICT`。
+- **死信**：`WRITER_FAILED`（重试耗尽，零落盘）/ `OVER_BUDGET`
+  （证据超长不调 writer；候选数超限整批死信不截断）/ 上述冲突；
+  死信只记录不自动重投，"不无限自动修复生成"。
+- **影子零影响（实测断言）**：管线全程不调 applyMutation、不建
+  索引投影、不碰 epoch；测试以种子记录对账 records/indexStats/
+  epoch 前后完全一致。
+- **验收 T27（fixture 部分）**：`writer-pipeline.spec.ts` 9 例——
+  零影响、ACK≠生效、重放幂等、接收冲突、同版本重试、双死信、
+  过期 epoch 整批拒绝（T24 联动）、单 worker 顺序、真实 SQLite
+  重启后结局可读。plane-memory 122/3、storage-sqlite 37、desktop
+  typecheck + 109/2 全绿，零基线回归。
+
+**G5.1 遗留 / 说明**
+- 管线尚未接宿主触发：桌面"turn committed → 构造 WriterInput →
+  enqueue"接线与 G5.2 审核台同批落地（无查看面时先跑影子只会
+  攒不可见数据）。`buildContext` 的真实实现（从 PersistentMemoryStore
+  快照 records/suppression/user keys）届时一并提供。
+- 通用/Hy writer 的同协议对照（T27 后半）归 G5.4。
 
 ---
 
