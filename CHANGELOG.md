@@ -8,6 +8,13 @@
 
 ### Changed
 
+- **可靠记忆闭环 G5.5（RFC-021）**：蛰伏学习（dormant）内化并入
+  个人档案断言账本——批准的内化提议以 dormant 来源层写入档案，
+  人格配置降为账本投影；撤销只撤该来源层并登记抑制，同一模式
+  不会再被反复提议（修复"撤销后白撤销"），导出/导入不回潮；
+  用户显式档案始终优先于内化推断。实施记录见
+  `docs/rfcs/RFC-021-reliable-memory-loop.md`。
+
 - **可靠记忆闭环 G5.4（RFC-021）**：真实 writer 首轮对照完成——
   通用 LLM writer 接入同一候选协议（桌面可
   `OPENINTJ_MEMORY_WRITER=llm` opt-in 影子运行，默认仍 fixture）；

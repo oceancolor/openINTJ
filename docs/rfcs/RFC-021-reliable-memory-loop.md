@@ -2,7 +2,7 @@
 
 设计规格：[`docs/openintj-reliable-memory-design.md`](../openintj-reliable-memory-design.md)（v0.1，2026-11-09）
 设计基线：`main@2326b4b02ad578363fd470317ce733a039c775e0`
-状态：**实施中**（G0–G4 已完成，G5 进行中——子阶段门控，G5.0 契约与校验器先行）
+状态：**实施中**（G0–G4 已完成，G5 代码子阶段 G5.0–G5.5 已完成；剩余激活决策门与 Hy-Memory 第二轮对照，均为数据/决策事项而非代码任务）
 
 本文件是实施记录，不是设计规格。每个阶段记录：核实结论、实际改动、测试证据、
 未解决问题与门控确认。阶段顺序与门控以设计文档 §7 为准；每阶段结束暂停，
@@ -633,6 +633,9 @@ canonical 契约扩展候选结局存储（InMemory + SQLite 两实现，
      激活决策门（届时最早只白名单"带原文证据的低风险事实+
      明确偏好"，人格/程序性策略仍审批——设计 §10 原口径）。
   3. 本子阶段不改任何默认行为，激活与否等用户在决策门拍板。
+  **【2026-11-10 用户决策：采纳上述建议】**——默认保持 fixture，
+  真实使用 opt-in llm 影子积累 + 人审统计，Hy 第二轮后再开激活
+  决策门。本子阶段不改任何默认行为即为执行该决策。
 - **验证**：plane-memory 133（+评估/超时测试，live spec 默认
   跳过）、storage-sqlite 37、server 77/11、cli 54/6、desktop
   typecheck + 109/2 + 生产构建全绿，零基线回归。
@@ -644,6 +647,56 @@ canonical 契约扩展候选结局存储（InMemory + SQLite 两实现，
   留出样本（时间顺序留出，§10 原要求），避免与提示词同源。
 - Hy-Memory-30B 第二轮：需先完成 GGUF 经 Ollama 导入部署
   （8–25GB），协议与 harness 已就绪，届时同一命令补跑。
+
+### G5.5 实施明细（2026-11-10 完成）
+
+范围：dormant 并入（G4 遗留决策 4 的深方案）。兑现方式说明：
+内化提议的对象是 persona 断言而非记忆 fragment，故"并入候选
+审核通道"落实为**统一账本 + 统一提议→批准→撤销语义**（提议
+入口仍为 DormantPanel，与记忆候选在审核台分开呈现——对象与
+生效路径不同，混排反而有害）。
+
+- **dormant 降为写入方**：`InternalizationManager` 新增可选
+  `PersonaLedgerPort`（结构端口，dormant 不新增包依赖）。注入
+  后 approve 写穿账本 dormant 层；PersonaConfig 中账本托管字段
+  成为账本 live 断言的**投影**（每次 approve/revoke/restore 后
+  以 live 集重投影）；revoke 按 targetField 从 live 集定位断言
+  只撤 dormant 层 + 登记字段抑制，重启后同样有效（不依赖内存
+  映射）。被用户显式层遮蔽时账本拒绝写入，投影不显示该字段
+  （用户值优先）。无 ledger 注入时保持旧行为不变。
+- **防白撤销**：propose 前查 `isFieldDismissed`——撤销过的字段
+  （或用户在档案侧 dismiss 过的 key）不再被重新挖掘提议，修复
+  E13 dormant 侧"撤销无抑制记忆"的问题。
+- **桥工厂**：`createProfileLedgerPort`（dormant 包内）封装字段
+  映射（preferences→preferences、phrases/habits→habits、
+  context→notes，与既有 importPersona 对齐）与 provenance 无损
+  还原（`dormant:<targetField>`）。桌面装配处只剩 6 行结构适配
+  （profile 构造已提前到 dormant 之前；OPENINTJ_PROFILE=0 时
+  桥不启用，回退 dormant 本地权威）。
+- **验收**：dormant 新增 6 例（假端口语义 5 + 工厂映射 1）；
+  桌面新增真 ProfileService 集成 2 例（approve 后档案投影
+  可见、user 值优先不被覆盖、revoke+抑制后同 pattern 不再
+  提议、导出 v2 导入不回潮）。结果：dormant 65、profile 10、
+  core 178、runtime 20、plane-memory 132/4（live spec 跳过）、
+  skills 72、storage-sqlite 37、server 77/11、cli 54/6、
+  desktop typecheck + 111/2 + 生产构建全绿，零基线回归。
+
+**G5.5 遗留 / 说明**
+- dormant 自身的 SQLite adapter 仍存 PersonaConfig 快照（与
+  账本投影双写）：账本是权威，恢复时以账本重投影托管字段；
+  adapter 快照保留作 persona 的非托管字段与降级路径。
+- 审核台（MemoryPanel）未混排 dormant 提议；persona 提议仍在
+  DormantPanel 审核。若未来要统一审核入口，需先统一两类对象
+  的呈现模型，不在本阶段强行合并。
+
+## G5 收口状态（2026-11-10）
+
+代码子阶段 G5.0–G5.5 全部完成。剩余两项均为非代码事项：
+1. **激活决策门**：按已采纳的建议——真实使用中 opt-in
+   `OPENINTJ_MEMORY_WRITER=llm` 影子积累真实候选、审核台人审
+   统计真实误存率后，再决定是否开放低风险白名单自动 apply。
+2. **Hy-Memory 第二轮对照**：GGUF 部署后以同一 harness 补跑
+   （可与混元 writer 参评一并做）。
 
 ---
 

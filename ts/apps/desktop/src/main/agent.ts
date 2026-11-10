@@ -50,6 +50,8 @@ import {
   type DormantPersistenceAdapter,
   DormantRuntime,
   type DormantRuntimeOpts,
+  type PersonaLedgerPort,
+  createProfileLedgerPort,
   runMineInWorker,
 } from "@openintj/dormant";
 import {
@@ -665,7 +667,31 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
   const llm: LlmClient = rateLimit ? new RateLimitedLlmClient(rawLlm, rateLimit) : rawLlm;
   const persistence = resolvePersistence(opts);
   const embeddingDim = runtime.embed.dimension;
+  // RFC-014 profile 断言账本（G5.5 起需在 dormant 之前构造：dormant 内化
+  // 以它为 dormant 层写入方）。禁用时（OPENINTJ_PROFILE=0）桥不启用，
+  // persona 回退 dormant 本地权威。
+  const profileEnabled = opts.enableProfile ?? process.env["OPENINTJ_PROFILE"] !== "0";
+  const profile =
+    opts.profile ??
+    new ProfileService(
+      persistence.mode === "real" && persistence.dataDir
+        ? new JsonProfileStore(`${persistence.dataDir}/profile.json`)
+        : new InMemoryProfileStore(),
+    );
   const dormantEnabled = resolveDormantEnabled(opts);
+  // G5.5：dormant 内化以 profile 断言账本为 dormant 层写入方
+  // （PersonaConfig 降为投影，撤销走账本单层撤销 + 字段抑制）。
+  const dormantLedger: PersonaLedgerPort | undefined =
+    dormantEnabled && profileEnabled
+      ? createProfileLedgerPort({
+          upsert: ({ section, key, value, provenance }) =>
+            profile.upsert({ section, key, value, source: "dormant", provenance })?.id,
+          revokeAssertion: (id) => profile.revokeAssertion(id),
+          dismiss: (section, key) => profile.dismissInferredKey(section, key),
+          dismissedKeys: () => profile.store.listDismissed(),
+          dormantEntries: () => profile.store.list().filter((e) => e.source === "dormant"),
+        })
+      : undefined;
   let dormantAdapter: DormantPersistenceAdapter | undefined;
   let dormantPersistenceInfo: { adapter: string; dbPath?: string } | undefined;
   if (dormantEnabled) {
@@ -693,6 +719,11 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
         maxDiskEvents: 50_000,
         ...(useMineWorker ? { mineRunner: (e, o) => runMineInWorker(e, o) } : {}),
         ...(opts.dormantOpts ?? {}),
+        // G5.5：账本端口最后注入（覆盖 dormantOpts 内的同名配置）。
+        internalizationOpts: {
+          ...(opts.dormantOpts?.internalizationOpts ?? {}),
+          ...(dormantLedger ? { ledger: dormantLedger } : {}),
+        },
         ...(dormantAdapter ? { adapter: dormantAdapter } : {}),
       })
     : undefined;
@@ -986,18 +1017,6 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
           : {}),
       })
     : undefined;
-
-  // RFC-014: the profile is the editable control plane above Dormant persona.
-  // When enabled it owns the user-persona section (importing dormant fields
-  // first); when disabled, fall back to the raw persona prompt.
-  const profileEnabled = opts.enableProfile ?? process.env["OPENINTJ_PROFILE"] !== "0";
-  const profile =
-    opts.profile ??
-    new ProfileService(
-      persistence.mode === "real" && persistence.dataDir
-        ? new JsonProfileStore(`${persistence.dataDir}/profile.json`)
-        : new InMemoryProfileStore(),
-    );
 
   // RFC-012: compaction driver (pressure check per run + /compact command).
   const compactionEnabled = opts.enableCompaction ?? process.env["OPENINTJ_COMPACT"] !== "0";
