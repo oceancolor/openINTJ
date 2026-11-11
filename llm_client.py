@@ -8,8 +8,8 @@ LLM 客户端 —— 腾讯混元大模型对接
 
 环境变量：
   HUNYUAN_API_KEY   - 混元 API Key（必须）
-  HUNYUAN_BASE_URL  - 混元 API 地址（默认: https://api.hunyuan.cloud.tencent.com/v1）
-  HUNYUAN_MODEL     - 模型名称（默认: hunyuan-turbos-latest）
+  HUNYUAN_BASE_URL  - 混元 API 地址（默认: https://tokenhub.tencentmaas.com/v1）
+  HUNYUAN_MODEL     - 模型名称（默认: hy4）
 """
 from __future__ import annotations
 
@@ -31,8 +31,8 @@ logger = logging.getLogger(__name__)
 class HunyuanConfig:
     """腾讯混元配置（OpenAI 兼容端点）"""
     api_key: str = ""
-    base_url: str = "https://api.hunyuan.cloud.tencent.com/v1"
-    model: str = "hunyuan-turbos-latest"
+    base_url: str = "https://tokenhub.tencentmaas.com/v1"
+    model: str = "hy4"
     vision_model: str = "hunyuan-vision"  # Vision 多模态模型
     max_tokens: int = 2048
     temperature: float = 0.7
@@ -44,8 +44,8 @@ class HunyuanConfig:
         """从环境变量加载配置"""
         return cls(
             api_key=os.environ.get("HUNYUAN_API_KEY", ""),
-            base_url=os.environ.get("HUNYUAN_BASE_URL", "https://api.hunyuan.cloud.tencent.com/v1"),
-            model=os.environ.get("HUNYUAN_MODEL", "hunyuan-turbos-latest"),
+            base_url=os.environ.get("HUNYUAN_BASE_URL", "https://tokenhub.tencentmaas.com/v1"),
+            model=os.environ.get("HUNYUAN_MODEL", "hy4"),
             vision_model=os.environ.get("HUNYUAN_VISION_MODEL", "hunyuan-vision"),
         )
 

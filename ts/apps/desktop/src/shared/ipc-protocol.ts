@@ -947,17 +947,16 @@ export const ModelProfileSchema = z.object({
 });
 export type ModelProfile = z.infer<typeof ModelProfileSchema>;
 
-export const DEFAULT_DESKTOP_MODEL_PROFILE_ID = "hunyuan-hy4-preview";
-export const MODEL_DEFAULTS_VERSION = 2;
+export const DEFAULT_DESKTOP_MODEL_PROFILE_ID = "hunyuan-hy4";
+export const MODEL_DEFAULTS_VERSION = 3;
 
 export const DEFAULT_MODEL_PROFILES: readonly ModelProfile[] = [
   {
-    id: "hunyuan-hy4-preview",
-    name: "腾讯混元 Hy4 Preview",
+    id: "hunyuan-hy4",
+    name: "腾讯混元 Hy4",
     provider: "hunyuan",
-    model: "hy4-preview",
+    model: "hy4",
   },
-  { id: "hunyuan-hy3", name: "腾讯混元 Hy3", provider: "hunyuan", model: "hy3" },
   { id: "auto", name: "自动选择", provider: "auto", model: "auto", hasCredential: true },
   {
     id: "ollama",

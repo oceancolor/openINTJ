@@ -124,8 +124,8 @@ if [ -n "$API_KEY" ]; then
             # 直接创建 .env 文件
             cat > "$ENV_FILE" <<EOF
 HUNYUAN_API_KEY=${API_KEY}
-HUNYUAN_BASE_URL=https://api.hunyuan.cloud.tencent.com/v1
-HUNYUAN_MODEL=hunyuan-turbos-latest
+HUNYUAN_BASE_URL=https://tokenhub.tencentmaas.com/v1
+HUNYUAN_MODEL=hy4
 HUNYUAN_VISION_MODEL=hunyuan-vision
 EOF
         fi

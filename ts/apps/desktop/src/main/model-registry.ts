@@ -59,7 +59,9 @@ export const createModelRegistry = (opts: {
       const credential =
         opts.credentials.get(profile.id) ??
         (profile.provider === "hunyuan"
-          ? (opts.credentials.get("hunyuan-hy4-preview") ?? opts.credentials.get("hunyuan-hy3"))
+          ? (opts.credentials.get("hunyuan-hy4") ??
+            opts.credentials.get("hunyuan-hy4-preview") ??
+            opts.credentials.get("hunyuan-hy3"))
           : undefined);
       if (credential && names.key) env[names.key] = credential;
       if (profile.baseUrl) env[names.baseUrl] = profile.baseUrl;

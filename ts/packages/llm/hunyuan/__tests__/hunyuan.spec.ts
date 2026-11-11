@@ -15,17 +15,17 @@ import {
 } from "../src/index.js";
 
 describe("Hy4 reasoning token helpers", () => {
-  it("treats hy4-preview as a reasoning model and floors small budgets", () => {
-    expect(isHunyuanReasoningModel("hy4-preview")).toBe(true);
-    expect(isHunyuanReasoningModel("hy3")).toBe(false);
-    expect(resolveHunyuanMaxTokens({ model: "hy4-preview", requested: 1024 })).toBe(
+  it("treats hy4 as a reasoning model and floors small budgets", () => {
+    expect(isHunyuanReasoningModel("hy4")).toBe(true);
+    expect(isHunyuanReasoningModel("private-chat-deployment")).toBe(false);
+    expect(resolveHunyuanMaxTokens({ model: "hy4", requested: 1024 })).toBe(
       HUNYUAN_REASONING_MAX_TOKEN_FLOOR,
     );
-    expect(resolveHunyuanMaxTokens({ model: "hy3", requested: 1024 })).toBe(1024);
-    expect(resolveHunyuanTimeoutMs({ model: "hy4-preview", requested: 60_000 })).toBe(
+    expect(resolveHunyuanMaxTokens({ model: "private-chat-deployment", requested: 1024 })).toBe(1024);
+    expect(resolveHunyuanTimeoutMs({ model: "hy4", requested: 60_000 })).toBe(
       HUNYUAN_REASONING_TIMEOUT_MS_FLOOR,
     );
-    expect(resolveHunyuanTimeoutMs({ model: "hy3", requested: 60_000 })).toBe(60_000);
+    expect(resolveHunyuanTimeoutMs({ model: "private-chat-deployment", requested: 60_000 })).toBe(60_000);
   });
 
   it("joins content parts and ignores null content", () => {
@@ -37,11 +37,11 @@ describe("Hy4 reasoning token helpers", () => {
 });
 
 describe("HunyuanClient (strict configuration)", () => {
-  it("uses the official Hy4 Preview TokenHub defaults", () => {
+  it("uses the official Hy4 TokenHub defaults", () => {
     const c = new HunyuanClient({ apiKey: "key" });
     expect(c.config.baseUrl).toBe(HUNYUAN_DEFAULT_BASE_URL);
     expect(c.config.model).toBe(HUNYUAN_DEFAULT_MODEL);
-    expect(c.config.model).toBe("hy4-preview");
+    expect(c.config.model).toBe("hy4");
     expect(c.config.maxTokens).toBe(8192);
   });
 
@@ -63,15 +63,22 @@ describe("HunyuanClient (strict configuration)", () => {
     const custom = loadHunyuanConfigFromEnv(
       {
         HUNYUAN_BASE_URL: "https://gateway.example.test/v1",
-        HUNYUAN_MODEL: "private-hy3-deployment",
+        HUNYUAN_MODEL: "private-custom-deployment",
       },
       (message) => warnings.push(message),
     );
     expect(custom).toMatchObject({
       baseUrl: "https://gateway.example.test/v1",
-      model: "private-hy3-deployment",
+      model: "private-custom-deployment",
     });
     expect(warnings).toHaveLength(2);
+  });
+
+  it("maps retired hy4-preview / hy3 model names to hy4", () => {
+    for (const legacy of ["hy4-preview", "hy3", "hy3-preview", "hunyuan-turbos-latest"]) {
+      const migrated = loadHunyuanConfigFromEnv({ HUNYUAN_MODEL: legacy }, () => {});
+      expect(migrated.model).toBe("hy4");
+    }
   });
 
   it("fails closed when no api key is configured", async () => {
@@ -109,7 +116,7 @@ describe("HunyuanClient (live mode with fetch mock)", () => {
       expect(String(url)).toMatch(/chat\/completions$/);
       expect(reqInit.headers["Authorization"]).toBe("Bearer test-key");
       const body = JSON.parse(reqInit.body);
-      expect(body.model).toBe("hy4-preview");
+      expect(body.model).toBe("hy4");
       return new Response(
         JSON.stringify({
           choices: [{ message: { role: "assistant", content: "hi from llm" } }],
@@ -241,11 +248,11 @@ describe("HunyuanClient (live mode with fetch mock)", () => {
     }) as unknown as typeof fetch;
     const c = new HunyuanClient({ apiKey: "k" });
     await c.chat([{ role: "user", content: "x" }], { maxTokens: 1024 });
-    expect(body["model"]).toBe("hy4-preview");
+    expect(body["model"]).toBe("hy4");
     expect(body["max_tokens"]).toBe(HUNYUAN_REASONING_MAX_TOKEN_FLOOR);
   });
 
-  it("does not floor max_tokens for Hy3", async () => {
+  it("does not floor max_tokens for non-reasoning custom models", async () => {
     let body: Record<string, unknown> = {};
     globalThis.fetch = (async (_url: unknown, init: unknown) => {
       body = JSON.parse((init as { body: string }).body);
@@ -253,7 +260,7 @@ describe("HunyuanClient (live mode with fetch mock)", () => {
         status: 200,
       });
     }) as unknown as typeof fetch;
-    const c = new HunyuanClient({ apiKey: "k", model: "hy3" });
+    const c = new HunyuanClient({ apiKey: "k", model: "private-chat-deployment" });
     await c.chat([{ role: "user", content: "x" }], { maxTokens: 1024 });
     expect(body["max_tokens"]).toBe(1024);
   });

@@ -338,12 +338,22 @@ void app
         activeModelProfileId: DEFAULT_DESKTOP_MODEL_PROFILE_ID,
         llmProvider: "hunyuan",
         modelDefaultsVersion: MODEL_DEFAULTS_VERSION,
+        // 已下线的旧混元配置档若曾被持久化，一并移除（凭据走新 id 回退链读取）。
+        ...(savedConfig.modelProfiles
+          ? {
+              modelProfiles: savedConfig.modelProfiles.filter(
+                (p) => p.id !== "hunyuan-hy3" && p.id !== "hunyuan-hy4-preview",
+              ),
+            }
+          : {}),
       });
     }
     if (!process.env["HUNYUAN_API_KEY"]) {
       try {
         const storedKey =
-          credentials.get(DEFAULT_DESKTOP_MODEL_PROFILE_ID) ?? credentials.get("hunyuan-hy3");
+          credentials.get(DEFAULT_DESKTOP_MODEL_PROFILE_ID) ??
+          credentials.get("hunyuan-hy4-preview") ??
+          credentials.get("hunyuan-hy3");
         if (storedKey) process.env["HUNYUAN_API_KEY"] = storedKey;
       } catch (error) {
         console.warn("[OpenINTJ desktop] 无法读取安全存储中的混元凭据", error);
@@ -361,7 +371,10 @@ void app
     });
     if (needsDefaultBump) {
       for (const conversation of workbench.bootstrap().conversations) {
-        if (conversation.modelProfileId === "hunyuan-hy3") {
+        if (
+          conversation.modelProfileId === "hunyuan-hy3" ||
+          conversation.modelProfileId === "hunyuan-hy4-preview"
+        ) {
           workbench.updateConversation(conversation.id, {
             modelProfileId: DEFAULT_DESKTOP_MODEL_PROFILE_ID,
           });
@@ -373,13 +386,15 @@ void app
       savedConfig.llmProvider ??
       "hunyuan";
     if (
+      process.env["HUNYUAN_MODEL"] === "hy4-preview" ||
+      process.env["HUNYUAN_MODEL"] === "hy3" ||
       process.env["HUNYUAN_MODEL"] === "hy3-preview" ||
       process.env["HUNYUAN_MODEL"] === "hunyuan-turbos-latest"
     ) {
       console.warn(
-        `[OpenINTJ desktop] 已将旧 Hunyuan 模型 '${process.env["HUNYUAN_MODEL"]}' 迁移为 'hy4-preview'`,
+        `[OpenINTJ desktop] 已将旧 Hunyuan 模型 '${process.env["HUNYUAN_MODEL"]}' 迁移为 'hy4'`,
       );
-      process.env["HUNYUAN_MODEL"] = "hy4-preview";
+      process.env["HUNYUAN_MODEL"] = "hy4";
     }
     const envSummary = summarizeLlmEnv();
     console.log(`[OpenINTJ desktop] llm: ${envSummary.summary}`);

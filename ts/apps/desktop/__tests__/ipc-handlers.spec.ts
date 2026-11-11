@@ -618,7 +618,7 @@ describe("IPC handler registration", () => {
       visionChat: vi.fn(async () => "vision"),
       getStatus: () => ({
         provider: "hunyuan",
-        model: "hy3",
+        model: "hy4",
         available: true,
         mode: "live" as const,
         status: "connected",
@@ -634,7 +634,7 @@ describe("IPC handler registration", () => {
       modelRegistry: {
         list: () => [],
         resolve: vi.fn(async () => selectedClient),
-        test: vi.fn(async () => ({ ok: true, provider: "hunyuan", model: "hy3" })),
+        test: vi.fn(async () => ({ ok: true, provider: "hunyuan", model: "hy4" })),
         clear: vi.fn(),
       },
     });
@@ -644,7 +644,7 @@ describe("IPC handler registration", () => {
       {
         query: "请生成 report.md 文件",
         conversationId: conversation.id,
-        modelProfileId: "hunyuan-hy3",
+        modelProfileId: "hunyuan-hy4",
       },
     )) as { finalAnswer: string };
 
@@ -668,7 +668,7 @@ describe("IPC handler registration", () => {
       visionChat: vi.fn(async () => "vision"),
       getStatus: () => ({
         provider: "hunyuan",
-        model: "hy4-preview",
+        model: "hy4",
         available: true,
         mode: "live" as const,
         status: "connected",
@@ -684,7 +684,7 @@ describe("IPC handler registration", () => {
       modelRegistry: {
         list: () => [],
         resolve: vi.fn(async () => selectedClient),
-        test: vi.fn(async () => ({ ok: true, provider: "hunyuan", model: "hy4-preview" })),
+        test: vi.fn(async () => ({ ok: true, provider: "hunyuan", model: "hy4" })),
         clear: vi.fn(),
       },
     });
@@ -694,7 +694,7 @@ describe("IPC handler registration", () => {
       {
         query: "请生成一张以「大厂病」为主题的评论文章封面图",
         conversationId: conversation.id,
-        modelProfileId: "hunyuan-hy4-preview",
+        modelProfileId: "hunyuan-hy4",
       },
     )) as { finalAnswer: string };
 

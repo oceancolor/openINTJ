@@ -20,7 +20,7 @@ describe("WorkbenchStore", () => {
     const seeded = store.bootstrap();
     expect(seeded.workspaces).toHaveLength(1);
     expect(seeded.workspaces[0]?.rootPath).toBe(root);
-    expect(seeded.conversations[0]?.modelProfileId).toBe("hunyuan-hy4-preview");
+    expect(seeded.conversations[0]?.modelProfileId).toBe("hunyuan-hy4");
     expect(seeded.tasks[0]?.title).toBe("Inbox");
     expect(seeded.conversations).toHaveLength(1);
 

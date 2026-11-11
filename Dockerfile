@@ -10,8 +10,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-ENV HUNYUAN_BASE_URL="https://api.hunyuan.cloud.tencent.com/v1"
-ENV HUNYUAN_MODEL="hunyuan-turbos-latest"
+ENV HUNYUAN_BASE_URL="https://tokenhub.tencentmaas.com/v1"
+ENV HUNYUAN_MODEL="hy4"
 ENV HUNYUAN_VISION_MODEL="hunyuan-vision"
 
 EXPOSE 8000

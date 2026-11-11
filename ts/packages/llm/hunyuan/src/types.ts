@@ -1,9 +1,10 @@
 import { z } from "zod";
 
 export const HUNYUAN_DEFAULT_BASE_URL = "https://tokenhub.tencentmaas.com/v1";
-export const HUNYUAN_DEFAULT_MODEL = "hy4-preview";
+export const HUNYUAN_DEFAULT_MODEL = "hy4";
 export const HUNYUAN_DEPRECATED_BASE_URL = "https://api.hunyuan.cloud.tencent.com/v1";
-export const HUNYUAN_DEPRECATED_MODELS = new Set(["hunyuan-turbos-latest", "hy3-preview"]);
+/** 已下线/退役的旧模型名：命中时统一迁移到当前默认（正式版 Hy4）。 */
+export const HUNYUAN_DEPRECATED_MODELS = new Set(["hunyuan-turbos-latest", "hy3-preview", "hy3", "hy4-preview"]);
 
 export const HunyuanConfigSchema = z.object({
   apiKey: z.string().default(""),
