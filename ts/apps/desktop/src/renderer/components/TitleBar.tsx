@@ -1,6 +1,6 @@
 import React from "react";
 import { TITLE_BAR_HEIGHT } from "../../shared/ipc-protocol.js";
-import appIcon from "../assets/app-icon.png";
+import avatarLogo from "../assets/app-icon.png";
 
 type MenuId = "file" | "edit" | "view" | "window";
 
@@ -86,22 +86,32 @@ export const TitleBar: React.FC = () => {
     <header
       ref={rootRef}
       data-testid="title-bar"
-      className="titlebar-drag shrink-0 w-full flex items-center text-xs text-white/60 select-none bg-ink"
+      className="titlebar-drag shrink-0 w-full flex items-center text-xs text-muted select-none bg-panel border-b border-line"
       style={{ height: `env(titlebar-area-height, ${TITLE_BAR_HEIGHT}px)` }}
     >
       <div
         className="h-full flex items-center gap-1 min-w-0"
         style={{
           width: "env(titlebar-area-width, 100%)",
-          paddingLeft: `env(titlebar-area-x, ${platform === "darwin" ? "78px" : "8px"})`,
+          // 左栏「工作区」标题为 px-3（12px）；logo 左缘与之对齐。
+          paddingLeft:
+            platform === "darwin"
+              ? `env(titlebar-area-x, 78px)`
+              : `calc(env(titlebar-area-x, 0px) + 12px)`,
         }}
       >
-        <img
-          src={appIcon}
-          alt=""
+        {/* INTJ 紫老头头像：紫发黑框眼镜；小尺寸下放大面部保证可辨。 */}
+        <div
           data-testid="title-bar-logo"
-          className="titlebar-no-drag h-6 w-6 rounded-[6px] ml-[2px] mr-1 shrink-0 ring-1 ring-white/20"
-        />
+          className="titlebar-no-drag mr-1 h-[26px] w-[26px] shrink-0 overflow-hidden rounded-[7px] bg-[#e4def8] ring-1 ring-[#c9bdf0]"
+        >
+          <img
+            src={avatarLogo}
+            alt="openINTJ"
+            draggable={false}
+            className="h-full w-full object-cover"
+          />
+        </div>
         {(Object.keys(menus) as MenuId[]).map((id) => {
           const menu = menus[id];
           return (
@@ -110,20 +120,20 @@ export const TitleBar: React.FC = () => {
                 type="button"
                 className={
                   open === id
-                    ? "px-2 py-0.5 rounded bg-white/10 text-white"
-                    : "px-2 py-0.5 rounded text-white/60 hover:bg-white/10 hover:text-white"
+                    ? "px-2 py-0.5 rounded bg-ink/5 text-ink"
+                    : "px-2 py-0.5 rounded text-muted hover:bg-ink/5 hover:text-ink"
                 }
                 onClick={() => toggle(id)}
               >
                 {menu.label}
               </button>
               {open === id ? (
-                <div className="titlebar-no-drag absolute left-0 top-full z-50 min-w-[9rem] py-1 rounded-lg border border-white/10 bg-ink shadow-pop">
+                <div className="titlebar-no-drag absolute left-0 top-full z-50 min-w-[9rem] py-1 rounded-lg border border-line bg-white shadow-pop">
                   {menu.items.map((item) => (
                     <button
                       key={item.label}
                       type="button"
-                      className="block w-full px-3 py-1.5 text-left text-white/75 hover:bg-white/10 hover:text-white"
+                      className="block w-full px-3 py-1.5 text-left text-muted hover:bg-rail hover:text-ink"
                       onClick={() => {
                         item.onClick();
                         setOpen(null);
@@ -141,14 +151,14 @@ export const TitleBar: React.FC = () => {
           <div className="titlebar-no-drag ml-auto flex">
             <button
               type="button"
-              className="px-3 py-0.5 text-white/60 hover:bg-white/10 hover:text-white"
+              className="px-3 py-0.5 text-muted hover:bg-ink/5 hover:text-ink"
               onClick={() => void window.openintj.windowChrome("minimize")}
             >
               –
             </button>
             <button
               type="button"
-              className="px-3 py-0.5 text-white/60 hover:bg-white/10 hover:text-white"
+              className="px-3 py-0.5 text-muted hover:bg-ink/5 hover:text-ink"
               onClick={() => void window.openintj.windowChrome("maximize")}
             >
               □

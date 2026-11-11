@@ -100,6 +100,9 @@ export const TrajectoryPanel: React.FC<{ entries: TrajectoryEntry[] }> = ({ entr
             <div key={i} className="border-l border-linedark pl-2">
               <div className={`font-semibold ${KIND_COLORS[e.kind] ?? "text-muted"}`}>
                 {KIND_LABELS[e.kind] ?? e.kind}
+                <span className="ml-1.5 font-mono text-[10px] font-normal text-faint">
+                  {new Date(e.ts).toLocaleTimeString()}
+                </span>
                 {searchHit ? (
                   <span className="ml-1.5 text-[10px] text-moss">search</span>
                 ) : null}

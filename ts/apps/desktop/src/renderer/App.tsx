@@ -12,6 +12,7 @@ import {
   extractWorkspaceArtifactPaths,
   preferredPreviewPath,
 } from "../shared/workspace-view.js";
+import { AgentContextBar } from "./components/AgentContextBar.js";
 import { ApprovalBanner } from "./components/ApprovalBanner.js";
 import { type ChatMessage, ChatPanel } from "./components/ChatPanel.js";
 import { DormantPanel } from "./components/DormantPanel.js";
@@ -24,16 +25,16 @@ import { SkillPanel } from "./components/SkillPanel.js";
 import { StatusBar, type StatusSnapshot } from "./components/StatusBar.js";
 import { SystemPanel } from "./components/SystemPanel.js";
 import { TaskSidebar } from "./components/TaskSidebar.js";
+import { TimelinePanel } from "./components/TimelinePanel.js";
 import { TitleBar } from "./components/TitleBar.js";
-import { type TrajectoryEntry, TrajectoryPanel } from "./components/TrajectoryPanel.js";
+import { type TrajectoryEntry } from "./components/TrajectoryPanel.js";
 import { UpdateBanner } from "./components/UpdateBanner.js";
 import { FilePreview, WorkspaceWorkbench, desktopWorkspaceClient } from "./workspace/index.js";
 import "./types.js";
 
 type RightTab =
-  | "chat"
   | "tasks"
-  | "trajectory"
+  | "timeline"
   | "memory"
   | "profile"
   | "identity"
@@ -41,11 +42,89 @@ type RightTab =
   | "dormant"
   | "skills"
   | "system"
-  | "settings"
-  | "preview";
+  | "settings";
 
 const sameFsPath = (left: string, right: string): boolean =>
   left.replace(/\\/g, "/").toLowerCase() === right.replace(/\\/g, "/").toLowerCase();
+
+/* ---- 三栏布局尺寸（可拖拽，localStorage 持久化） ---- */
+const clampSize = (value: number, min: number, max: number): number =>
+  Math.min(max, Math.max(min, value));
+
+const loadLayoutNumber = (key: string, fallback: number): number => {
+  try {
+    const raw = Number(window.localStorage.getItem(key));
+    return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const saveLayoutNumber = (key: string, value: number): void => {
+  try {
+    window.localStorage.setItem(key, String(value));
+  } catch {
+    // 隐私模式等场景下静默放弃持久化，不影响拖拽本身。
+  }
+};
+
+const LEFT_WIDTH = { key: "openintj.layout.leftWidth", def: 268, min: 200, max: 460 };
+const RIGHT_WIDTH = { key: "openintj.layout.rightWidth", def: 360, min: 260, max: 580 };
+const PREVIEW_RATIO = { key: "openintj.layout.previewRatio", def: 0.36, min: 0.14, max: 0.72 };
+
+interface SplitterProps {
+  orientation: "vertical" | "horizontal";
+  testId: string;
+  label: string;
+  onPointerDown: (event: React.PointerEvent) => void;
+  onDoubleClick: () => void;
+  onNudge: (delta: number) => void;
+}
+
+/** 可拖拽分隔条：鼠标拖动 / 方向键微调 / 双击复位，悬停时呈浅紫高亮。 */
+const Splitter: React.FC<SplitterProps> = ({
+  orientation,
+  testId,
+  label,
+  onPointerDown,
+  onDoubleClick,
+  onNudge,
+}) => {
+  const vertical = orientation === "vertical";
+  return (
+    <div
+      role="separator"
+      aria-orientation={orientation}
+      aria-label={label}
+      title={`${label}（拖动调整，双击复位）`}
+      data-testid={testId}
+      tabIndex={0}
+      className={
+        vertical
+          ? "group relative z-10 w-[7px] shrink-0 cursor-col-resize touch-none outline-none"
+          : "group relative z-10 h-[7px] shrink-0 cursor-row-resize touch-none outline-none"
+      }
+      onPointerDown={onPointerDown}
+      onDoubleClick={onDoubleClick}
+      onKeyDown={(event) => {
+        const keys = vertical ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"];
+        if (!keys.includes(event.key)) return;
+        event.preventDefault();
+        onNudge(event.key === keys[1] ? 10 : -10);
+      }}
+    >
+      <span
+        className={
+          (vertical
+            ? "absolute inset-y-0 left-1/2 w-px -translate-x-1/2 "
+            : "absolute inset-x-0 top-1/2 h-px -translate-y-1/2 ") +
+          "bg-line transition-all group-hover:bg-[#8f7fe0] group-focus-visible:bg-[#8f7fe0] " +
+          (vertical ? "group-hover:w-[3px] group-focus-visible:w-[3px]" : "group-hover:h-[3px] group-focus-visible:h-[3px]")
+        }
+      />
+    </div>
+  );
+};
 
 export const App = (): JSX.Element => {
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
@@ -53,7 +132,7 @@ export const App = (): JSX.Element => {
   const [status, setStatus] = React.useState<StatusSnapshot | undefined>();
   const [pending, setPending] = React.useState(false);
   const [approvals, setApprovals] = React.useState<ApprovalRequestView[]>([]);
-  const [rightTab, setRightTab] = React.useState<RightTab>("chat");
+  const [rightTab, setRightTab] = React.useState<RightTab>("tasks");
   const [profiles, setProfiles] = React.useState<ModelProfile[]>([]);
   const [workspaces, setWorkspaces] = React.useState<WorkbenchWorkspace[]>([]);
   const [tasks, setTasks] = React.useState<WorkbenchTask[]>([]);
@@ -64,6 +143,69 @@ export const App = (): JSX.Element => {
   const [selectedWorkspacePath, setSelectedWorkspacePath] = React.useState<string>();
   const [workspaceRoot, setWorkspaceRoot] = React.useState<string>();
   const workspaceClient = React.useMemo(() => desktopWorkspaceClient(), []);
+
+  /* ---- 可拖拽布局尺寸 ---- */
+  const [leftWidth, setLeftWidth] = React.useState(() =>
+    clampSize(loadLayoutNumber(LEFT_WIDTH.key, LEFT_WIDTH.def), LEFT_WIDTH.min, LEFT_WIDTH.max),
+  );
+  const [rightWidth, setRightWidth] = React.useState(() =>
+    clampSize(loadLayoutNumber(RIGHT_WIDTH.key, RIGHT_WIDTH.def), RIGHT_WIDTH.min, RIGHT_WIDTH.max),
+  );
+  const [previewRatio, setPreviewRatio] = React.useState(() =>
+    clampSize(
+      loadLayoutNumber(PREVIEW_RATIO.key, PREVIEW_RATIO.def),
+      PREVIEW_RATIO.min,
+      PREVIEW_RATIO.max,
+    ),
+  );
+  const centerColRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => saveLayoutNumber(LEFT_WIDTH.key, leftWidth), [leftWidth]);
+  React.useEffect(() => saveLayoutNumber(RIGHT_WIDTH.key, rightWidth), [rightWidth]);
+  React.useEffect(() => saveLayoutNumber(PREVIEW_RATIO.key, previewRatio), [previewRatio]);
+
+  /** 通用拖拽会话：按下后跟随指针，松开清理；期间锁定光标与文本选区。 */
+  const beginDrag = (
+    event: React.PointerEvent,
+    cursor: string,
+    onMove: (dx: number, dy: number) => void,
+  ): void => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const move = (e: PointerEvent): void => onMove(e.clientX - startX, e.clientY - startY);
+    const up = (): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    document.body.style.cursor = cursor;
+    document.body.style.userSelect = "none";
+  };
+
+  const dragLeftWidth = (event: React.PointerEvent): void => {
+    const start = leftWidth;
+    beginDrag(event, "col-resize", (dx) =>
+      setLeftWidth(clampSize(start + dx, LEFT_WIDTH.min, LEFT_WIDTH.max)),
+    );
+  };
+  const dragRightWidth = (event: React.PointerEvent): void => {
+    const start = rightWidth;
+    beginDrag(event, "col-resize", (dx) =>
+      setRightWidth(clampSize(start - dx, RIGHT_WIDTH.min, RIGHT_WIDTH.max)),
+    );
+  };
+  const dragPreviewRatio = (event: React.PointerEvent): void => {
+    const start = previewRatio;
+    const height = centerColRef.current?.getBoundingClientRect().height ?? 0;
+    if (height <= 0) return;
+    beginDrag(event, "row-resize", (_dx, dy) =>
+      setPreviewRatio(clampSize(start + dy / height, PREVIEW_RATIO.min, PREVIEW_RATIO.max)),
+    );
+  };
 
   const refreshWorkbench = React.useCallback(async (): Promise<void> => {
     const [snapshot, modelProfiles, config] = await Promise.all([
@@ -292,7 +434,6 @@ export const App = (): JSX.Element => {
         ]) ?? artifactsFromAnswer(res.finalAnswer)[0]?.path;
       if (artifactPath) {
         setSelectedWorkspacePath(artifactPath);
-        setRightTab("preview");
       }
     } catch (e) {
       const errorLine: ChatMessage = { role: "system", content: `[错误] ${(e as Error).message}` };
@@ -462,34 +603,33 @@ export const App = (): JSX.Element => {
   const learningEnabled = status?.skills?.learning === true;
   const skillsPending = status?.skills?.pendingProposals ?? 0;
 
+  const activeWorkspace = workspaces.find((item) => item.id === activeWorkspaceId);
+  // 本任务产物（轻联动）：从当前对话消息中提取已生成的文件路径。
+  const taskArtifacts = [
+    ...new Set(messages.flatMap((message) => extractWorkspaceArtifactPaths(message.content))),
+  ].slice(0, 12);
+
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-backdrop text-ink">
       <TitleBar />
       <UpdateBanner />
       <div className="flex-1 min-h-0 flex">
-        <div className="flex-1 min-w-0 min-h-0">
-          <WorkspaceWorkbench
-            client={workspaceClient}
-            rootLabel={
-              workspaces.find((item) => item.id === activeWorkspaceId)?.rootPath ?? workspaceRoot
-            }
-            selectedPath={selectedWorkspacePath}
-            onSelectPath={(path) => setSelectedWorkspacePath(path)}
-            workspaceOpen={Boolean(activeWorkspaceId)}
-          />
-        </div>
-        <div className="w-[380px] shrink-0 flex flex-col h-full min-h-0 bg-panel border-l border-line">
-          <div className="shrink-0 px-4 py-3 border-b border-line text-xs bg-inspector/60">
+        {/* 左栏：工作区（切换 + 文件管理器） */}
+        <div
+          className="shrink-0 flex flex-col h-full min-h-0 bg-panel"
+          style={{ width: leftWidth }}
+        >
+          <div className="shrink-0 px-3 py-2.5 border-b border-line text-xs">
             <div className="text-[10px] font-bold uppercase tracking-[0.13em] text-muted">
               工作区
             </div>
             <div
               className="truncate mt-1 text-[13px] font-semibold text-ink"
-              title={workspaces.find((item) => item.id === activeWorkspaceId)?.rootPath}
+              title={activeWorkspace?.rootPath}
             >
-              {workspaces.find((item) => item.id === activeWorkspaceId)?.name ?? "未打开工作区"}
+              {activeWorkspace?.name ?? "未打开工作区"}
             </div>
-            <div className="mt-2.5 flex gap-1.5">
+            <div className="mt-2 flex gap-1.5">
               <button
                 type="button"
                 className="flex-1 px-2 py-1.5 rounded-lg bg-ink text-white hover:bg-inksoft"
@@ -516,12 +656,117 @@ export const App = (): JSX.Element => {
               </button>
             ) : null}
           </div>
+          <div className="flex-1 min-h-0">
+            <WorkspaceWorkbench
+              client={workspaceClient}
+              rootLabel={activeWorkspace?.rootPath ?? workspaceRoot}
+              selectedPath={selectedWorkspacePath}
+              onSelectPath={(path) => setSelectedWorkspacePath(path)}
+              showPreview={false}
+              workspaceOpen={Boolean(activeWorkspaceId)}
+            />
+          </div>
+        </div>
+        <Splitter
+          orientation="vertical"
+          testId="layout-splitter-left"
+          label="调整工作区栏宽度"
+          onPointerDown={dragLeftWidth}
+          onDoubleClick={() => setLeftWidth(LEFT_WIDTH.def)}
+          onNudge={(delta) =>
+            setLeftWidth((w) => clampSize(w + delta, LEFT_WIDTH.min, LEFT_WIDTH.max))
+          }
+        />
+        {/* 中栏：Agent 主视图（上下文条 + 可分屏预览 + 对话） */}
+        <div ref={centerColRef} className="flex-1 min-w-0 flex flex-col h-full min-h-0">
+          <AgentContextBar
+            workspaceName={activeWorkspace?.name}
+            tasks={tasks.filter(
+              (task) => task.workspaceId === activeWorkspaceId && task.status !== "archived",
+            )}
+            conversations={conversations}
+            activeTaskId={activeTaskId}
+            activeConversationId={activeConversationId}
+            onSelectTask={selectTask}
+            onSelectConversation={selectConversation}
+            context={status?.context}
+            previewPath={selectedWorkspacePath}
+            onClosePreview={() => setSelectedWorkspacePath(undefined)}
+          />
+          {selectedWorkspacePath ? (
+            <>
+              <div
+                className="shrink-0 min-h-0 bg-panel"
+                style={{ height: `${previewRatio * 100}%` }}
+              >
+                <FilePreview
+                  client={workspaceClient}
+                  path={selectedWorkspacePath}
+                  onReveal={(path) => void workspaceClient.reveal(path)}
+                />
+              </div>
+              <Splitter
+                orientation="horizontal"
+                testId="layout-splitter-preview"
+                label="调整预览区高度"
+                onPointerDown={dragPreviewRatio}
+                onDoubleClick={() => setPreviewRatio(PREVIEW_RATIO.def)}
+                onNudge={(delta) =>
+                  setPreviewRatio((r) =>
+                    clampSize(r + delta / 400, PREVIEW_RATIO.min, PREVIEW_RATIO.max),
+                  )
+                }
+              />
+            </>
+          ) : null}
+          <div className="flex-1 min-h-0">
+            <ChatPanel
+              messages={messages}
+              onSend={(t) => void handleSend(t)}
+              pending={pending}
+              profiles={profiles}
+              modelProfileId={
+                conversations.find((conversation) => conversation.id === activeConversationId)
+                  ?.modelProfileId
+              }
+              onModelChange={(id) => void changeConversationModel(id)}
+              context={status?.context}
+              onOpenWorkspacePath={(path) => {
+                setSelectedWorkspacePath(path);
+              }}
+              onSkillFeedback={
+                activeConversationId
+                  ? (sentiment) => {
+                      void window.openintj.skillsFeedback({
+                        conversationId: activeConversationId,
+                        sentiment,
+                      });
+                    }
+                  : undefined
+              }
+            />
+          </div>
+        </div>
+        <Splitter
+          orientation="vertical"
+          testId="layout-splitter-right"
+          label="调整检查器栏宽度"
+          onPointerDown={dragRightWidth}
+          onDoubleClick={() => setRightWidth(RIGHT_WIDTH.def)}
+          onNudge={(delta) =>
+            setRightWidth((w) => clampSize(w - delta, RIGHT_WIDTH.min, RIGHT_WIDTH.max))
+          }
+        />
+        {/* 右栏：检查器（任务 / 时间线 / 记忆 …） */}
+        <div
+          className="shrink-0 flex flex-col h-full min-h-0 bg-panel"
+          style={{ width: rightWidth }}
+        >
           <div className="shrink-0 flex items-center gap-1 border-b border-line bg-rail/50 px-2 py-1.5 text-xs overflow-x-auto whitespace-nowrap">
             {(
               [
-                ["chat", "对话"],
                 ["tasks", "任务"],
-                ["trajectory", "推理轨迹"],
+                ["timeline", "时间线"],
                 ["memory", "记忆"],
                 ["profile", "档案"],
                 ["identity", "身份"],
@@ -543,7 +788,7 @@ export const App = (): JSX.Element => {
                 }
               >
                 {label}
-                {id === "trajectory" && trajectory.length > 0 ? (
+                {id === "timeline" && trajectory.length > 0 ? (
                   <span className="ml-1.5 font-mono text-[10px] text-faint">
                     {trajectory.length}
                   </span>
@@ -560,50 +805,10 @@ export const App = (): JSX.Element => {
                 ) : null}
               </button>
             ))}
-            {selectedWorkspacePath ? (
-              <button
-                type="button"
-                onClick={() => setRightTab("preview")}
-                className={
-                  rightTab === "preview"
-                    ? "shrink-0 rounded-lg bg-white px-3 py-1.5 font-semibold text-ink shadow-card"
-                    : "shrink-0 rounded-lg px-3 py-1.5 text-muted hover:bg-white/70 hover:text-ink"
-                }
-              >
-                预览
-              </button>
-            ) : null}
           </div>
           <ApprovalBanner pending={approvals} onDecide={decideApproval} />
           <div className="flex-1 min-h-0">
-            {rightTab === "chat" ? (
-              <ChatPanel
-                messages={messages}
-                onSend={(t) => void handleSend(t)}
-                pending={pending}
-                profiles={profiles}
-                modelProfileId={
-                  conversations.find((conversation) => conversation.id === activeConversationId)
-                    ?.modelProfileId
-                }
-                onModelChange={(id) => void changeConversationModel(id)}
-                context={status?.context}
-                onOpenWorkspacePath={(path) => {
-                  setSelectedWorkspacePath(path);
-                  setRightTab("preview");
-                }}
-                onSkillFeedback={
-                  activeConversationId
-                    ? (sentiment) => {
-                        void window.openintj.skillsFeedback({
-                          conversationId: activeConversationId,
-                          sentiment,
-                        });
-                      }
-                    : undefined
-                }
-              />
-            ) : rightTab === "tasks" ? (
+            {rightTab === "tasks" ? (
               <TaskSidebar
                 showWorkspace={false}
                 workspaces={workspaces}
@@ -623,9 +828,16 @@ export const App = (): JSX.Element => {
                   if (title) void updateTask(task, { title });
                 }}
                 onArchiveTask={(task) => void updateTask(task, { status: "archived" })}
+                taskArtifacts={taskArtifacts}
+                onOpenArtifact={(path) => setSelectedWorkspacePath(path)}
               />
-            ) : rightTab === "trajectory" ? (
-              <TrajectoryPanel entries={trajectory} />
+            ) : rightTab === "timeline" ? (
+              <TimelinePanel
+                entries={trajectory}
+                taskPoolActive={status?.taskPool?.active ?? false}
+                pendingApprovals={approvals.length}
+                running={pending}
+              />
             ) : rightTab === "memory" ? (
               <MemoryPanel />
             ) : rightTab === "profile" ? (
@@ -640,12 +852,6 @@ export const App = (): JSX.Element => {
               <SkillPanel skillsEnabled={skillsEnabled} learningEnabled={learningEnabled} />
             ) : rightTab === "system" ? (
               <SystemPanel />
-            ) : rightTab === "preview" && selectedWorkspacePath ? (
-              <FilePreview
-                client={workspaceClient}
-                path={selectedWorkspacePath}
-                onReveal={(path) => void workspaceClient.reveal(path)}
-              />
             ) : (
               <SettingsPanel />
             )}

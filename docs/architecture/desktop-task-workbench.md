@@ -41,7 +41,7 @@ Workspace(rootPath, dataDir?)
 `model-credentials.json`。保存或删除凭据、修改 Profile 时清除对应缓存。
 
 云模型统一走 OpenAI-compatible adapter；显式 provider 缺凭据或调用失败时 fail closed。
-默认 Profile 包含 Hy3、Kimi K3、MiniMax M3、GLM 5.2、Ollama、auto 与开发用 mock。
+默认 Profile 包含 Hy4、Kimi K3、MiniMax M3、GLM 5.2、Ollama、auto 与开发用 mock。
 
 ## 工作区切换和关闭
 

@@ -95,7 +95,7 @@ export const WorkspaceWorkbench: React.FC<{
       ) : null}
       {!workspaceOpen ? (
         <div className="flex-1 min-h-0 text-xs text-muted p-3">
-          当前没有打开的工作区。请在右侧打开一个目录。
+          当前没有打开的工作区。请在上方打开一个目录。
         </div>
       ) : (
         <div className={`flex-1 min-h-0 ${showPreview ? "grid grid-rows-2" : ""}`}>

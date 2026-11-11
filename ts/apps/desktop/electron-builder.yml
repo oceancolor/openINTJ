@@ -13,6 +13,7 @@ directories:
 files:
   - "out/**/*"
   - "package.json"
+  - "!**/*.tsbuildinfo"
   - "!node_modules/@openintj/**"
   - "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md,readme}"
 extraMetadata:
@@ -28,7 +29,7 @@ publish:
   repo: openINTJ
   releaseType: release
 win:
-  icon: resources/icon.png
+  icon: resources/icon.ico
   target:
     - target: nsis
       arch: [x64]
@@ -37,6 +38,8 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   shortcutName: OpenINTJ
+  installerIcon: resources/icon.ico
+  uninstallerIcon: resources/icon.ico
 mac:
   icon: resources/icon.png
   target:

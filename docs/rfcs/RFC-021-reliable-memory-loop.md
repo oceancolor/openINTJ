@@ -753,6 +753,37 @@ canonical 契约扩展候选结局存储（InMemory + SQLite 两实现，
 2. Hy 原生提示词适配臂与混元 writer 参评：可选诊断项，
    与激活决策门一并议，不单独排期。
 
+### 影子积累期开启（2026-11-11）
+
+按激活建议路径进入影子积累（决策：writer=混元云端、先修
+盲区、补轻量可观测、双门复盘）：
+
+- **修盲区**：新增 `buildScopedRecordSnapshots`（作用域内
+  active 记录、fail-closed 过滤、时间倒序、上限 32），桌面
+  入队时注入 writer 输入——writer 从此能提 supersede（此前
+  `scopedCurrentRecords` 写死为空，纠正类只能以 add 重复
+  提名）。校验上下文口径不变。
+- **轻量可观测**：canonical 新增按 policyVersion 聚合的
+  writer 计数（processedTurns/emptyTurns/deadLetters/
+  candidatesNominated/startedAt），管线每次结算落盘
+  （replayed 不重复计；计数失败不影响管线），SQLite 新表
+  `memory_writer_stats`；F14 状态面透出并在记忆面板展示。
+  分母就此成立（提名率/空转率/死信率可算；漏记率仍靠人审
+  抽查，空转≠漏记）。
+- **开启口径**：用户环境变量 `OPENINTJ_MEMORY_WRITER=llm`，
+  writer 跟随桌面聊天模型（policyVersion `g5-llm-v1`）；
+  影子期内切换聊天模型会混臂，需避免或记录。起始日
+  2026-11-11。注：当日 Hy4 Preview 下线，全系统默认模型
+  迁移至 Hy4 正式版（桌面配置档 `hunyuan-hy4`），影子 writer
+  随桌面重启切换为 hy4——积累期第一天以此为界，量小可忽略，
+  复盘时按 hy4 臂计。
+- **复盘双门**：累计已审（applied+dismissed）≥50 条，或
+  2026-12-02 届满，先到先开激活决策门复盘；已审候选沉淀
+  为留出样本。全程影子，零生效路径变更，随时可 `off` 停。
+- **验证**：plane-memory 134/4、storage-sqlite 37、desktop
+  typecheck + 111/2 + 生产构建全绿（新增计数落盘、作用域
+  快照、SQLite 重启后计数可读等用例）。
+
 ---
 
 ## 待决策 / 未解决问题

@@ -18,7 +18,7 @@ test.describe("desktop smoke (mock provider, no persist)", () => {
     await expect(page.getByTestId("title-bar")).not.toContainText("OpenINTJ");
     await expect(page.getByTestId("title-bar").getByRole("button", { name: "File" })).toBeVisible();
     await expect(page.getByTestId("workspace-workbench")).toBeVisible();
-    await expect(page.getByLabel("对话模型")).toHaveValue("hunyuan-hy4-preview");
+    await expect(page.getByLabel("对话模型")).toHaveValue("hunyuan-hy4");
     await expect(page.getByTestId("context-usage-ring")).toBeVisible();
   });
 
@@ -44,7 +44,7 @@ test.describe("desktop smoke (mock provider, no persist)", () => {
     await input.fill("你好");
     await page.getByRole("button", { name: "发送" }).click();
 
-    // 对话在右侧 Agent 栏；左侧工作台底色相近，必须圈在 chat-panel 内。
+    // 对话在中栏 Agent 主视图；左侧工作区底色相近，必须圈在 chat-panel 内。
     const chat = page.getByTestId("chat-panel");
     await expect(chat.getByText("你好", { exact: false }).first()).toBeVisible({ timeout: 5_000 });
     await expect(chat.getByText(/\[mock\] 收到：你好/)).toBeVisible({
@@ -69,7 +69,7 @@ test.describe("desktop smoke (mock provider, no persist)", () => {
     await expect(page.getByText("Inbox", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "+ 任务" }).click();
     await expect(page.getByText("新任务", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "对话", exact: true }).click();
+    // 对话常驻中栏，无需切标签即可继续。
 
     const selector = page.getByLabel("对话模型");
     await selector.selectOption("mock");
@@ -91,13 +91,13 @@ test.describe("desktop smoke (mock provider, no persist)", () => {
     const assistantBubble = chat.locator("div.bg-\\[\\#313244\\]");
     await expect(assistantBubble.first()).toBeVisible({ timeout: 15_000 });
 
-    // 推理轨迹 tab 上应显示一个数字小计（trajectory.length > 0）
-    const trajectoryTab = page.getByRole("button", { name: /推理轨迹/ });
+    // 时间线 tab 上应显示一个数字小计（trajectory.length > 0）
+    const trajectoryTab = page.getByRole("button", { name: /时间线/ });
     await expect(trajectoryTab).toBeVisible();
     await expect(trajectoryTab).toContainText(/\d+/, { timeout: 10_000 });
   });
 
-  test("workspace workbench is present and workspace actions sit in the agent rail", async ({
+  test("workspace workbench is present and workspace actions sit in the workspace column", async ({
     page,
   }) => {
     const stage = page.getByTestId("workspace-workbench");
@@ -114,8 +114,8 @@ test.describe("desktop smoke (mock provider, no persist)", () => {
     await expect(page.getByText(/Dormant 子系统未启用/)).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(/OPENINTJ_DORMANT=1/)).toBeVisible();
 
-    // 切回推理轨迹仍然可用
-    await page.getByRole("button", { name: /推理轨迹/ }).click();
+    // 切回时间线仍然可用
+    await page.getByRole("button", { name: /时间线/ }).click();
     await expect(page.getByText(/Dormant 子系统未启用/)).not.toBeVisible();
   });
 

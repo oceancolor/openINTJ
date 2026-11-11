@@ -22,6 +22,9 @@ export const TaskSidebar: React.FC<{
   onArchiveTask: (task: WorkbenchTask) => void;
   onOpenWorkspaceDir?: (() => void) | undefined;
   showWorkspace?: boolean | undefined;
+  /** 当前任务（当前对话）已生成的文件路径，点击在中栏预览。 */
+  taskArtifacts?: string[] | undefined;
+  onOpenArtifact?: ((path: string) => void) | undefined;
 }> = (props) => {
   const current = props.workspaces.find((workspace) => workspace.id === props.activeWorkspaceId);
   const showWorkspace = props.showWorkspace !== false;
@@ -147,6 +150,24 @@ export const TaskSidebar: React.FC<{
                     >
                       + 新对话
                     </button>
+                    {props.taskArtifacts && props.taskArtifacts.length > 0 ? (
+                      <div className="pt-1">
+                        <div className="px-1.5 text-[10px] font-bold uppercase tracking-[0.13em] text-muted">
+                          本任务产物
+                        </div>
+                        {props.taskArtifacts.map((path) => (
+                          <button
+                            type="button"
+                            key={path}
+                            className="block w-full truncate rounded-lg px-1.5 py-1 text-left text-muted hover:text-ink"
+                            title={path}
+                            onClick={() => props.onOpenArtifact?.(path)}
+                          >
+                            {path.split(/[\\/]/).pop() ?? path}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </div>

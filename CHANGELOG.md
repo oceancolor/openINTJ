@@ -8,6 +8,35 @@
 
 ### Changed
 
+- **桌面三栏工作台**：布局改为左中右三栏——左栏独立工作区
+  （切换 + 文件树），中栏 Agent 主视图（上下文条显示工作区/
+  任务/对话面包屑与上下文用量，点文件上下分屏预览），右栏
+  检查器以任务为首位（任务下管理对话记录，本任务产物可点开
+  预览），推理轨迹升级为含并行状态的时间线。顶栏改为浅色
+  外框，左上角 logo 为紫发黑框眼镜的二次元公子头像（浅紫
+  底），左缘与左栏「工作区」标题对齐；同一头像生成多尺寸
+  图标集（`resources/icon.png`/`icon.ico`），统一用于窗口、
+  任务栏、桌面快捷方式与 NSIS 安装包。左中右三栏边界与中栏
+  预览/对话横向分隔均可鼠标拖拽调整（方向键微调、双击复位，
+  尺寸本地持久化）。
+
+- **混元默认模型迁移至 Hy4 正式版**：`hy4-preview` 已下线，全系统
+  功能位置统一改为 `hy4`——桌面默认配置档改为 `hunyuan-hy4`
+  （`modelDefaultsVersion` 升至 3，旧配置档/会话引用自动迁移，
+  凭据沿旧 id 回退链读取），Hy3 配置档一并移除；混元客户端与
+  桌面启动迁移会把 `hy4-preview`/`hy3`/`hy3-preview`/
+  `hunyuan-turbos-latest` 旧名映射为 `hy4`（自定义模型名保持
+  不变）；根目录 Python 旧栈默认模型与端点同步更新。历史文档
+  中的旧名记载按史实保留。
+
+- **可靠记忆闭环影子积累期开启（RFC-021）**：影子 writer 补上
+  两处地基——入队时注入作用域内已有记录快照（writer 能提
+  纠正类 supersede，不再盲提）；处理计数按 policy 落盘并在
+  记忆面板状态面展示（已处理/空转/死信/提名）。桌面经
+  `OPENINTJ_MEMORY_WRITER=llm` 以当前聊天模型影子运行，
+  候选仍全部待人工审核、零自动生效。实施记录见
+  `docs/rfcs/RFC-021-reliable-memory-loop.md`。
+
 - **可靠记忆闭环 Hy-Memory 第二轮对照（RFC-021）**：Hy-Memory-
   30B-A3B 官方 8.03GB 混合精度 GGUF 已在本机 Ollama 部署
   （`hy-memory:8g`，模型目录迁至 F 盘），与通用 writer 同提示词
@@ -118,6 +147,11 @@
 
 ### Fixed
 
+- **Windows 打包失败（workspace 软链越界）**：`channels/identity/
+  sync/voice` 误列在桌面 `dependencies`，electron-builder 收集生产
+  依赖时顺 pnpm 软链打包到 app 目录外报错；四包本已由 vite 打入
+  主 bundle，改列 `devDependencies` 与其余 workspace 包对齐后
+  `package:win` 恢复，NSIS 安装包正常产出。
 - **长会话二次压缩不再让已压缩轮次回潮（RFC-021 G4 遗留）**：模型历史
   派生改为并集历次 `session.compacted` 覆盖集（精确集与旧前缀格式可
   混合），只展示最新摘要；此前只看最后一条压缩事件，覆盖集一旦非
