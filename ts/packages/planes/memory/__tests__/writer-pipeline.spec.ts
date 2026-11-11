@@ -12,6 +12,7 @@ import {
   type WriterInput,
   InMemoryCanonicalMemoryRepository,
   ShadowWriterPipeline,
+  buildScopedRecordSnapshots,
   createFixtureWriter,
   hashEvidenceText,
 } from "../src/index.js";
@@ -333,6 +334,102 @@ describe("G5.1 F13 影子管线 (T27)", () => {
     const outcomes = await repo2.listCandidateOutcomes({ status: "shadow_only" });
     expect(outcomes).toHaveLength(1);
     expect(JSON.parse(outcomes[0]!.candidateJson).content).toBe("重启后仍在");
+    // writer 计数同库持久：处理 1 轮、提名 1 条，重启后可读。
+    expect(await repo2.writerPipelineStats("v1")).toMatchObject({
+      processedTurns: 1,
+      emptyTurns: 0,
+      deadLetters: 0,
+      candidatesNominated: 1,
+    });
     await repo2.close();
+  });
+
+  it("writer 计数落盘：处理/空转/死信/提名单调累加，重放不重复计", async () => {
+    const repo = new InMemoryCanonicalMemoryRepository();
+    let tick = 1000;
+    const pipeline = new ShadowWriterPipeline({
+      repository: repo,
+      writer: createFixtureWriter(),
+      buildContext: buildContext(),
+      now: () => tick,
+    });
+    const job = { key, input: makeInput("记住：计数一") };
+    await pipeline.enqueue(job);
+    await pipeline.enqueue(job); // replayed：不计数
+    tick = 2000;
+    await pipeline.enqueue({
+      key: { ...key, sourceCommitId: "commit-empty" },
+      input: makeInput("没有任何标记的闲聊", { committedTurnRef: "commit-empty", inputHash: "h-empty" }),
+    });
+    const dead = new ShadowWriterPipeline({
+      repository: repo,
+      writer: {
+        writerId: "down",
+        async propose() {
+          throw new Error("down");
+        },
+      },
+      buildContext: buildContext(),
+      maxAttempts: 1,
+      now: () => tick,
+    });
+    await dead.enqueue({
+      key: { ...key, sourceCommitId: "commit-dead" },
+      input: makeInput("记住：死信", { committedTurnRef: "commit-dead", inputHash: "h-dead" }),
+    });
+    expect(await repo.writerPipelineStats("v1")).toEqual({
+      policyVersion: "v1",
+      processedTurns: 3,
+      emptyTurns: 1,
+      deadLetters: 1,
+      candidatesNominated: 1,
+      startedAt: 1000,
+      updatedAt: 2000,
+    });
+    expect(await repo.listWriterPipelineStats()).toHaveLength(1);
+  });
+
+  it("作用域快照：只给 writer 看 scope 内 active 记录（时间倒序+上限）", async () => {
+    const repo = new InMemoryCanonicalMemoryRepository();
+    const seed = async (fragmentId: string, scopeTags: string[], timestamp: number, state: "active" | "tombstoned" = "active") => {
+      await repo.applyMutation({
+        writeKey: `seed-${fragmentId}`,
+        inputHash: `h-${fragmentId}`,
+        kind: "upsert",
+        fragmentId,
+        ...(state !== "active" ? { initialState: state } : {}),
+        record: {
+          fragmentId,
+          content: `内容-${fragmentId}`,
+          memoryType: "long_term",
+          importance: 0.5,
+          taskTags: [],
+          scopeTags,
+          metadata: {},
+          summaries: {},
+          embedding: [],
+          source: "user",
+          state,
+          revision: 2,
+          timestamp,
+          accessCount: 0,
+          lastAccessed: 0,
+          kind: "fact",
+          assertion: "assistant",
+          canonicalKey: `k.${fragmentId}`,
+        },
+      });
+    };
+    await seed("frag-a", ["workspace:ws1"], 10);
+    await seed("frag-b", ["workspace:ws2"], 30);
+    await seed("frag-c", [], 20);
+    await seed("frag-dead", ["workspace:ws1"], 40, "tombstoned");
+
+    const snaps = await buildScopedRecordSnapshots(repo, { workspaceId: "ws1" });
+    // ws2 与 tombstoned 不可见；无标签的用户级记录可见；按时间倒序。
+    expect(snaps.map((s) => s.fragmentId)).toEqual(["frag-c", "frag-a"]);
+    expect(snaps[0]).toMatchObject({ revision: 1, canonicalKey: "k.frag-c" });
+    const capped = await buildScopedRecordSnapshots(repo, { workspaceId: "ws1" }, 1);
+    expect(capped.map((s) => s.fragmentId)).toEqual(["frag-c"]);
   });
 });

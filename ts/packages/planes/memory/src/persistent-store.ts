@@ -21,6 +21,7 @@ import {
   candidateReceiveKeyString,
   type CandidateOutcomeRecord,
   type CandidateReceiveKey,
+  type WriterPipelineStats,
 } from "./canonical.js";
 import { type EmbeddingSpace, embeddingSpaceForEmbedder } from "./embedding-space.js";
 import { type AddOptions, MemoryStore, type MemoryStoreConfig } from "./store.js";
@@ -703,6 +704,8 @@ export class PersistentMemoryStore extends MemoryStore {
     suppressedCount: number;
     memoryEpoch: number;
     index: Awaited<ReturnType<PersistentMemoryStore["indexStatus"]>>;
+    /** 影子 writer 分母计数（按 policyVersion；无 canonical 时为空）。 */
+    writerStats: WriterPipelineStats[];
   }> {
     const index = await this.indexStatus();
     if (!this.canonical) {
@@ -715,6 +718,7 @@ export class PersistentMemoryStore extends MemoryStore {
         suppressedCount: 0,
         memoryEpoch: 0,
         index,
+        writerStats: [],
       };
     }
     const all = await this.canonical.listRecords({ includeInactive: true });
@@ -728,6 +732,7 @@ export class PersistentMemoryStore extends MemoryStore {
       suppressedCount: suppressions.length,
       memoryEpoch: await this.canonical.memoryEpoch(),
       index,
+      writerStats: await this.canonical.listWriterPipelineStats(),
     };
   }
 

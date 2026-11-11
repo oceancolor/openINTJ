@@ -13,7 +13,7 @@ import {
   type WriterInput,
   validateCandidateBatch,
 } from "./writer.js";
-import type { MemoryScope } from "./scope.js";
+import { type MemoryScope, isFragmentVisibleToScope } from "./scope.js";
 
 /**
  * host 标准校验上下文：以 canonical 当前状态构造（记录快照全集、
@@ -56,6 +56,35 @@ export const buildCanonicalValidationContext = async (
     userOwnedKeys,
     isSuppressed: (fragmentId) => suppressed.has(fragmentId),
   };
+};
+
+const MAX_SCOPED_SNAPSHOTS = 32;
+
+/**
+ * writer 的"眼睛"：作用域内 active 记录快照（与校验上下文同一
+ * RecordSnapshot 形状，writer 据此才能提 supersede 并引用正确
+ * revision）。fail-closed 按 scope 过滤、按时间倒序、上限截断——
+ * 超限时保留最新记录，旧记录的纠正会以 add 形态出现并由人审兜底。
+ */
+export const buildScopedRecordSnapshots = async (
+  repository: CanonicalMemoryRepository,
+  scope: MemoryScope,
+  limit: number = MAX_SCOPED_SNAPSHOTS,
+): Promise<RecordSnapshot[]> => {
+  const records = await repository.listRecords();
+  return records
+    .filter((r) => isFragmentVisibleToScope({ taskTags: r.scopeTags }, scope))
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, Math.max(0, limit))
+    .map((r) => ({
+      fragmentId: r.fragmentId,
+      revision: r.revision,
+      state: r.state,
+      kind: r.kind,
+      assertion: r.assertion,
+      ...(r.canonicalKey ? { canonicalKey: r.canonicalKey } : {}),
+      scopeTags: [...r.scopeTags],
+    }));
 };
 
 /**
@@ -148,7 +177,7 @@ export class ShadowWriterPipeline {
 
     const evidenceChars = job.input.evidence.reduce((sum, span) => sum + span.text.length, 0);
     if (evidenceChars > this.opts.maxEvidenceChars || job.input.evidence.length === 0) {
-      return this.deadLetter({
+      return this.deadLetter(job, {
         status: "dead_letter",
         receiveKey,
         reason: "OVER_BUDGET",
@@ -170,7 +199,7 @@ export class ShadowWriterPipeline {
       }
     }
     if (!batch) {
-      return this.deadLetter({
+      return this.deadLetter(job, {
         status: "dead_letter",
         receiveKey,
         reason: "WRITER_FAILED",
@@ -179,7 +208,7 @@ export class ShadowWriterPipeline {
       });
     }
     if (batch.candidates.length > this.opts.maxCandidatesPerBatch) {
-      return this.deadLetter({ status: "dead_letter", receiveKey, reason: "OVER_BUDGET", attempts });
+      return this.deadLetter(job, { status: "dead_letter", receiveKey, reason: "OVER_BUDGET", attempts });
     }
 
     const ctx = await this.opts.buildContext(job.input, job);
@@ -196,7 +225,7 @@ export class ShadowWriterPipeline {
       });
     } catch (err) {
       if (err instanceof CandidateConflictError) {
-        return this.deadLetter({ status: "dead_letter", receiveKey, reason: "RECEIVE_CONFLICT", attempts });
+        return this.deadLetter(job, { status: "dead_letter", receiveKey, reason: "RECEIVE_CONFLICT", attempts });
       }
       throw err;
     }
@@ -215,6 +244,7 @@ export class ShadowWriterPipeline {
       updatedAt: now,
     }));
     await repository.upsertCandidateOutcomes(outcomes);
+    await this.recordStat(job, { empty: batch.candidates.length === 0, candidates: batch.candidates.length });
 
     return {
       status: "shadow_recorded",
@@ -226,9 +256,33 @@ export class ShadowWriterPipeline {
     };
   }
 
-  private deadLetter(result: ShadowJobResult): ShadowJobResult {
+  private async deadLetter(job: WriterShadowJob, result: ShadowJobResult): Promise<ShadowJobResult> {
     this.deadLetters.push(result);
+    await this.recordStat(job, { empty: false, deadLetter: true, candidates: 0 });
     return result;
+  }
+
+  /**
+   * 影子期计数落盘（分母：处理轮次/空转/死信/提名数）。纯观测旁路：
+   * 仓储缺失该能力或写入失败都不得影响管线结算本身。
+   */
+  private async recordStat(
+    job: WriterShadowJob,
+    delta: { empty: boolean; deadLetter?: boolean; candidates: number },
+  ): Promise<void> {
+    const repo = this.opts.repository as Partial<CanonicalMemoryRepository>;
+    if (typeof repo.recordWriterTurn !== "function") return;
+    try {
+      await repo.recordWriterTurn({
+        policyVersion: job.key.policyVersion,
+        empty: delta.empty,
+        deadLetter: delta.deadLetter ?? false,
+        candidates: delta.candidates,
+        at: this.opts.now ? this.opts.now() : Date.now(),
+      });
+    } catch {
+      // 观测失败不毒化影子管线（零影响原则优先）。
+    }
   }
 
   /** 单次 writer 调用超时保护：超时按失败计入重试，防挂死堵住单 worker。 */

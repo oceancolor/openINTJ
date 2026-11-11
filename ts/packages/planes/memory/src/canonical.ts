@@ -129,6 +129,22 @@ export interface CandidateOutcomeRecord {
   updatedAt: number;
 }
 
+/**
+ * 影子期轻量可观测：按 policyVersion 聚合的 writer 处理计数。
+ * 候选结局只覆盖"提名了什么"；这组计数补上分母（处理了多少轮、
+ * 多少轮空转、多少死信），供状态面与激活决策门复盘。replayed 的
+ * 幂等重投不重复计数。
+ */
+export interface WriterPipelineStats {
+  policyVersion: string;
+  processedTurns: number;
+  emptyTurns: number;
+  deadLetters: number;
+  candidatesNominated: number;
+  startedAt: number;
+  updatedAt: number;
+}
+
 export interface CanonicalMemoryRepository {
   init(): Promise<void>;
   close(): Promise<void>;
@@ -157,6 +173,17 @@ export interface CanonicalMemoryRepository {
     limit?: number;
   }): Promise<CandidateOutcomeRecord[]>;
   candidateOutcome(candidateId: string): Promise<CandidateOutcomeRecord | undefined>;
+
+  /** 影子管线结算计数（单调累加，startedAt 只在首记时定格）。 */
+  recordWriterTurn(stat: {
+    policyVersion: string;
+    empty: boolean;
+    deadLetter: boolean;
+    candidates: number;
+    at: number;
+  }): Promise<void>;
+  writerPipelineStats(policyVersion: string): Promise<WriterPipelineStats | undefined>;
+  listWriterPipelineStats(): Promise<WriterPipelineStats[]>;
 
   pendingIndexJobs(limit?: number): Promise<IndexJob[]>;
   markIndexJobApplied(jobId: number): Promise<void>;
@@ -191,6 +218,7 @@ export class InMemoryCanonicalMemoryRepository implements CanonicalMemoryReposit
   private mutations = new Map<string, { inputHash: string; receipt: MutationReceipt }>();
   private candidates = new Map<string, { inputHash: string; status: string; count: number; receivedAt: number }>();
   private candidateOutcomes = new Map<string, CandidateOutcomeRecord>();
+  private writerStats = new Map<string, WriterPipelineStats>();
   private jobs: IndexJob[] = [];
   private nextJobId = 1;
   private generation = 1;
@@ -345,6 +373,34 @@ export class InMemoryCanonicalMemoryRepository implements CanonicalMemoryReposit
   async candidateOutcome(candidateId: string): Promise<CandidateOutcomeRecord | undefined> {
     const found = this.candidateOutcomes.get(candidateId);
     return found ? { ...found } : undefined;
+  }
+
+  async recordWriterTurn(stat: {
+    policyVersion: string;
+    empty: boolean;
+    deadLetter: boolean;
+    candidates: number;
+    at: number;
+  }): Promise<void> {
+    const prior = this.writerStats.get(stat.policyVersion);
+    this.writerStats.set(stat.policyVersion, {
+      policyVersion: stat.policyVersion,
+      processedTurns: (prior?.processedTurns ?? 0) + 1,
+      emptyTurns: (prior?.emptyTurns ?? 0) + (stat.empty ? 1 : 0),
+      deadLetters: (prior?.deadLetters ?? 0) + (stat.deadLetter ? 1 : 0),
+      candidatesNominated: (prior?.candidatesNominated ?? 0) + stat.candidates,
+      startedAt: prior?.startedAt ?? stat.at,
+      updatedAt: stat.at,
+    });
+  }
+
+  async writerPipelineStats(policyVersion: string): Promise<WriterPipelineStats | undefined> {
+    const found = this.writerStats.get(policyVersion);
+    return found ? { ...found } : undefined;
+  }
+
+  async listWriterPipelineStats(): Promise<WriterPipelineStats[]> {
+    return [...this.writerStats.values()].map((s) => ({ ...s }));
   }
 
   async pendingIndexJobs(limit = 100): Promise<IndexJob[]> {

@@ -81,6 +81,17 @@ export interface CanonicalCandidateOutcomeRecord {
   updatedAt: number;
 }
 
+/** 影子期 writer 计数行（与 plane-memory WriterPipelineStats 结构兼容）。 */
+export interface CanonicalWriterPipelineStats {
+  policyVersion: string;
+  processedTurns: number;
+  emptyTurns: number;
+  deadLetters: number;
+  candidatesNominated: number;
+  startedAt: number;
+  updatedAt: number;
+}
+
 interface BetterSqliteStmt {
   run(...params: unknown[]): { changes: number; lastInsertRowid: number };
   get(...params: unknown[]): unknown;
@@ -148,6 +159,16 @@ CREATE TABLE IF NOT EXISTS memory_candidate_outcomes (
   updatedAt REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cand_outcome_status ON memory_candidate_outcomes(status, updatedAt);
+
+CREATE TABLE IF NOT EXISTS memory_writer_stats (
+  policyVersion TEXT PRIMARY KEY,
+  processedTurns INTEGER NOT NULL DEFAULT 0,
+  emptyTurns INTEGER NOT NULL DEFAULT 0,
+  deadLetters INTEGER NOT NULL DEFAULT 0,
+  candidatesNominated INTEGER NOT NULL DEFAULT 0,
+  startedAt REAL NOT NULL,
+  updatedAt REAL NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS memory_index_outbox (
   jobId INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -561,6 +582,43 @@ export class SqliteCanonicalMemoryStore {
       candidateJson: row.candidateJson,
       updatedAt: row.updatedAt,
     };
+  }
+
+  async recordWriterTurn(stat: {
+    policyVersion: string;
+    empty: boolean;
+    deadLetter: boolean;
+    candidates: number;
+    at: number;
+  }): Promise<void> {
+    const db = this.requireDb();
+    db.prepare(
+      "INSERT INTO memory_writer_stats (policyVersion, processedTurns, emptyTurns, deadLetters, candidatesNominated, startedAt, updatedAt) VALUES (?, 1, ?, ?, ?, ?, ?) " +
+        "ON CONFLICT(policyVersion) DO UPDATE SET processedTurns = processedTurns + 1, emptyTurns = emptyTurns + excluded.emptyTurns, deadLetters = deadLetters + excluded.deadLetters, candidatesNominated = candidatesNominated + excluded.candidatesNominated, updatedAt = excluded.updatedAt",
+    ).run(stat.policyVersion, stat.empty ? 1 : 0, stat.deadLetter ? 1 : 0, stat.candidates, stat.at, stat.at);
+  }
+
+  async writerPipelineStats(policyVersion: string): Promise<CanonicalWriterPipelineStats | undefined> {
+    const all = await this.listWriterPipelineStats();
+    return all.find((s) => s.policyVersion === policyVersion);
+  }
+
+  async listWriterPipelineStats(): Promise<CanonicalWriterPipelineStats[]> {
+    const db = this.requireDb();
+    const rows = db
+      .prepare(
+        "SELECT policyVersion, processedTurns, emptyTurns, deadLetters, candidatesNominated, startedAt, updatedAt FROM memory_writer_stats ORDER BY policyVersion",
+      )
+      .all() as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      policyVersion: String(r.policyVersion),
+      processedTurns: Number(r.processedTurns),
+      emptyTurns: Number(r.emptyTurns),
+      deadLetters: Number(r.deadLetters),
+      candidatesNominated: Number(r.candidatesNominated),
+      startedAt: Number(r.startedAt),
+      updatedAt: Number(r.updatedAt),
+    }));
   }
 
   async pendingIndexJobs(limit = 100): Promise<CanonicalIndexJob[]> {

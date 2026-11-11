@@ -17,6 +17,15 @@ interface MemoryStatusView {
   suppressedCount: number;
   memoryEpoch: number;
   index: { pending: number; failed: number; generation: number; dimensionCompatible?: boolean };
+  writerStats?: Array<{
+    policyVersion: string;
+    processedTurns: number;
+    emptyTurns: number;
+    deadLetters: number;
+    candidatesNominated: number;
+    startedAt: number;
+    updatedAt: number;
+  }>;
 }
 
 interface CandidateView {
@@ -154,6 +163,15 @@ export const MemoryPanel: React.FC = () => {
         ) : (
           <div className="text-muted">状态加载中…</div>
         )}
+        {status?.writerStats && status.writerStats.length > 0
+          ? status.writerStats.map((w) => (
+              <div key={w.policyVersion} className="text-muted leading-relaxed">
+                影子 writer[{w.policyVersion}]：已处理 {w.processedTurns} 轮 · 空转 {w.emptyTurns} · 死信{" "}
+                {w.deadLetters} · 提名 {w.candidatesNominated} 条（自{" "}
+                {new Date(w.startedAt).toLocaleDateString()}）
+              </div>
+            ))
+          : null}
         {reviewError ? <div className="text-signal">[审核错误] {reviewError}</div> : null}
       </div>
 

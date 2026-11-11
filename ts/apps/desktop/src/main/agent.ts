@@ -102,6 +102,7 @@ import {
   type PersistentMemoryStore,
   ShadowWriterPipeline,
   buildCanonicalValidationContext,
+  buildScopedRecordSnapshots,
   createFixtureWriter,
   createLlmWriter,
   createPersistentMemoryStore,
@@ -815,6 +816,10 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     void (async () => {
       try {
         const commitId = `turn:${hashEvidenceText(`${userText}\n${tags.join(",")}`).slice(0, 24)}`;
+        const scope = scopeFromContextTags(tags);
+        // writer 的眼睛：作用域内 active 记录快照（缺了它 writer 永远
+        // 提不出 supersede，纠正类输入只会被当 add 重复提名）。
+        const scopedCurrentRecords = await buildScopedRecordSnapshots(persistentStore.canonical!, scope);
         const input: WriterInput = {
           committedTurnRef: commitId,
           evidence: [
@@ -827,7 +832,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
               text: userText,
             },
           ],
-          scopedCurrentRecords: [],
+          scopedCurrentRecords,
           allowedKinds: ["fact", "preference"],
           policyVersion: shadowPolicyVersion,
           inputHash: hashEvidenceText(userText),
@@ -843,7 +848,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
             extractionRevision: 1,
           },
           input,
-          scope: scopeFromContextTags(tags),
+          scope,
         });
       } catch (error) {
         console.warn("[OpenINTJ desktop] shadow writer enqueue failed; continuing", error);
