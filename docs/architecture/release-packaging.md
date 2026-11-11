@@ -1,8 +1,9 @@
 # 打包发布 & 自动更新（#6）
 
-> 状态：**应用图标为产品名 openINTJ**（`resources/icon.png`，1024×1024 像素，供 electron-builder 派生 ico/icns）；Release CI 在缺证书时产出未签名 Win/mac/Linux 包
+> 状态：**应用图标为紫发黑框眼镜二次元头像**（`resources/avatar-master.jpg` 为母版，
+> `scripts/generate-avatar-icons.py` 派生 `resources/icon.png` 1024×1024 与多尺寸 `icon.ico`，供 electron-builder 派生各平台图标）；Release CI 在缺证书时产出未签名 Win/mac/Linux 包
 > （不再把空 `CSC_LINK` 当成文件路径）。**真正代码签名 / Apple 公证仍需仓库 secrets。**
-> 桌面版本 `0.3.1`；未签名 GitHub Release `v0.3.1` 使用产品名 openINTJ 作为应用图标。
+> 桌面版本 `0.4.0`。
 
 桌面端（`ts/apps/desktop`）用 **electron-builder** 出安装包、**electron-updater** 从 GitHub Release 拉更新。
 
