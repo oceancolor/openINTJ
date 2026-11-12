@@ -108,8 +108,27 @@ describe("__test__.parseLlmThought", () => {
     expect(r.action?.params).toEqual({ query: "cat" });
   });
 
-  it("parses case-insensitive ReAct markers from small models", () => {
+  it("normalizes pseudo-native tool_call markup into an action", () => {
     const r = parseLlmThought(
+      `<tool_calls:6124c78e><tool_call:6124c78e>search({"query": "贵州自驾"})</tool_call:6124c78e></tool_calls:6124c78e>`,
+    );
+    expect(r.isFinal).toBe(false);
+    expect(r.action).toEqual({ tool: "search", params: { query: "贵州自驾" } });
+  });
+
+  it("rejects unparseable tool_call markup instead of treating it as final", () => {
+    const r = parseLlmThought(`<tool_call>search(不是JSON</tool_call>`);
+    expect(r.isFinal).toBe(false);
+    expect(r.parseError).toBeTruthy();
+  });
+
+  it("normalizes a bare JSON tool call into an action", () => {
+    const r = parseLlmThought(`{"tool": "search", "params": {"query": "x"}}`);
+    expect(r.isFinal).toBe(false);
+    expect(r.action).toEqual({ tool: "search", params: { query: "x" } });
+  });
+
+  it("parses case-insensitive ReAct markers from small models", () => {    const r = parseLlmThought(
       'Thought: 查证\nACTION: search\nAction-Input: {"query":"Node.js LTS"}',
     );
     expect(r.isFinal).toBe(false);
@@ -185,6 +204,28 @@ describe("ReactStateMachine.run", () => {
     expect(out.iterations).toBe(2);
     const actions = out.trajectory.filter((t) => t.state.type === "action");
     expect(actions).toHaveLength(1);
+  });
+
+  it("tool timeout is recoverable: loop continues and can finish offline", async () => {
+    const hooks = new HookBus({ logger: silentLogger });
+    const llm = makeLlm([
+      `Thought: 先查证\nAction: search\nAction-Input: {"query":"贵州门票"}`,
+      `Thought: 搜索不可用，改用已有知识作答并说明\nFINAL: 离线版计划（未联网查证）`,
+    ]);
+    const runner = makeToolRunner({
+      search: () => {
+        throw new Error("[TIMEOUT] 工具 search 调用超时 (60000ms)");
+      },
+    });
+    const sm = new ReactStateMachine({ config: baseConfig, hooks, llm, toolRunner: runner });
+    const out = await sm.run({
+      messages: [{ role: "user", content: "做计划" }],
+      availableTools: tools,
+      taoIteration: 1,
+      systemPrompt: "you are helpful",
+    });
+    expect(out.status).toBe("ok");
+    expect(out.finalAnswer).toContain("离线版计划");
   });
 
   it("emits react.* hooks in order", async () => {

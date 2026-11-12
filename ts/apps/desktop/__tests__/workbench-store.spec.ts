@@ -8,7 +8,7 @@ import { createWorkbenchStore } from "../src/main/workbench-store.js";
 const require = createRequire(import.meta.url);
 
 describe("WorkbenchStore", () => {
-  it("seeds Inbox and persists task conversations with ordered messages", () => {
+  it("seeds 新创建的任务 and persists task conversations with ordered messages", () => {
     let seq = 0;
     const root = mkdtempSync(join(tmpdir(), "openintj-workbench-"));
     const store = createWorkbenchStore({
@@ -21,7 +21,7 @@ describe("WorkbenchStore", () => {
     expect(seeded.workspaces).toHaveLength(1);
     expect(seeded.workspaces[0]?.rootPath).toBe(root);
     expect(seeded.conversations[0]?.modelProfileId).toBe("hunyuan-hy4");
-    expect(seeded.tasks[0]?.title).toBe("Inbox");
+    expect(seeded.tasks[0]?.title).toBe("新创建的任务");
     expect(seeded.conversations).toHaveLength(1);
 
     const task = store.createTask({
@@ -64,6 +64,66 @@ describe("WorkbenchStore", () => {
       command: "/clear",
     });
     expect(store.getConversation(conversation.id).workspace.id).toBe(seeded.workspaces[0]!.id);
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("migrates legacy Inbox task titles to 新创建的任务 on reopen", () => {
+    const root = mkdtempSync(join(tmpdir(), "openintj-workbench-"));
+    const dbPath = join(root, "workbench.sqlite");
+    const first = createWorkbenchStore({ dbPath, defaultWorkspaceRoot: root });
+    const workspaceId = first.bootstrap().workspaces[0]!.id;
+    const legacy = first.createTask({ workspaceId, title: "Inbox" });
+    const custom = first.createTask({ workspaceId, title: "我的任务" });
+    first.close();
+
+    const reopened = createWorkbenchStore({ dbPath, defaultWorkspaceRoot: root });
+    const tasks = reopened.bootstrap().tasks;
+    expect(tasks.find((item) => item.id === legacy.id)?.title).toBe("新创建的任务");
+    expect(tasks.find((item) => item.id === custom.id)?.title).toBe("我的任务");
+    reopened.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("deletes tasks and conversations with their messages; seed workspace is not named 默认工作区", () => {
+    let seq = 0;
+    const root = mkdtempSync(join(tmpdir(), "openintj-workbench-"));
+    const store = createWorkbenchStore({
+      dbPath: ":memory:",
+      defaultWorkspaceRoot: root,
+      now: () => 3_000 + seq++,
+    });
+    const seeded = store.bootstrap();
+    expect(seeded.workspaces[0]?.name).not.toBe("默认工作区");
+    expect(seeded.workspaces[0]?.name).toBe(root.split(/[\\/]/).filter(Boolean).at(-1));
+    expect(store.updateWorkspace(seeded.workspaces[0]!.id, { name: "改名后的工作区" }).name).toBe(
+      "改名后的工作区",
+    );
+
+    const workspaceId = seeded.workspaces[0]!.id;
+    const task = store.createTask({ workspaceId, title: "待删除任务" });
+    const conversation = store.createConversation({
+      taskId: task.id,
+      title: "待删除会话",
+      modelProfileId: "hunyuan-hy4",
+    });
+    store.appendMessage({ conversationId: conversation.id, role: "user", content: "你好" });
+
+    store.deleteConversation(conversation.id);
+    expect(store.bootstrap().conversations.map((item) => item.id)).not.toContain(conversation.id);
+    expect(() => store.listMessages(conversation.id)).toThrow();
+
+    const conversation2 = store.createConversation({
+      taskId: task.id,
+      title: "随任务删除",
+      modelProfileId: "hunyuan-hy4",
+    });
+    store.appendMessage({ conversationId: conversation2.id, role: "user", content: "再见" });
+    store.deleteTask(task.id);
+    const after = store.bootstrap();
+    expect(after.tasks.map((item) => item.id)).not.toContain(task.id);
+    expect(after.conversations.map((item) => item.id)).not.toContain(conversation2.id);
+    expect(() => store.deleteTask(task.id)).toThrow();
     store.close();
     rmSync(root, { recursive: true, force: true });
   });

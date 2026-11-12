@@ -7,17 +7,20 @@
  * - 应用生命周期 + 窗口管理
  */
 
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { probeOllama } from "@openintj/model-runtime";
 import { loadOpenintjEnv, summarizeLlmEnv } from "@openintj/shared";
 import { BrowserWindow, Menu, app, dialog, nativeTheme, safeStorage, session } from "electron";
-import { CHROME_BG } from "../shared/chrome.js";
+import { CHROME_BG, CHROME_PANEL, CHROME_SYMBOL } from "../shared/chrome.js";
 import {
   type AppConfig,
   DEFAULT_DESKTOP_MODEL_PROFILE_ID,
   MODEL_DEFAULTS_VERSION,
   type ModelProvider,
+  type OllamaCheckResponse,
   TITLE_BAR_HEIGHT,
 } from "../shared/ipc-protocol.js";
 import { type DesktopAgent, assembleDesktopAgent } from "./agent.js";
@@ -96,6 +99,83 @@ const applySavedLlmEnv = (savedConfig: AppConfig): void => {
   ) {
     process.env["EMBED_PROVIDER"] = savedConfig.embedProvider;
   }
+};
+
+/**
+ * Ollama 显式生命周期：自检 = 探测 /api/tags 并核对 embedding 模型；
+ * 启动 = 找到本机 ollama 可执行文件拉起 `serve`，轮询复检至就绪或超时。
+ * 找不到/拉不起不抛错，把原因回给渲染层让用户决定降级。
+ */
+const resolveOllamaTarget = (): { endpoint: string; embedModel: string } => ({
+  endpoint:
+    process.env["OLLAMA_EMBED_ENDPOINT"] ??
+    process.env["OLLAMA_ENDPOINT"] ??
+    process.env["OLLAMA_BASE_URL"] ??
+    "http://127.0.0.1:11434",
+  embedModel: process.env["OLLAMA_EMBED_MODEL"] ?? "nomic-embed-text",
+});
+
+const checkOllamaNow = async (): Promise<OllamaCheckResponse> => {
+  const { endpoint, embedModel } = resolveOllamaTarget();
+  const probe = await probeOllama(endpoint, 3000, embedModel);
+  return {
+    endpoint,
+    embedModel,
+    running: probe.ok,
+    modelInstalled: probe.ok,
+    ...(probe.models ? { models: probe.models } : {}),
+    ...(probe.ok ? {} : { reason: probe.reason ?? "unreachable" }),
+  };
+};
+
+const findOllamaExecutable = (): string | undefined => {
+  const candidates = [
+    process.env["OLLAMA_PATH"],
+    process.platform === "win32"
+      ? path.join(process.env["LOCALAPPDATA"] ?? "", "Programs", "Ollama", "ollama.exe")
+      : undefined,
+    process.platform === "win32" ? "C:\\Program Files\\Ollama\\ollama.exe" : undefined,
+    "/usr/local/bin/ollama",
+    "/opt/homebrew/bin/ollama",
+  ].filter((item): item is string => Boolean(item));
+  return candidates.find((candidate) => existsSync(candidate));
+};
+
+const launchOllamaNow = async (): Promise<OllamaCheckResponse> => {
+  const before = await checkOllamaNow();
+  if (before.running) return before;
+  const exe = findOllamaExecutable();
+  if (!exe) {
+    return {
+      ...before,
+      launchError:
+        "未找到 ollama 可执行文件（请先安装 Ollama，或手动启动后点重新自检）。",
+    };
+  }
+  try {
+    const child = spawn(exe, ["serve"], {
+      detached: true,
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    child.unref();
+  } catch (error) {
+    return {
+      ...before,
+      launchError: `启动 Ollama 失败：${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  // 轮询复检：服务通常数秒内就绪，上限 25 秒。
+  for (let i = 0; i < 25; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const probe = await checkOllamaNow();
+    if (probe.running) return { ...probe, launched: true };
+  }
+  return {
+    ...(await checkOllamaNow()),
+    launched: true,
+    launchError: "已尝试启动 Ollama，但 25 秒内服务未就绪（可能仍在加载，或端口被占用）。",
+  };
 };
 
 const resolveDesktopPaths = (savedConfig: AppConfig): { dataDir: string; workspaceDir: string } => {
@@ -262,8 +342,9 @@ const createWindow = (): BrowserWindow => {
         ? {
             titleBarStyle: "hidden" as const,
             titleBarOverlay: {
-              color: CHROME_BG,
-              symbolColor: "#18181b",
+              // 与左侧自绘顶栏一体：同底色（bg-panel）、同符号色（菜单文字 muted）。
+              color: CHROME_PANEL,
+              symbolColor: CHROME_SYMBOL,
               height: TITLE_BAR_HEIGHT,
             },
           }
@@ -381,6 +462,20 @@ void app
         }
       }
     }
+    // 工作区联动：任务会话栏当前打开的工作区是事实源——agent 的文件
+    // 工作区根（文件树/工具沙箱）与之对齐，不再各走各的默认值。
+    // env 显式指定 OPENINTJ_WORKSPACE_DIR 时以 env 为准。
+    if (!process.env["OPENINTJ_WORKSPACE_DIR"]) {
+      const openWorkspace = workbench.bootstrap().workspaces[0];
+      if (
+        openWorkspace &&
+        path.resolve(openWorkspace.rootPath) !==
+          path.resolve(resolveDesktopPaths(savedConfig).workspaceDir)
+      ) {
+        savedConfig = config.update({ workspaceDir: openWorkspace.rootPath });
+        console.log(`[OpenINTJ desktop] workspace synced to workbench: ${openWorkspace.rootPath}`);
+      }
+    }
     const llmProvider =
       (process.env["LLM_PROVIDER"] as ModelProvider | undefined) ??
       savedConfig.llmProvider ??
@@ -409,6 +504,14 @@ void app
     console.log(
       `[OpenINTJ desktop] persistence=${agent.persistenceInfo.mode} dataDir=${agent.persistenceInfo.dataDir ?? "<in-memory>"}`,
     );
+    // Ollama 自检结果显式打进日志与状态：降级时渲染层会弹提示让用户决定。
+    void checkOllamaNow().then((check) => {
+      const embed = agent?.status().embed;
+      console.log(
+        `[OpenINTJ desktop] ollama check: running=${check.running} model=${check.embedModel}` +
+          `${check.reason ? ` reason=${check.reason}` : ""} embed=${embed?.provider}/${embed?.model} mode=${embed?.mode}`,
+      );
+    });
     mainWindow = createWindow();
 
     // 弹系统目录选择框，选定后即时持久化并热重装 agent。
@@ -435,7 +538,25 @@ void app
           console.warn("[OpenINTJ desktop] previous agent close failed during reload", error);
         }
       }
-      const next = await assembleFromSavedConfigWithFallback(config.get());
+      let next: DesktopAgent;
+      try {
+        next = await assembleFromSavedConfigWithFallback(config.get());
+      } catch (error) {
+        // 重装失败绝不能把全应用 IPC 留在注销状态（曾导致选目录、
+        // 状态、聊天全部无反应）：用旧 agent 重新注册，错误向上抛，
+        // 调用方（配置更新/选目录）会把失败如实回报给界面。
+        console.error("[OpenINTJ desktop] agent reload failed; restoring previous agent", error);
+        agent = previous;
+        if (previous && mainWindow && !mainWindow.isDestroyed()) {
+          ipcRegistration = registerIpcHandlers(previous, mainWindow.webContents, undefined, ipcDeps);
+          try {
+            previous.scheduler.start();
+          } catch {
+            // 调度器恢复失败不影响 IPC 可用性。
+          }
+        }
+        throw error;
+      }
       agent = next;
       if (mainWindow && !mainWindow.isDestroyed()) {
         ipcRegistration = registerIpcHandlers(agent, mainWindow.webContents, undefined, ipcDeps);
@@ -497,6 +618,8 @@ void app
       pickDirectory,
       restart,
       reloadAgent,
+      checkOllama: checkOllamaNow,
+      launchOllama: launchOllamaNow,
       credentials,
       modelRegistry,
       workbench,

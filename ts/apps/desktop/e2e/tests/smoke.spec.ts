@@ -66,7 +66,7 @@ test.describe("desktop smoke (mock provider, no persist)", () => {
 
   test("task tree creates a conversation and switches its model", async ({ page }) => {
     await page.getByRole("button", { name: "任务", exact: true }).click();
-    await expect(page.getByText("Inbox", { exact: true })).toBeVisible();
+    await expect(page.getByText("新创建的任务", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "+ 任务" }).click();
     await expect(page.getByText("新任务", { exact: true })).toBeVisible();
     // 对话常驻中栏，无需切标签即可继续。

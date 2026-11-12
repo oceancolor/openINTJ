@@ -1237,6 +1237,84 @@ describe("IPC handler registration", () => {
     expect(picked.root).toBe("C:/picked/dir");
   });
 
+  it("unregister removes every channel so re-registration never collides", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ointj-ipc-reregister-"));
+    const agent = await assembleDesktopAgent({ llmProvider: "mock", workspaceDir: root });
+    const handlers = new Map<string, unknown>();
+    const strictIpc = {
+      handle: (ch: string, cb: unknown) => {
+        if (handlers.has(ch)) throw new Error(`second handler for ${ch}`);
+        handlers.set(ch, cb);
+      },
+      removeHandler: (ch: string) => {
+        handlers.delete(ch);
+      },
+    } as unknown as Parameters<typeof registerIpcHandlers>[2];
+
+    const first = registerIpcHandlers(agent, undefined, strictIpc);
+    const count = handlers.size;
+    expect(count).toBeGreaterThan(50);
+    first.unregister();
+    expect(handlers.size).toBe(0);
+
+    const second = registerIpcHandlers(agent, undefined, strictIpc);
+    expect(handlers.size).toBe(count);
+    expect(handlers.has(IPC.CHAT)).toBe(true);
+    expect(handlers.has(IPC.TASKPOOL_CHECKPOINTS)).toBe(true);
+    expect(handlers.has(IPC.CONFIG_UPDATE)).toBe(true);
+    second.unregister();
+  });
+
+  it("WORKSPACE_PICK_DIR：重载失败仍返回已选目录（不静默断链）", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ointj-ws-pick-fail-"));
+    const agent = await assembleDesktopAgent({ llmProvider: "mock", workspaceDir: root });
+    const handlers: Handlers = new Map();
+    registerIpcHandlers(agent, undefined, makeFakeIpc(handlers), {
+      pickDirectory: async () => "C:/picked/dir",
+      reloadAgent: async () => {
+        throw new Error("reload boom");
+      },
+    });
+    const picked = (await handlers.get(IPC.WORKSPACE_PICK_DIR)?.({}, undefined)) as {
+      canceled: boolean;
+      root?: string;
+    };
+    expect(picked.canceled).toBe(false);
+    expect(picked.root).toBe("C:/picked/dir");
+  });
+
+  it("OLLAMA_CHECK/LAUNCH：无注入报未运行；启动成功且模型就绪时热重装 agent", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ointj-ollama-"));
+    const agent = await assembleDesktopAgent({ llmProvider: "mock", workspaceDir: root });
+
+    const h1: Handlers = new Map();
+    registerIpcHandlers(agent, undefined, makeFakeIpc(h1));
+    const unavailable = (await h1.get(IPC.OLLAMA_CHECK)?.({}, undefined)) as {
+      running: boolean;
+    };
+    expect(unavailable.running).toBe(false);
+
+    const reloadAgent = vi.fn(async () => {});
+    const h2: Handlers = new Map();
+    registerIpcHandlers(agent, undefined, makeFakeIpc(h2), {
+      launchOllama: async () => ({
+        endpoint: "http://127.0.0.1:11434",
+        embedModel: "nomic-embed-text",
+        running: true,
+        modelInstalled: true,
+        launched: true,
+      }),
+      reloadAgent,
+    });
+    const launched = (await h2.get(IPC.OLLAMA_LAUNCH)?.({}, undefined)) as {
+      running: boolean;
+      launched?: boolean;
+    };
+    expect(launched.running).toBe(true);
+    expect(launched.launched).toBe(true);
+    expect(reloadAgent).toHaveBeenCalledTimes(1);
+  });
+
   it("WORKSPACE_LIST / READ_BYTES / REVEAL stay inside the sandbox", async () => {
     const root = mkdtempSync(join(tmpdir(), "ointj-ws-list-"));
     const handlers: Handlers = new Map();

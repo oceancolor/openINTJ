@@ -902,12 +902,53 @@ export const WorkspaceRevealResponseSchema = z.object({
 });
 export type WorkspaceRevealResponse = z.infer<typeof WorkspaceRevealResponseSchema>;
 
+/** 在工作区内建目录（任务同名文件工作区用）；path 相对根，越界拒绝。 */
+export const WorkspaceMkdirRequestSchema = z.object({
+  path: z.string().min(1),
+});
+export type WorkspaceMkdirRequest = z.infer<typeof WorkspaceMkdirRequestSchema>;
+
+export const WorkspaceMkdirResponseSchema = z.object({
+  path: z.string(),
+  created: z.boolean(),
+});
+export type WorkspaceMkdirResponse = z.infer<typeof WorkspaceMkdirResponseSchema>;
+
+/** 工作区内目录改名（任务改名同步文件夹用）；from/to 均相对根。 */
+export const WorkspaceRenameDirRequestSchema = z.object({
+  from: z.string().min(1),
+  to: z.string().min(1),
+});
+export type WorkspaceRenameDirRequest = z.infer<typeof WorkspaceRenameDirRequestSchema>;
+
+export const WorkspaceRenameDirResponseSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+});
+export type WorkspaceRenameDirResponse = z.infer<typeof WorkspaceRenameDirResponseSchema>;
+
 /** pickWorkspaceDir ??????????????*/
 export const WorkspacePickResponseSchema = z.object({
   canceled: z.boolean(),
   root: z.string().optional(),
 });
 export type WorkspacePickResponse = z.infer<typeof WorkspacePickResponseSchema>;
+
+/** Ollama 自检结果：服务是否在跑、embedding 模型是否已安装。 */
+export const OllamaCheckResponseSchema = z.object({
+  endpoint: z.string(),
+  embedModel: z.string(),
+  running: z.boolean(),
+  modelInstalled: z.boolean(),
+  models: z.array(z.string()).optional(),
+  /** running=false 时的探测失败原因（连接拒绝/超时/模型缺失等）。 */
+  reason: z.string().optional(),
+  /** launch 时实际拉起了新进程（此前未运行）。 */
+  launched: z.boolean().optional(),
+  /** launch 尝试过但失败的原因（未找到可执行文件等）。 */
+  launchError: z.string().optional(),
+});
+export type OllamaCheckResponse = z.infer<typeof OllamaCheckResponseSchema>;
 
 /** ??????????main ??renderer ????? fs.watch???*/
 export const WorkspaceChangeEventSchema = z.object({
@@ -948,6 +989,8 @@ export const ModelProfileSchema = z.object({
 export type ModelProfile = z.infer<typeof ModelProfileSchema>;
 
 export const DEFAULT_DESKTOP_MODEL_PROFILE_ID = "hunyuan-hy4";
+/** 自动创建的默认任务在用户/首句摘要改名前的占位名称。 */
+export const DEFAULT_NEW_TASK_TITLE = "新创建的任务";
 export const MODEL_DEFAULTS_VERSION = 3;
 
 export const DEFAULT_MODEL_PROFILES: readonly ModelProfile[] = [
@@ -1134,6 +1177,9 @@ export type DormantDecisionError = z.infer<typeof DormantDecisionErrorSchema>;
 export const IPC = {
   PING: "openintj:ping",
   STATUS: "openintj:status",
+  // Ollama 显式生命周期：自检（探测服务/模型）与尝试拉起本机服务。
+  OLLAMA_CHECK: "openintj:ollama.check",
+  OLLAMA_LAUNCH: "openintj:ollama.launch",
   CHAT: "openintj:chat",
   MEMORY_QUERY: "openintj:memory.query",
   // G5.2 记忆审核台：状态面 + 影子候选审核（approve 由 host 执行 mutation）
@@ -1170,6 +1216,8 @@ export const IPC = {
   WORKSPACE_LIST: "openintj:workspace.list",
   WORKSPACE_READ_BYTES: "openintj:workspace.readBytes",
   WORKSPACE_REVEAL: "openintj:workspace.reveal",
+  WORKSPACE_MKDIR: "openintj:workspace.mkdir",
+  WORKSPACE_RENAME_DIR: "openintj:workspace.renameDir",
   // ??????
   CONFIG_GET: "openintj:config.get",
   CONFIG_UPDATE: "openintj:config.update",
@@ -1181,11 +1229,14 @@ export const IPC = {
   WINDOW_CHROME: "openintj:window.chrome",
   WORKBENCH_BOOTSTRAP: "openintj:workbench.bootstrap",
   WORKBENCH_WORKSPACE_CREATE: "openintj:workbench.workspace.create",
+  WORKBENCH_WORKSPACE_UPDATE: "openintj:workbench.workspace.update",
   WORKBENCH_WORKSPACE_CLOSE: "openintj:workbench.workspace.close",
   WORKBENCH_TASK_CREATE: "openintj:workbench.task.create",
   WORKBENCH_TASK_UPDATE: "openintj:workbench.task.update",
+  WORKBENCH_TASK_DELETE: "openintj:workbench.task.delete",
   WORKBENCH_CONVERSATION_CREATE: "openintj:workbench.conversation.create",
   WORKBENCH_CONVERSATION_UPDATE: "openintj:workbench.conversation.update",
+  WORKBENCH_CONVERSATION_DELETE: "openintj:workbench.conversation.delete",
   WORKBENCH_MESSAGES: "openintj:workbench.messages",
   WORKBENCH_MESSAGES_CLEAR: "openintj:workbench.messages.clear",
   COMMANDS_INVOKE: "openintj:commands.invoke",

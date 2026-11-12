@@ -1,7 +1,26 @@
 import React from "react";
 import type { ContextUsage, InputStructure, ModelProfile } from "../../shared/ipc-protocol.js";
 import { splitWorkspacePathMarkup } from "../../shared/workspace-view.js";
+import appIcon from "../assets/app-icon.png";
 import { useVoiceInput } from "./useVoiceInput.js";
+
+/** openINTJ 头像：与程序图标/顶栏 logo 同一张（assets/app-icon.png）。 */
+const AssistantAvatar: React.FC<{ size: "sm" | "lg" }> = ({ size }) =>
+  size === "lg" ? (
+    <img
+      src={appIcon}
+      alt="openINTJ"
+      draggable={false}
+      className="h-12 w-12 shrink-0 rounded-[14px] shadow-raise ring-1 ring-[#c9bdf0]"
+    />
+  ) : (
+    <img
+      src={appIcon}
+      alt="openINTJ"
+      draggable={false}
+      className="h-7 w-7 shrink-0 rounded-[9px] ring-1 ring-[#c9bdf0]"
+    />
+  );
 
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
@@ -192,34 +211,10 @@ export const ChatPanel: React.FC<{
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col bg-panel" data-testid="chat-panel">
-      <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-line px-3">
-        <span className="text-[10px] font-bold uppercase tracking-[0.13em] text-muted">
-          当前对话
-        </span>
-        <div className="flex items-center gap-2">
-          <ContextUsageRing used={used} max={max} />
-          <select
-            aria-label="对话模型"
-            value={modelProfileId ?? ""}
-            disabled={pending}
-            onChange={(event) => onModelChange?.(event.target.value)}
-            className="rounded-lg border border-line bg-white px-2 py-1 text-xs text-ink focus:outline-none focus:border-moss"
-          >
-            {profiles.map((profile) => (
-              <option key={profile.id} value={profile.id} disabled={!profile.hasCredential}>
-                {profile.name}
-                {profile.hasCredential ? "" : "（需密钥）"}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-5">
         {messages.length === 0 ? (
           <div className="mx-auto flex max-w-[430px] flex-col items-center pt-10">
-            <div className="flex h-12 w-12 items-center justify-center rounded-[14px] bg-ink text-[13px] font-bold tracking-widest text-white shadow-raise">
-              IN
-            </div>
+            <AssistantAvatar size="lg" />
             <h2 className="mt-4 text-center text-[22px] font-bold leading-8 text-ink">
               接下来推进什么？
             </h2>
@@ -273,9 +268,7 @@ export const ChatPanel: React.FC<{
                     你
                   </div>
                 ) : (
-                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] bg-ink text-[9px] font-bold tracking-widest text-white">
-                    IN
-                  </div>
+                  <AssistantAvatar size="sm" />
                 )}
                 <div className="min-w-0 flex-1" data-message-kind={m.messageKind ?? "message"}>
                   <div className="flex items-center gap-2">
@@ -336,9 +329,7 @@ export const ChatPanel: React.FC<{
         )}
         {pending && !(messages.at(-1)?.streaming && messages.at(-1)?.content) && (
           <div className="flex gap-3">
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] bg-ink text-[9px] font-bold tracking-widest text-white">
-              IN
-            </div>
+            <AssistantAvatar size="sm" />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <span className="text-[10px] font-semibold text-muted">openINTJ</span>
@@ -394,8 +385,25 @@ export const ChatPanel: React.FC<{
                   ? "转写中…"
                   : "🎤 语音"}
             </button>
-            <span className="ml-auto font-mono text-[9px] text-faint">
-              ENTER 发送 · SHIFT+ENTER 换行
+            <span className="ml-auto flex items-center gap-2">
+              <ContextUsageRing used={used} max={max} />
+              <select
+                aria-label="对话模型"
+                value={modelProfileId ?? ""}
+                disabled={pending}
+                onChange={(event) => onModelChange?.(event.target.value)}
+                className="rounded-lg border border-line bg-white px-2 py-1 text-xs text-ink focus:border-moss focus:outline-none"
+              >
+                {profiles.map((profile) => (
+                  <option key={profile.id} value={profile.id} disabled={!profile.hasCredential}>
+                    {profile.name}
+                    {profile.hasCredential ? "" : "（需密钥）"}
+                  </option>
+                ))}
+              </select>
+              <span className="hidden font-mono text-[9px] text-faint xl:inline">
+                ENTER 发送 · SHIFT+ENTER 换行
+              </span>
             </span>
             <button
               type="button"

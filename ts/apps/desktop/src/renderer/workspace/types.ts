@@ -9,7 +9,9 @@ import type {
   WorkspaceError,
   WorkspaceInfo,
   WorkspaceListResponse,
+  WorkspaceMkdirResponse,
   WorkspaceReadResponse,
+  WorkspaceRenameDirResponse,
   WorkspaceRevealResponse,
   WorkspaceWriteResponse,
 } from "../../shared/ipc-protocol.js";
@@ -21,6 +23,8 @@ export interface WorkspaceClient {
   readBytes(path: string): Promise<WorkspaceBytesResponse | WorkspaceError>;
   write(path: string, content: string): Promise<WorkspaceWriteResponse | WorkspaceError>;
   reveal(path?: string): Promise<WorkspaceRevealResponse | WorkspaceError>;
+  mkdir(path: string): Promise<WorkspaceMkdirResponse | WorkspaceError>;
+  renameDir(from: string, to: string): Promise<WorkspaceRenameDirResponse | WorkspaceError>;
 }
 
 export const isWorkspaceError = (value: unknown): value is WorkspaceError =>
@@ -33,4 +37,6 @@ export const desktopWorkspaceClient = (): WorkspaceClient => ({
   readBytes: (path) => window.openintj.workspaceReadBytes({ path }),
   write: (path, content) => window.openintj.workspaceWrite({ path, content }),
   reveal: (path) => window.openintj.workspaceReveal(path ? { path } : {}),
+  mkdir: (path) => window.openintj.workspaceMkdir({ path }),
+  renameDir: (from, to) => window.openintj.workspaceRenameDir({ from, to }),
 });

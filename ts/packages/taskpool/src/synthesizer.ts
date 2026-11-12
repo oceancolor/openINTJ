@@ -10,6 +10,13 @@ export const synthesizeTaskPoolAnswer = (
   const ordered = [...poolResult.results.values()];
   const last = ordered[ordered.length - 1];
   const combined = ordered.map((r, i) => `### 步骤 ${i + 1}\n${r.finalAnswer}`).join("\n\n");
+  const firstError = [...poolResult.errors.values()][0];
+  const firstErrorText =
+    firstError instanceof Error
+      ? firstError.message
+      : firstError
+        ? String(firstError)
+        : undefined;
   const trajectory = ordered.flatMap((r) => r.trajectory);
   const status =
     poolResult.status === "completed"
@@ -21,7 +28,10 @@ export const synthesizeTaskPoolAnswer = (
   return {
     traceId: last?.traceId ?? poolResult.runId,
     status,
-    finalAnswer: combined || last?.finalAnswer || `[taskpool] 未能完成：${originalQuery}`,
+    finalAnswer:
+      combined ||
+      last?.finalAnswer ||
+      `[taskpool] 未能完成：${originalQuery}${firstErrorText ? `（${firstErrorText}）` : ""}`,
     iterations: ordered.reduce((n, r) => n + r.iterations, 0),
     reactTotalSteps: ordered.reduce((n, r) => n + r.reactTotalSteps, 0),
     totalTokensSpent: ordered.reduce((n, r) => n + r.totalTokensSpent, 0),

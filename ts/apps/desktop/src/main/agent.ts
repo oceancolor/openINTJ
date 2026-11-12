@@ -64,7 +64,6 @@ import {
   createLocalCorpusResolver,
   derivePrimaryIdentity,
 } from "@openintj/identity";
-import { HunyuanClient, createHunyuanSearchTool } from "@openintj/llm-hunyuan";
 import {
   type EmbedProviderId,
   type LlmProviderId,
@@ -894,15 +893,17 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
   });
   // gate：每次工具调用前跑治理平面（策略黑名单 + 工具配额），拒绝即 success:false + 审计（RFC-004 §8）。
   const toolHub = new ToolHub({ hooks, gate: createToolCallGate(governance) });
-  const noop = () => ({ note: "[mock]" });
-  // search 工具优先级：外部 Web Search（Tavily/Brave，provider 中立）> 混元内建联网搜索（仅旧平台有效）> 占位。
-  // 旧混元平台搜索已随平台下线、TokenHub 改 Responses API，因此 TokenHub 用户应配 OPENINTJ_SEARCH_API_KEY 走外部搜索。
+  // search 工具：外部 Web Search（Tavily/Brave）优先；没有可用配置时
+  // 不再回退旧混元内建搜索——它随旧平台下线，在 TokenHub 上必然跑满
+  // 60s 超时才失败。改为秒回 not_configured（可恢复错误），让模型第一
+  // 时间知道联网不可用、转离线作答，而不是每轮白烧一分钟。
   const webSearchCfg = resolveWebSearchConfig();
-  const searchHandler = webSearchCfg
-    ? createWebSearchTool(webSearchCfg)
-    : runtime.status.llm.provider === "hunyuan"
-      ? createHunyuanSearchTool(HunyuanClient.fromEnv())
-      : noop;
+  const searchNotConfigured = (): never => {
+    throw new Error(
+      "[search_not_configured] 联网搜索未配置：请设置 OPENINTJ_SEARCH_API_KEY（Tavily/Brave）后重启；当前请用已有知识完成任务并说明未查证。",
+    );
+  };
+  const searchHandler = webSearchCfg ? createWebSearchTool(webSearchCfg) : searchNotConfigured;
   // 真实工作区工具：read_file / write_file 沙箱限定在 workspace 根内，execute_command 默认禁用。
   const wsConfig = resolveWorkspaceConfig(opts, process.cwd());
   const wsTools = createWorkspaceTools(wsConfig);
@@ -1501,7 +1502,26 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
           const poolResult = await taskPool.submitRun(graph, (node, ctx) =>
             runTaskPoolNode(node, ctx, taoOpts(ctx.traceId, ctx.signal)),
           );
-          result = synthesizeTaskPoolAnswer(poolResult, workQuery);
+          const synthesized = synthesizeTaskPoolAnswer(poolResult, workQuery);
+          const poolUsable =
+            poolResult.status === "completed" &&
+            [...poolResult.results.values()].some((r) => r.finalAnswer.trim().length > 0);
+          if (poolUsable) {
+            result = synthesized;
+          } else {
+            // TaskPool 全节点失败（如单节点超时连环拖垮）时不要只回一句
+            // 「未能完成」：回退到单次直答，至少把用户的问题答掉；直答
+            // 也失败才用合成兜底（已带首个节点错误）。
+            try {
+              const direct = await runTao(workQuery, taoOpts(undefined, runOpts.signal, true));
+              result = {
+                ...direct,
+                metrics: { ...direct.metrics, taskpoolFallback: 1 },
+              };
+            } catch {
+              result = synthesized;
+            }
+          }
         } else if (orchestrationMode === "self-consistency" && selfConsistency) {
           // 方向一/二：并行多采样 + 投票。forkJoin 会发 forkjoin.* 事件 → OTel span/metric。
           const { fulfilled } = await forkJoin(

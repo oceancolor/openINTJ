@@ -12,6 +12,7 @@ import {
   HUNYUAN_REASONING_MAX_TOKEN_RETRY,
   extractAssistantText,
   extractReasoningText,
+  extractToolCallsText,
   isTruncatedReasoning,
   resolveHunyuanMaxTokens,
   resolveHunyuanTimeoutMs,
@@ -49,7 +50,12 @@ export interface HunyuanSearchResult {
 
 interface OpenAIChatResponse {
   choices?: Array<{
-    message?: { role?: string; content?: unknown; reasoning_content?: string | null };
+    message?: {
+      role?: string;
+      content?: unknown;
+      reasoning_content?: string | null;
+      tool_calls?: unknown;
+    };
     finish_reason?: string;
   }>;
   usage?: {
@@ -300,7 +306,7 @@ export class HunyuanClient implements LlmClient {
         const data = (parsed ?? {}) as OpenAIChatResponse;
         const message = data.choices?.[0]?.message;
         return {
-          content: extractAssistantText(message),
+          content: extractAssistantText(message) || extractToolCallsText(message),
           reasoning: extractReasoningText(message),
           finishReason: data.choices?.[0]?.finish_reason,
           data,

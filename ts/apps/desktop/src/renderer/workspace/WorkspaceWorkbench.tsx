@@ -31,6 +31,8 @@ export const WorkspaceWorkbench: React.FC<{
 
   // Recent-files strip: fast switching between the files you actually open.
   const [recents, setRecents] = React.useState<string[]>([]);
+  // 路径文字右键菜单：「在文件管理器中打开目录」（替代原工具栏按钮）。
+  const [pathMenu, setPathMenu] = React.useState<{ x: number; y: number } | null>(null);
   React.useEffect(() => {
     if (!selectedPath) return;
     setRecents((prev) => [selectedPath, ...prev.filter((p) => p !== selectedPath)].slice(0, 8));
@@ -39,22 +41,51 @@ export const WorkspaceWorkbench: React.FC<{
   return (
     <div className="h-full min-h-0 flex flex-col bg-canvas" data-testid="workspace-workbench">
       <div className="shrink-0 px-3 py-2 border-b border-line bg-panel flex items-center gap-2 text-xs">
-        <span className="truncate font-mono text-[11px] text-muted" title={rootLabel}>
+        <span
+          className="truncate font-mono text-[11px] text-muted"
+          title={workspaceOpen ? `${rootLabel ?? "工作区"}（右键在文件管理器中打开）` : rootLabel}
+          onContextMenu={
+            workspaceOpen
+              ? (event) => {
+                  event.preventDefault();
+                  setPathMenu({ x: event.clientX, y: event.clientY });
+                }
+              : undefined
+          }
+        >
           {workspaceOpen ? (rootLabel ?? "工作区") : "未打开工作区"}
         </span>
-        {workspaceOpen ? (
-          <button
-            type="button"
-            className="ml-auto px-2 py-1 rounded-lg border border-line bg-white hover:border-linedark text-ink"
-            onClick={() => reveal()}
-          >
-            打开目录
-          </button>
+        {pathMenu ? (
+          <>
+            <div
+              className="fixed inset-0 z-40"
+              onClick={() => setPathMenu(null)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                setPathMenu(null);
+              }}
+            />
+            <div
+              className="fixed z-50 min-w-[11rem] rounded-lg border border-line bg-white py-1 shadow-pop"
+              style={{ left: pathMenu.x, top: pathMenu.y }}
+            >
+              <button
+                type="button"
+                className="block w-full px-3 py-1.5 text-left text-xs text-ink hover:bg-rail"
+                onClick={() => {
+                  reveal();
+                  setPathMenu(null);
+                }}
+              >
+                在文件管理器中打开目录
+              </button>
+            </div>
+          </>
         ) : null}
         {workspaceOpen && selectedPath ? (
           <button
             type="button"
-            className="px-2 py-1 rounded-lg border border-line bg-white hover:border-linedark text-ink"
+            className="ml-auto px-2 py-1 rounded-lg border border-line bg-white hover:border-linedark text-ink"
             onClick={() => reveal(selectedPath)}
           >
             定位文件

@@ -308,6 +308,35 @@ describe("HunyuanClient (live mode with fetch mock)", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("converts native tool_calls into ReAct action text when content is empty", async () => {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: "tool_calls",
+              message: {
+                role: "assistant",
+                content: null,
+                reasoning_content: "先查证",
+                tool_calls: [
+                  {
+                    type: "function",
+                    function: { name: "search", arguments: "{\"query\":\"贵州门票\"}" },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      )) as unknown as typeof fetch;
+    const c = new HunyuanClient({ apiKey: "k" });
+    await expect(c.chat([{ role: "user", content: "做计划" }])).resolves.toBe(
+      `Action: search\nAction-Input: {"query":"贵州门票"}`,
+    );
+  });
+
   it("fails closed on empty assistant content", async () => {
     globalThis.fetch = (async () =>
       new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: "" } }] }), {

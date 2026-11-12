@@ -53,6 +53,7 @@ import {
   type SkillListRequest,
   type SkillListResponse,
   type SkillProposalDecision,
+  type OllamaCheckResponse,
   type StatusResponse,
   type SubagentRecordView,
   type SyncApplyReportView,
@@ -70,9 +71,13 @@ import {
   type WorkspaceError,
   type WorkspaceInfo,
   type WorkspaceListResponse,
+  type WorkspaceMkdirRequest,
+  type WorkspaceMkdirResponse,
   type WorkspacePickResponse,
   type WorkspaceReadRequest,
   type WorkspaceReadResponse,
+  type WorkspaceRenameDirRequest,
+  type WorkspaceRenameDirResponse,
   type WorkspaceRevealRequest,
   type WorkspaceRevealResponse,
   type WorkspaceWriteRequest,
@@ -104,6 +109,14 @@ const api = {
   },
   status(): Promise<StatusResponse> {
     return ipcRenderer.invoke(IPC.STATUS);
+  },
+  /** Ollama 自检：服务是否在跑、embedding 模型是否已安装。 */
+  ollamaCheck(): Promise<OllamaCheckResponse> {
+    return ipcRenderer.invoke(IPC.OLLAMA_CHECK);
+  },
+  /** 尝试拉起本机 Ollama 并复检；成功后主进程会热重装 agent 切回真实 embedding。 */
+  ollamaLaunch(): Promise<OllamaCheckResponse> {
+    return ipcRenderer.invoke(IPC.OLLAMA_LAUNCH);
   },
   chat(req: ChatRequest): Promise<ChatResponse> {
     return ipcRenderer.invoke(IPC.CHAT, req);
@@ -387,6 +400,18 @@ const api = {
   workspaceReveal(req?: WorkspaceRevealRequest): Promise<WorkspaceRevealResponse | WorkspaceError> {
     return ipcRenderer.invoke(IPC.WORKSPACE_REVEAL, req ?? {});
   },
+  /** 在工作区内建目录（任务同名文件工作区）。 */
+  workspaceMkdir(
+    req: WorkspaceMkdirRequest,
+  ): Promise<WorkspaceMkdirResponse | WorkspaceError> {
+    return ipcRenderer.invoke(IPC.WORKSPACE_MKDIR, req);
+  },
+  /** 工作区内目录改名（任务改名同步）。 */
+  workspaceRenameDir(
+    req: WorkspaceRenameDirRequest,
+  ): Promise<WorkspaceRenameDirResponse | WorkspaceError> {
+    return ipcRenderer.invoke(IPC.WORKSPACE_RENAME_DIR, req);
+  },
   /** 订阅工作区文件变更事件（fs.watch）。 */
   onWorkspaceEvent(cb: (payload: unknown) => void): () => void {
     return onEvent(IPC.EVT_WORKSPACE, cb);
@@ -436,6 +461,12 @@ const api = {
   }): Promise<WorkbenchWorkspace> {
     return ipcRenderer.invoke(IPC.WORKBENCH_WORKSPACE_CREATE, req);
   },
+  updateWorkbenchWorkspace(req: {
+    id: string;
+    name: string;
+  }): Promise<WorkbenchWorkspace> {
+    return ipcRenderer.invoke(IPC.WORKBENCH_WORKSPACE_UPDATE, req);
+  },
   closeWorkbenchWorkspace(req: { id: string }): Promise<WorkbenchWorkspace> {
     return ipcRenderer.invoke(IPC.WORKBENCH_WORKSPACE_CLOSE, req);
   },
@@ -453,6 +484,9 @@ const api = {
   }): Promise<WorkbenchTask> {
     return ipcRenderer.invoke(IPC.WORKBENCH_TASK_UPDATE, req);
   },
+  deleteWorkbenchTask(req: { id: string }): Promise<{ ok: boolean; error?: string }> {
+    return ipcRenderer.invoke(IPC.WORKBENCH_TASK_DELETE, req);
+  },
   createWorkbenchConversation(req: {
     parentId: string;
     title: string;
@@ -466,6 +500,9 @@ const api = {
     modelProfileId?: string;
   }): Promise<WorkbenchConversation> {
     return ipcRenderer.invoke(IPC.WORKBENCH_CONVERSATION_UPDATE, req);
+  },
+  deleteWorkbenchConversation(req: { id: string }): Promise<{ ok: boolean; error?: string }> {
+    return ipcRenderer.invoke(IPC.WORKBENCH_CONVERSATION_DELETE, req);
   },
   workbenchMessages(conversationId: string): Promise<WorkbenchMessage[]> {
     return ipcRenderer.invoke(IPC.WORKBENCH_MESSAGES, conversationId);

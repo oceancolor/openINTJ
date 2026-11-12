@@ -80,10 +80,79 @@ interface ParsedThought {
   parseError?: string;
 }
 
+/**
+ * 伪原生工具调用标记归一化：部分模型（混元等）会输出
+ * `<tool_call:xxxx>search({...})</tool_call>` 或整段 JSON 工具调用，
+ * 而不是 Action/Action-Input 文本协议。解析不了时宁可判 parseError
+ * 让模型重输，也不能把标记当最终答案交付。
+ */
+const extractPseudoToolCall = (
+  text: string,
+): { tool: string; params: Record<string, unknown>; thought: string } | { parseError: string } | undefined => {
+  const markup = text.match(/<tool_call[^>]*>\s*([A-Za-z_][\w.-]*)\s*\(([\s\S]*?)\)\s*<\/tool_call[^>]*>/i);
+  if (markup) {
+    const thought = text
+      .slice(0, markup.index)
+      .replace(/<\/?tool_calls[^>]*>/gi, "")
+      .replace(/^\s*Thought\s*:\s*/i, "")
+      .trim();
+    const rawArgs = markup[2]!.trim();
+    try {
+      const parsed = rawArgs ? (JSON.parse(rawArgs) as unknown) : {};
+      return {
+        tool: markup[1]!,
+        params:
+          typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : { value: parsed },
+        thought,
+      };
+    } catch {
+      return { parseError: `工具调用参数 JSON 解析失败：${rawArgs.slice(0, 120)}` };
+    }
+  }
+  if (/<tool_call/i.test(text)) {
+    return { parseError: "工具调用标记格式无法解析" };
+  }
+  const unfenced = text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+  if (unfenced.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(unfenced) as Record<string, unknown>;
+      const tool =
+        typeof parsed["tool"] === "string"
+          ? parsed["tool"]
+          : typeof parsed["name"] === "string"
+            ? parsed["name"]
+            : undefined;
+      const rawParams = parsed["params"] ?? parsed["arguments"] ?? parsed["input"];
+      if (tool) {
+        return {
+          tool,
+          params:
+            typeof rawParams === "object" && rawParams !== null && !Array.isArray(rawParams)
+              ? (rawParams as Record<string, unknown>)
+              : {},
+          thought: "",
+        };
+      }
+    } catch {
+      // 不是 JSON 工具调用，按普通文本继续走原协议解析。
+    }
+  }
+  return undefined;
+};
+
 const parseLlmThought = (text: string): ParsedThought => {
   const trimmed = text.trim();
   if (!trimmed) {
     return { thought: "", isFinal: false, parseError: "模型返回空内容" };
+  }
+  const pseudo = extractPseudoToolCall(trimmed);
+  if (pseudo) {
+    if ("parseError" in pseudo) {
+      return { thought: "", isFinal: false, parseError: pseudo.parseError };
+    }
+    return { thought: pseudo.thought, isFinal: false, action: { tool: pseudo.tool, params: pseudo.params } };
   }
   // 1) 先看是否有 FINAL
   const finalMatch = trimmed.match(/FINAL\s*:\s*([\s\S]+)$/im);
@@ -177,9 +246,18 @@ const buildSystemPrompt = (baseSystemPrompt: string, tools: ToolDescriptor[]): s
 
 const stopConditionKey = (cond: ReactStopCondition): string => cond.kind;
 
-/** 策略拒绝、工具不存在：继续 ReAct，让模型换工具。真正的执行崩溃仍 failFast。 */
+/**
+ * 策略拒绝、工具不存在、超时、未配置、网络故障：都作为观察回灌继续
+ * ReAct（模型可换工具或用已有知识降级作答并说明）。真正的执行崩溃
+ * 与安全拒绝仍 failFast。
+ */
 export const isRecoverableToolError = (error: string | undefined): boolean =>
-  Boolean(error && /未启用|白名单|工具未注册|unknown tool|not in (the )?allowlist/i.test(error));
+  Boolean(
+    error &&
+      /未启用|白名单|工具未注册|unknown tool|not in (the )?allowlist|timeout|timed?\s*out|超时|not[_ ]configured|未配置|unavailable|不可用|econn|network|网络/i.test(
+        error,
+      ),
+  );
 
 const checkDuplicate = (trajectory: TrajectoryEntry[], threshold: number): boolean => {
   const actions: Array<{ tool: string; key: string }> = [];
@@ -262,6 +340,8 @@ export class ReactStateMachine {
     let finalAnswer = "";
     let status: ReactStatus = "ok";
     let failedTool: { tool: string; error: string } | undefined;
+    /** 同一工具本轮失败次数：达 2 次后注入禁试指令，避免无谓重试烧时间。 */
+    const toolFailureCounts = new Map<string, number>();
     let iter = 0;
     const overflowState = { recovered: false };
 
@@ -524,13 +604,24 @@ export class ReactStateMachine {
         break;
       }
 
-      // 把观察结果回灌给 LLM
+      // 把观察结果回灌给 LLM；可恢复失败附带降级指引（连败禁试）。
       totalTokens += estimateTokens(observation);
+      let guidance = "";
+      if (!toolResult.success) {
+        const failures = (toolFailureCounts.get(toolResult.toolName) ?? 0) + 1;
+        toolFailureCounts.set(toolResult.toolName, failures);
+        if (isRecoverableToolError(toolResult.error)) {
+          guidance =
+            failures >= 2
+              ? `\n[系统提示] 工具 ${toolResult.toolName} 本轮已失败 ${failures} 次，禁止再调用它。改用已有知识或其他工具继续完成任务，并在最终答案中说明哪些内容未经该工具查证。`
+              : `\n[系统提示] 工具 ${toolResult.toolName} 本次失败且通常不可用，不要原样重试；优先换思路继续完成任务。`;
+        }
+      }
       conversation.push({
         role: "tool",
         name: toolResult.toolName,
         toolCallId: toolResult.callId,
-        content: observation,
+        content: observation + guidance,
       });
     }
 

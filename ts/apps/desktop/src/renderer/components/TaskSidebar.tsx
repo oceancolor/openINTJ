@@ -16,10 +16,13 @@ export const TaskSidebar: React.FC<{
   onCloseWorkspace: () => void;
   onSelectTask: (id: string) => void;
   onSelectConversation: (id: string) => void;
-  onCreateTask: () => void;
   onCreateConversation: () => void;
   onRenameTask: (task: WorkbenchTask) => void;
   onArchiveTask: (task: WorkbenchTask) => void;
+  onDeleteTask?: ((task: WorkbenchTask) => void) | undefined;
+  onDeleteConversation?: ((conversation: WorkbenchConversation) => void) | undefined;
+  onRenameWorkspace?: (() => void) | undefined;
+  onRenameConversation?: ((conversation: WorkbenchConversation) => void) | undefined;
   onOpenWorkspaceDir?: (() => void) | undefined;
   showWorkspace?: boolean | undefined;
   /** 当前任务（当前对话）已生成的文件路径，点击在中栏预览。 */
@@ -66,16 +69,28 @@ export const TaskSidebar: React.FC<{
           ) : null}
         </div>
       ) : null}
+      {!showWorkspace && props.onRenameWorkspace && current ? (
+        <div className="shrink-0 border-b border-line px-3 py-2">
+          <div className="text-[10px] font-bold uppercase tracking-[0.13em] text-muted">
+            工作区
+          </div>
+          <div className="mt-0.5 flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-ink" title={current.rootPath}>
+              {current.name}
+            </span>
+            <button
+              type="button"
+              className="shrink-0 text-muted hover:text-ink"
+              onClick={props.onRenameWorkspace}
+            >
+              改名
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div className="flex shrink-0 items-center justify-between p-2">
         <span className="text-[10px] font-bold uppercase tracking-[0.13em] text-muted">任务</span>
-        <button
-          type="button"
-          className="rounded-lg bg-ink px-2 py-1 font-medium text-white hover:bg-inksoft disabled:opacity-40"
-          disabled={!props.activeWorkspaceId}
-          onClick={props.onCreateTask}
-        >
-          + 新任务
-        </button>
+        <span className="text-[10px] text-faint">新建在中间栏页签行</span>
       </div>
       <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-2">
         {props.tasks
@@ -126,22 +141,53 @@ export const TaskSidebar: React.FC<{
                       >
                         归档
                       </button>
+                      {props.onDeleteTask ? (
+                        <button
+                          type="button"
+                          className="text-muted hover:text-signal"
+                          onClick={() => props.onDeleteTask?.(task)}
+                        >
+                          删除
+                        </button>
+                      ) : null}
                     </div>
                     {props.conversations
                       .filter((conversation) => conversation.taskId === task.id)
                       .map((conversation) => (
-                        <button
-                          type="button"
-                          key={conversation.id}
-                          className={`block w-full truncate rounded-lg px-1.5 py-1 text-left ${
-                            props.activeConversationId === conversation.id
-                              ? "bg-mosstint text-mossdeep"
-                              : "text-muted hover:text-ink"
-                          }`}
-                          onClick={() => props.onSelectConversation(conversation.id)}
-                        >
-                          {conversation.title}
-                        </button>
+                        <div key={conversation.id} className="group flex items-center">
+                          <button
+                            type="button"
+                            className={`min-w-0 flex-1 truncate rounded-lg px-1.5 py-1 text-left ${
+                              props.activeConversationId === conversation.id
+                                ? "bg-mosstint text-mossdeep"
+                                : "text-muted hover:text-ink"
+                            }`}
+                            onClick={() => props.onSelectConversation(conversation.id)}
+                          >
+                            {conversation.title}
+                          </button>
+                          {props.onRenameConversation ? (
+                            <button
+                              type="button"
+                              title="重命名会话"
+                              className="shrink-0 rounded px-1 py-0.5 text-[10px] text-faint opacity-60 hover:text-ink group-hover:opacity-100"
+                              onClick={() => props.onRenameConversation?.(conversation)}
+                            >
+                              改名
+                            </button>
+                          ) : null}
+                          {props.onDeleteConversation ? (
+                            <button
+                              type="button"
+                              aria-label={`删除会话 ${conversation.title}`}
+                              title="删除会话（记录一并删除）"
+                              className="shrink-0 rounded px-1 py-0.5 text-faint opacity-60 hover:text-signal group-hover:opacity-100"
+                              onClick={() => props.onDeleteConversation?.(conversation)}
+                            >
+                              ×
+                            </button>
+                          ) : null}
+                        </div>
                       ))}
                     <button
                       type="button"

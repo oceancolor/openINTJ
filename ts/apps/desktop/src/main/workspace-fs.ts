@@ -1,4 +1,4 @@
-import { readFile, readdir, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveInRoot } from "@openintj/plane-execution";
 import type { WorkspaceEntry } from "../shared/workspace-view.js";
@@ -60,4 +60,41 @@ export const resolveWorkspaceItem = async (
   const abs = resolveInRoot(root, rel?.trim() || ".");
   const st = await stat(abs);
   return { abs, kind: st.isDirectory() ? "dir" : "file" };
+};
+
+/** 在工作区内建目录（已存在则 created=false，不报错）。 */
+export const mkdirWorkspaceDir = async (
+  root: string,
+  rel: string,
+): Promise<{ path: string; created: boolean }> => {
+  const abs = resolveInRoot(root, rel);
+  try {
+    const st = await stat(abs);
+    if (!st.isDirectory()) throw new Error(`同名文件已存在，无法建目录：${rel}`);
+    return { path: rel.replaceAll("\\", "/"), created: false };
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+  await mkdir(abs, { recursive: true });
+  return { path: rel.replaceAll("\\", "/"), created: true };
+};
+
+/** 工作区内目录改名：源必须是已存在目录，目标不得已存在。 */
+export const renameWorkspaceDir = async (
+  root: string,
+  from: string,
+  to: string,
+): Promise<{ from: string; to: string }> => {
+  const fromAbs = resolveInRoot(root, from);
+  const toAbs = resolveInRoot(root, to);
+  const st = await stat(fromAbs);
+  if (!st.isDirectory()) throw new Error(`不是目录：${from}`);
+  try {
+    await stat(toAbs);
+    throw new Error(`目标目录已存在：${to}`);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+  await rename(fromAbs, toAbs);
+  return { from: from.replaceAll("\\", "/"), to: to.replaceAll("\\", "/") };
 };

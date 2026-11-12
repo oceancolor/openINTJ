@@ -29,6 +29,7 @@ import {
   IdentityUnlinkRequestSchema,
   MemoryQueryRequestSchema,
   ModelCredentialSetSchema,
+  type OllamaCheckResponse,
   ProfileUpsertRequestSchema,
   ScheduleAddRequestSchema,
   ScheduleUpdateRequestSchema,
@@ -40,7 +41,9 @@ import {
   WorkbenchCreateSchema,
   WorkbenchUpdateSchema,
   WorkspaceBytesRequestSchema,
+  WorkspaceMkdirRequestSchema,
   WorkspaceReadRequestSchema,
+  WorkspaceRenameDirRequestSchema,
   WorkspaceRevealRequestSchema,
   WorkspaceWriteRequestSchema,
   isAgentRuntimeConfigPatch,
@@ -57,7 +60,13 @@ import type { ConfigService } from "./config-store.js";
 import type { CredentialStore } from "./credential-store.js";
 import type { ModelRegistry } from "./model-registry.js";
 import type { WorkbenchStore } from "./workbench-store.js";
-import { listWorkspaceEntries, readWorkspaceBytes, resolveWorkspaceItem } from "./workspace-fs.js";
+import {
+  listWorkspaceEntries,
+  mkdirWorkspaceDir,
+  readWorkspaceBytes,
+  renameWorkspaceDir,
+  resolveWorkspaceItem,
+} from "./workspace-fs.js";
 
 const DORMANT_NOT_ENABLED = {
   error: "dormant_not_enabled",
@@ -103,6 +112,10 @@ export interface IpcDeps {
    * Tests inject a stub; production uses Electron `shell`.
    */
   revealItem?: (absPath: string, kind: "file" | "dir") => Promise<{ ok: boolean; error?: string }>;
+  /** Ollama 自检（主进程注入真实探测；不传 → 恒报未运行，单测可桩）。 */
+  checkOllama?: () => Promise<OllamaCheckResponse>;
+  /** 尝试拉起本机 Ollama 服务并复检（主进程注入 spawn 逻辑）。 */
+  launchOllama?: () => Promise<OllamaCheckResponse>;
 }
 
 const workspaceError = (e: unknown): { error: "workspace_error"; message: string } => ({
@@ -149,6 +162,15 @@ export const registerIpcHandlers = (
   deps: IpcDeps = {},
 ): IpcRegistration => {
   const offs: Array<() => void> = [];
+  // 注册通道自动登记：unregister 按登记表逐个注销，不再手写两份
+  // 清单——曾因 TASKPOOL/SUBAGENTS/CHANNELS/SYNC/VOICE 等 9 个通道
+  // 只注册不注销，热重载二次注册直接抛错并打断整批 IPC 注册。
+  const registeredChannels: string[] = [];
+  const handle = (channel: string, listener: Parameters<IpcMain["handle"]>[1]): void => {
+    if (registeredChannels.includes(channel)) api.removeHandler(channel);
+    registeredChannels.push(channel);
+    api.handle(channel, listener);
+  };
   // RFC-021 F02 (T04): chat abort controllers are scoped per conversation;
   // a cancel for one conversation must never abort another's stream.
   // App-restart / config-reload remain legitimately global aborts.
@@ -205,14 +227,47 @@ export const registerIpcHandlers = (
     });
   }
 
-  api.handle(IPC.PING, async () => ({ ok: true, ts: Date.now() }));
+  handle(IPC.PING, async () => ({ ok: true, ts: Date.now() }));
 
-  api.handle(IPC.STATUS, async () => {
+  handle(IPC.STATUS, async () => {
     await agent.refreshModelRuntime();
     return agent.status();
   });
 
-  api.handle(IPC.APP_RESTART, async () => {
+  // Ollama 显式生命周期：自检只探测；启动在探测成功后热重装 agent，
+  // 让 embedding 真正切回 Ollama（仅刷新状态不会换 embedder 实例）。
+  handle(IPC.OLLAMA_CHECK, async (): Promise<OllamaCheckResponse> => {
+    if (!deps.checkOllama) {
+      return {
+        endpoint: "http://127.0.0.1:11434",
+        embedModel: "",
+        running: false,
+        modelInstalled: false,
+        reason: "check_unavailable",
+      };
+    }
+    return deps.checkOllama();
+  });
+
+  handle(IPC.OLLAMA_LAUNCH, async (): Promise<OllamaCheckResponse> => {
+    if (!deps.launchOllama) {
+      return {
+        endpoint: "http://127.0.0.1:11434",
+        embedModel: "",
+        running: false,
+        modelInstalled: false,
+        reason: "launch_unavailable",
+      };
+    }
+    const result = await deps.launchOllama();
+    if (result.running && result.modelInstalled && deps.reloadAgent) {
+      abortAllChats(new Error("ollama_rebinding"));
+      await deps.reloadAgent();
+    }
+    return result;
+  });
+
+  handle(IPC.APP_RESTART, async () => {
     if (!deps.restart) return { ok: false, reason: "restart_unavailable" };
     restarting = true;
     abortAllChats(new Error("app_restarting"));
@@ -220,7 +275,7 @@ export const registerIpcHandlers = (
     return { ok: true };
   });
 
-  api.handle(IPC.WINDOW_CHROME, async (evt, raw: unknown) => {
+  handle(IPC.WINDOW_CHROME, async (evt, raw: unknown) => {
     const parsed = WindowChromeActionSchema.safeParse(raw);
     if (!parsed.success) return { ok: false };
     const win = BrowserWindow.fromWebContents(evt.sender);
@@ -251,7 +306,7 @@ export const registerIpcHandlers = (
     }
   });
 
-  api.handle(IPC.MODEL_PROFILES, async () => {
+  handle(IPC.MODEL_PROFILES, async () => {
     const custom = deps.config?.get().modelProfiles ?? [];
     const profiles = [...DEFAULT_MODEL_PROFILES, ...custom] as Array<
       (typeof DEFAULT_MODEL_PROFILES)[number]
@@ -269,7 +324,7 @@ export const registerIpcHandlers = (
     }));
   });
 
-  api.handle(IPC.MODEL_CREDENTIAL_SET, async (_evt, raw: unknown) => {
+  handle(IPC.MODEL_CREDENTIAL_SET, async (_evt, raw: unknown) => {
     const parsed = ModelCredentialSetSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, error: "invalid_request" };
     if (!deps.credentials) return { ok: false, error: "credential_store_unavailable" };
@@ -278,7 +333,7 @@ export const registerIpcHandlers = (
     return { ok: true };
   });
 
-  api.handle(IPC.MODEL_CREDENTIAL_DELETE, async (_evt, profileId: unknown) => {
+  handle(IPC.MODEL_CREDENTIAL_DELETE, async (_evt, profileId: unknown) => {
     if (typeof profileId !== "string") return { ok: false, error: "invalid_request" };
     if (!deps.credentials) return { ok: false, error: "credential_store_unavailable" };
     const deleted = deps.credentials.delete(profileId);
@@ -286,17 +341,17 @@ export const registerIpcHandlers = (
     return { ok: true, deleted };
   });
 
-  api.handle(IPC.MODEL_TEST, async (_evt, profileId: unknown) => {
+  handle(IPC.MODEL_TEST, async (_evt, profileId: unknown) => {
     if (typeof profileId !== "string") return { ok: false, error: "invalid_request" };
     if (!deps.modelRegistry) return { ok: false, error: "model_registry_unavailable" };
     return deps.modelRegistry.test(profileId);
   });
 
-  api.handle(IPC.WORKBENCH_BOOTSTRAP, async () => {
+  handle(IPC.WORKBENCH_BOOTSTRAP, async () => {
     if (!deps.workbench) return { workspaces: [], tasks: [], conversations: [] };
     return deps.workbench.bootstrap();
   });
-  api.handle(IPC.WORKBENCH_WORKSPACE_CREATE, async (_evt, raw: unknown) => {
+  handle(IPC.WORKBENCH_WORKSPACE_CREATE, async (_evt, raw: unknown) => {
     const parsed = WorkbenchCreateSchema.safeParse(raw);
     if (!parsed.success || !parsed.data.name || !parsed.data.rootPath || !deps.workbench) {
       return { error: "invalid_request" };
@@ -306,12 +361,19 @@ export const registerIpcHandlers = (
       rootPath: parsed.data.rootPath,
     });
   });
-  api.handle(IPC.WORKBENCH_WORKSPACE_CLOSE, async (_evt, raw: unknown) => {
+  handle(IPC.WORKBENCH_WORKSPACE_UPDATE, async (_evt, raw: unknown) => {
+    const parsed = WorkbenchUpdateSchema.safeParse(raw);
+    if (!parsed.success || !parsed.data.name || !deps.workbench) {
+      return { error: "invalid_request" };
+    }
+    return deps.workbench.updateWorkspace(parsed.data.id, { name: parsed.data.name });
+  });
+  handle(IPC.WORKBENCH_WORKSPACE_CLOSE, async (_evt, raw: unknown) => {
     const parsed = WorkbenchUpdateSchema.safeParse(raw);
     if (!parsed.success || !deps.workbench) return { error: "invalid_request" };
     return deps.workbench.closeWorkspace(parsed.data.id);
   });
-  api.handle(IPC.WORKBENCH_TASK_CREATE, async (_evt, raw: unknown) => {
+  handle(IPC.WORKBENCH_TASK_CREATE, async (_evt, raw: unknown) => {
     const parsed = WorkbenchCreateSchema.safeParse(raw);
     if (!parsed.success || !parsed.data.parentId || !parsed.data.title || !deps.workbench) {
       return { error: "invalid_request" };
@@ -321,7 +383,7 @@ export const registerIpcHandlers = (
       title: parsed.data.title,
     });
   });
-  api.handle(IPC.WORKBENCH_TASK_UPDATE, async (_evt, raw: unknown) => {
+  handle(IPC.WORKBENCH_TASK_UPDATE, async (_evt, raw: unknown) => {
     const parsed = WorkbenchUpdateSchema.safeParse(raw);
     if (!parsed.success || !deps.workbench) return { error: "invalid_request" };
     return deps.workbench.updateTask(parsed.data.id, {
@@ -332,7 +394,13 @@ export const registerIpcHandlers = (
         : {}),
     });
   });
-  api.handle(IPC.WORKBENCH_CONVERSATION_CREATE, async (_evt, raw: unknown) => {
+  handle(IPC.WORKBENCH_TASK_DELETE, async (_evt, raw: unknown) => {
+    const parsed = WorkbenchUpdateSchema.safeParse(raw);
+    if (!parsed.success || !deps.workbench) return { error: "invalid_request" };
+    deps.workbench.deleteTask(parsed.data.id);
+    return { ok: true };
+  });
+  handle(IPC.WORKBENCH_CONVERSATION_CREATE, async (_evt, raw: unknown) => {
     const parsed = WorkbenchCreateSchema.safeParse(raw);
     if (!parsed.success || !parsed.data.parentId || !parsed.data.title || !deps.workbench) {
       return { error: "invalid_request" };
@@ -343,7 +411,7 @@ export const registerIpcHandlers = (
       modelProfileId: parsed.data.modelProfileId ?? "auto",
     });
   });
-  api.handle(IPC.WORKBENCH_CONVERSATION_UPDATE, async (_evt, raw: unknown) => {
+  handle(IPC.WORKBENCH_CONVERSATION_UPDATE, async (_evt, raw: unknown) => {
     const parsed = WorkbenchUpdateSchema.safeParse(raw);
     if (!parsed.success || !deps.workbench) return { error: "invalid_request" };
     return deps.workbench.updateConversation(parsed.data.id, {
@@ -353,11 +421,17 @@ export const registerIpcHandlers = (
         : {}),
     });
   });
-  api.handle(IPC.WORKBENCH_MESSAGES, async (_evt, conversationId: unknown) => {
+  handle(IPC.WORKBENCH_CONVERSATION_DELETE, async (_evt, raw: unknown) => {
+    const parsed = WorkbenchUpdateSchema.safeParse(raw);
+    if (!parsed.success || !deps.workbench) return { error: "invalid_request" };
+    deps.workbench.deleteConversation(parsed.data.id);
+    return { ok: true };
+  });
+  handle(IPC.WORKBENCH_MESSAGES, async (_evt, conversationId: unknown) => {
     if (typeof conversationId !== "string" || !deps.workbench) return [];
     return deps.workbench.listMessages(conversationId);
   });
-  api.handle(IPC.WORKBENCH_MESSAGES_CLEAR, async (_evt, conversationId: unknown) => {
+  handle(IPC.WORKBENCH_MESSAGES_CLEAR, async (_evt, conversationId: unknown) => {
     if (typeof conversationId !== "string" || !deps.workbench) return { error: "invalid_request" };
     const command = agent.commands.match("/clear");
     if (!command) return { error: "invalid_request" };
@@ -365,7 +439,7 @@ export const registerIpcHandlers = (
     return { ok: true };
   });
 
-  api.handle(IPC.COMMANDS_INVOKE, async (_evt, raw: unknown) => {
+  handle(IPC.COMMANDS_INVOKE, async (_evt, raw: unknown) => {
     const parsed = CommandsInvokeRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     const command = agent.commands.match(parsed.data.text);
@@ -377,21 +451,21 @@ export const registerIpcHandlers = (
     return { name: command.name, result };
   });
 
-  api.handle(IPC.AGENT_STEER, async (_evt, raw: unknown) => {
+  handle(IPC.AGENT_STEER, async (_evt, raw: unknown) => {
     const parsed = AgentSteerRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     commandCtx(parsed.data.conversationId).handle.steer(parsed.data.message);
     return { ok: true };
   });
 
-  api.handle(IPC.AGENT_INJECT, async (_evt, raw: unknown) => {
+  handle(IPC.AGENT_INJECT, async (_evt, raw: unknown) => {
     const parsed = AgentSteerRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     commandCtx(parsed.data.conversationId).handle.inject(parsed.data.message);
     return { ok: true };
   });
 
-  api.handle(IPC.AGENT_CANCEL, async (_evt, raw: unknown) => {
+  handle(IPC.AGENT_CANCEL, async (_evt, raw: unknown) => {
     const parsed = AgentCancelRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     commandCtx(parsed.data.conversationId).handle.cancel(parsed.data.cause);
@@ -400,8 +474,8 @@ export const registerIpcHandlers = (
   });
 
   // RFC-013: interactive approval + capability grants.
-  api.handle(IPC.APPROVAL_LIST, async () => agent.approvals?.listPending() ?? []);
-  api.handle(IPC.APPROVAL_DECIDE, async (_evt, raw: unknown) => {
+  handle(IPC.APPROVAL_LIST, async () => agent.approvals?.listPending() ?? []);
+  handle(IPC.APPROVAL_DECIDE, async (_evt, raw: unknown) => {
     const parsed = ApprovalDecideRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     if (!agent.approvals) return { error: "approval_not_enabled" };
@@ -412,8 +486,8 @@ export const registerIpcHandlers = (
     } as Parameters<typeof agent.approvals.decide>[1]);
     return ok ? { ok: true } : { error: "not_pending" };
   });
-  api.handle(IPC.GRANTS_LIST, async () => agent.grants.list());
-  api.handle(IPC.GRANTS_GRANT, async (_evt, raw: unknown) => {
+  handle(IPC.GRANTS_LIST, async () => agent.grants.list());
+  handle(IPC.GRANTS_GRANT, async (_evt, raw: unknown) => {
     const parsed = GrantCreateRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     return agent.grants.grant({
@@ -424,14 +498,14 @@ export const registerIpcHandlers = (
       ...(parsed.data.label ? { label: parsed.data.label } : {}),
     });
   });
-  api.handle(IPC.GRANTS_REVOKE, async (_evt, raw: unknown) => {
+  handle(IPC.GRANTS_REVOKE, async (_evt, raw: unknown) => {
     if (typeof raw !== "string" || !raw) return { error: "invalid_request" };
     return agent.grants.revoke(raw) ? { ok: true } : { error: "not_found" };
   });
 
   // RFC-014: personal profile (memory control plane).
-  api.handle(IPC.PROFILE_LIST, async () => agent.profile.list());
-  api.handle(IPC.PROFILE_UPSERT, async (_evt, raw: unknown) => {
+  handle(IPC.PROFILE_LIST, async () => agent.profile.list());
+  handle(IPC.PROFILE_UPSERT, async (_evt, raw: unknown) => {
     const parsed = ProfileUpsertRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     const entry = agent.profile.upsert({
@@ -442,16 +516,16 @@ export const registerIpcHandlers = (
     });
     return entry ?? { error: "conflict" };
   });
-  api.handle(IPC.PROFILE_REMOVE, async (_evt, raw: unknown) => {
+  handle(IPC.PROFILE_REMOVE, async (_evt, raw: unknown) => {
     if (typeof raw !== "string" || !raw) return { error: "invalid_request" };
     return agent.profile.remove(raw) ? { ok: true } : { error: "not_found" };
   });
-  api.handle(IPC.PROFILE_EXPORT, async () => ({ profile: agent.profile.exportJSON() }));
+  handle(IPC.PROFILE_EXPORT, async () => ({ profile: agent.profile.exportJSON() }));
 
   // RFC-020: identity graph. Resolvers only propose; confirm() is the only
   // way into the graph, and owned values can never be silently moved.
-  api.handle(IPC.IDENTITY_PERSONS, async () => agent.identity.listPersons());
-  api.handle(IPC.IDENTITY_RESOLVE, async (_evt, raw: unknown) => {
+  handle(IPC.IDENTITY_PERSONS, async () => agent.identity.listPersons());
+  handle(IPC.IDENTITY_RESOLVE, async (_evt, raw: unknown) => {
     const parsed = IdentityResolveRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     try {
@@ -460,7 +534,7 @@ export const registerIpcHandlers = (
       return { error: err instanceof Error ? err.message : "resolve_failed" };
     }
   });
-  api.handle(IPC.IDENTITY_CONFIRM, async (_evt, raw: unknown) => {
+  handle(IPC.IDENTITY_CONFIRM, async (_evt, raw: unknown) => {
     const parsed = IdentityConfirmRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     try {
@@ -469,7 +543,7 @@ export const registerIpcHandlers = (
       return { error: err instanceof Error ? err.message : "confirm_failed" };
     }
   });
-  api.handle(IPC.IDENTITY_ASSERT, async (_evt, raw: unknown) => {
+  handle(IPC.IDENTITY_ASSERT, async (_evt, raw: unknown) => {
     const parsed = IdentityAssertRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     try {
@@ -478,7 +552,7 @@ export const registerIpcHandlers = (
       return { error: err instanceof Error ? err.message : "assert_failed" };
     }
   });
-  api.handle(IPC.IDENTITY_UNLINK, async (_evt, raw: unknown) => {
+  handle(IPC.IDENTITY_UNLINK, async (_evt, raw: unknown) => {
     const parsed = IdentityUnlinkRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     const result = agent.identity.unlink(parsed.data.accountId);
@@ -495,8 +569,8 @@ export const registerIpcHandlers = (
       throw new Error(`scheduled run ended with status ${result.status}`);
     }
   });
-  api.handle(IPC.SCHEDULE_LIST, async () => agent.scheduler.list());
-  api.handle(IPC.SCHEDULE_ADD, async (_evt, raw: unknown) => {
+  handle(IPC.SCHEDULE_LIST, async () => agent.scheduler.list());
+  handle(IPC.SCHEDULE_ADD, async (_evt, raw: unknown) => {
     const parsed = ScheduleAddRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     try {
@@ -513,7 +587,7 @@ export const registerIpcHandlers = (
       return { error: "invalid_request", message: (e as Error).message };
     }
   });
-  api.handle(IPC.SCHEDULE_UPDATE, async (_evt, raw: unknown) => {
+  handle(IPC.SCHEDULE_UPDATE, async (_evt, raw: unknown) => {
     const req = (raw ?? {}) as { id?: unknown; patch?: unknown };
     if (typeof req.id !== "string" || !req.id) return { error: "invalid_request" };
     const parsed = ScheduleUpdateRequestSchema.safeParse(req.patch);
@@ -533,22 +607,22 @@ export const registerIpcHandlers = (
       return { error: "invalid_request", message: (e as Error).message };
     }
   });
-  api.handle(IPC.SCHEDULE_REMOVE, async (_evt, raw: unknown) => {
+  handle(IPC.SCHEDULE_REMOVE, async (_evt, raw: unknown) => {
     if (typeof raw !== "string" || !raw) return { error: "invalid_request" };
     return agent.scheduler.remove(raw) ? { ok: true } : { error: "not_found" };
   });
 
   // RFC-016: connector statuses (connector tools live in the agent ToolHub).
-  api.handle(IPC.CONNECTORS_LIST, async () => agent.connectors.statuses());
+  handle(IPC.CONNECTORS_LIST, async () => agent.connectors.statuses());
 
   // RFC-012: TaskPool checkpoints (list / resume / cancel; no renderer panel yet).
-  api.handle(IPC.TASKPOOL_CHECKPOINTS, async (_evt, raw: unknown) => {
+  handle(IPC.TASKPOOL_CHECKPOINTS, async (_evt, raw: unknown) => {
     if (raw !== undefined && (typeof raw !== "number" || !Number.isFinite(raw))) {
       return { error: "invalid_request" };
     }
     return agent.taskPoolCheckpoints(raw);
   });
-  api.handle(IPC.TASKPOOL_RESUME, async (_evt, raw: unknown) => {
+  handle(IPC.TASKPOOL_RESUME, async (_evt, raw: unknown) => {
     if (typeof raw !== "string" || !raw) return { error: "invalid_request" };
     const result = await agent.resumeTaskRun(raw);
     if (!result) return { error: "not_found_or_not_resumable" };
@@ -567,7 +641,7 @@ export const registerIpcHandlers = (
       attempts: Object.fromEntries(result.attempts),
     };
   });
-  api.handle(IPC.TASKPOOL_CANCEL, async (_evt, raw: unknown) => {
+  handle(IPC.TASKPOOL_CANCEL, async (_evt, raw: unknown) => {
     if (typeof raw !== "string" || !raw) return { error: "invalid_request" };
     return (await agent.cancelTaskRun(raw))
       ? { ok: true }
@@ -575,19 +649,19 @@ export const registerIpcHandlers = (
   });
 
   // RFC-012 §3: subagent records (spawning stays model-side via delegate_task).
-  api.handle(IPC.SUBAGENTS_LIST, async () => agent.subagents.list());
+  handle(IPC.SUBAGENTS_LIST, async () => agent.subagents.list());
 
   // RFC-018: outbound channels (status + test send).
-  api.handle(IPC.CHANNELS_LIST, async () => agent.channels.list());
-  api.handle(IPC.CHANNELS_TEST, async (_evt, raw: unknown) => {
+  handle(IPC.CHANNELS_LIST, async () => agent.channels.list());
+  handle(IPC.CHANNELS_TEST, async (_evt, raw: unknown) => {
     if (typeof raw !== "string" || !raw) return { error: "invalid_request" };
     const result = await agent.channels.test(raw);
     return result.ok ? result : { error: result.error ?? "channel_test_failed" };
   });
 
   // RFC-019: cross-device sync bundle (export/import; main validates shape).
-  api.handle(IPC.SYNC_EXPORT, async () => agent.exportSyncBundle());
-  api.handle(IPC.SYNC_IMPORT, async (_evt, raw: unknown) => {
+  handle(IPC.SYNC_EXPORT, async () => agent.exportSyncBundle());
+  handle(IPC.SYNC_IMPORT, async (_evt, raw: unknown) => {
     const parsed = SyncBundleViewSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_bundle", issues: parsed.error.issues };
     try {
@@ -598,7 +672,7 @@ export const registerIpcHandlers = (
   });
 
   // RFC-019: speech-to-text (error when no provider configured via env).
-  api.handle(IPC.VOICE_TRANSCRIBE, async (_evt, raw: unknown) => {
+  handle(IPC.VOICE_TRANSCRIBE, async (_evt, raw: unknown) => {
     if (!agent.stt) return { error: "stt_not_configured" };
     const parsed = VoiceTranscribeRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
@@ -615,7 +689,7 @@ export const registerIpcHandlers = (
     }
   });
 
-  api.handle(IPC.CHAT, async (_evt, raw: unknown) => {
+  handle(IPC.CHAT, async (_evt, raw: unknown) => {
     const parsed = ChatRequestSchema.safeParse(raw);
     if (!parsed.success) {
       return { error: "invalid_request", issues: parsed.error.issues };
@@ -830,7 +904,7 @@ export const registerIpcHandlers = (
     }
   });
 
-  api.handle(IPC.MEMORY_QUERY, async (_evt, raw: unknown) => {
+  handle(IPC.MEMORY_QUERY, async (_evt, raw: unknown) => {
     const parsed = MemoryQueryRequestSchema.safeParse(raw);
     if (!parsed.success) {
       return { error: "invalid_request", issues: parsed.error.issues };
@@ -872,9 +946,9 @@ export const registerIpcHandlers = (
   });
 
   // ---------- G5.2 记忆审核台（F14 状态面 + 影子候选审核） ----------
-  api.handle(IPC.MEMORY_STATUS, async () => agent.memoryStatus());
+  handle(IPC.MEMORY_STATUS, async () => agent.memoryStatus());
 
-  api.handle(IPC.MEMORY_CANDIDATES, async () => agent.memoryCandidates());
+  handle(IPC.MEMORY_CANDIDATES, async () => agent.memoryCandidates());
 
   const candidateDecision = async (
     raw: unknown,
@@ -888,15 +962,15 @@ export const registerIpcHandlers = (
     return decide(candidateId);
   };
 
-  api.handle(IPC.MEMORY_CANDIDATE_APPROVE, async (_evt, raw: unknown) =>
+  handle(IPC.MEMORY_CANDIDATE_APPROVE, async (_evt, raw: unknown) =>
     candidateDecision(raw, (id) => agent.approveMemoryCandidate(id)),
   );
 
-  api.handle(IPC.MEMORY_CANDIDATE_REJECT, async (_evt, raw: unknown) =>
+  handle(IPC.MEMORY_CANDIDATE_REJECT, async (_evt, raw: unknown) =>
     candidateDecision(raw, (id) => agent.rejectMemoryCandidate(id)),
   );
 
-  api.handle(IPC.AUDIT_RECENT, async (_evt, rawLimit: unknown) => {
+  handle(IPC.AUDIT_RECENT, async (_evt, rawLimit: unknown) => {
     const limit =
       typeof rawLimit === "number" && Number.isFinite(rawLimit)
         ? Math.min(500, Math.max(1, Math.floor(rawLimit)))
@@ -908,7 +982,7 @@ export const registerIpcHandlers = (
   });
 
   // ---------- RFC-004 §8 工作区系统能力面 ----------
-  api.handle(IPC.WORKSPACE_INFO, async () => ({
+  handle(IPC.WORKSPACE_INFO, async () => ({
     root: agent.workspace.config.root,
     enableCommands: agent.workspace.config.enableCommands,
     allowedCommands: agent.workspace.config.allowedCommands,
@@ -917,7 +991,7 @@ export const registerIpcHandlers = (
   // 与 agent 工具路径同一治理闸门：IPC 直连沙箱也要过策略 + 配额（RFC-004 §8）。
   const workspaceGate = createToolCallGate(agent.governance);
 
-  api.handle(IPC.WORKSPACE_READ, async (_evt, raw: unknown) => {
+  handle(IPC.WORKSPACE_READ, async (_evt, raw: unknown) => {
     const parsed = WorkspaceReadRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     try {
@@ -929,7 +1003,7 @@ export const registerIpcHandlers = (
     }
   });
 
-  api.handle(IPC.WORKSPACE_WRITE, async (_evt, raw: unknown) => {
+  handle(IPC.WORKSPACE_WRITE, async (_evt, raw: unknown) => {
     const parsed = WorkspaceWriteRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     try {
@@ -946,14 +1020,21 @@ export const registerIpcHandlers = (
     }
   });
 
-  api.handle(IPC.WORKSPACE_PICK_DIR, async () => {
+  handle(IPC.WORKSPACE_PICK_DIR, async () => {
     if (!deps.pickDirectory) return { canceled: true };
     try {
       const root = await deps.pickDirectory();
       if (!root) return { canceled: true };
       if (deps.reloadAgent) {
         abortAllChats(new Error("config_reloading"));
-        await deps.reloadAgent();
+        try {
+          await deps.reloadAgent();
+        } catch (error) {
+          // 重载失败不吞掉选目录结果：目录已经选定，工作区绑定
+          // 流程（activate 的配置更新）会再次触发重载并回报失败；
+          // 这里仍把 root 返回，避免整条链静默断掉。
+          console.warn("[OpenINTJ desktop] reload after pick failed; returning picked root", error);
+        }
       }
       return { canceled: false, root };
     } catch (e) {
@@ -961,7 +1042,7 @@ export const registerIpcHandlers = (
     }
   });
 
-  api.handle(IPC.WORKSPACE_LIST, async () => {
+  handle(IPC.WORKSPACE_LIST, async () => {
     try {
       const root = agent.workspace.config.root;
       return { root, entries: await listWorkspaceEntries(root) };
@@ -970,7 +1051,7 @@ export const registerIpcHandlers = (
     }
   });
 
-  api.handle(IPC.WORKSPACE_READ_BYTES, async (_evt, raw: unknown) => {
+  handle(IPC.WORKSPACE_READ_BYTES, async (_evt, raw: unknown) => {
     const parsed = WorkspaceBytesRequestSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     try {
@@ -981,7 +1062,7 @@ export const registerIpcHandlers = (
     }
   });
 
-  api.handle(IPC.WORKSPACE_REVEAL, async (_evt, raw: unknown) => {
+  handle(IPC.WORKSPACE_REVEAL, async (_evt, raw: unknown) => {
     const parsed = WorkspaceRevealRequestSchema.safeParse(raw ?? {});
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     try {
@@ -1002,10 +1083,34 @@ export const registerIpcHandlers = (
     }
   });
 
-  // ---------- 应用配置面 ----------
-  api.handle(IPC.CONFIG_GET, async () => (deps.config ? deps.config.get() : {}));
+  handle(IPC.WORKSPACE_MKDIR, async (_evt, raw: unknown) => {
+    const parsed = WorkspaceMkdirRequestSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    try {
+      return await mkdirWorkspaceDir(agent.workspace.config.root, parsed.data.path);
+    } catch (e) {
+      return workspaceError(e);
+    }
+  });
 
-  api.handle(IPC.CONFIG_UPDATE, async (_evt, raw: unknown) => {
+  handle(IPC.WORKSPACE_RENAME_DIR, async (_evt, raw: unknown) => {
+    const parsed = WorkspaceRenameDirRequestSchema.safeParse(raw);
+    if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
+    try {
+      return await renameWorkspaceDir(
+        agent.workspace.config.root,
+        parsed.data.from,
+        parsed.data.to,
+      );
+    } catch (e) {
+      return workspaceError(e);
+    }
+  });
+
+  // ---------- 应用配置面 ----------
+  handle(IPC.CONFIG_GET, async () => (deps.config ? deps.config.get() : {}));
+
+  handle(IPC.CONFIG_UPDATE, async (_evt, raw: unknown) => {
     const parsed = AppConfigPatchSchema.safeParse(raw ?? {});
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
     if (!deps.config) return parsed.data;
@@ -1032,7 +1137,7 @@ export const registerIpcHandlers = (
   });
 
   // RFC-003 方向 3：Dormant Memory Learning IPC。
-  api.handle(IPC.DORMANT_MINE, async () => {
+  handle(IPC.DORMANT_MINE, async () => {
     if (!agent.dormant) return DORMANT_NOT_ENABLED;
     const r = await agent.dormant.mine();
     return {
@@ -1054,7 +1159,7 @@ export const registerIpcHandlers = (
     };
   });
 
-  api.handle(IPC.DORMANT_LIST, async (_evt, raw: unknown) => {
+  handle(IPC.DORMANT_LIST, async (_evt, raw: unknown) => {
     if (!agent.dormant) return DORMANT_NOT_ENABLED;
     const parsed = DormantListRequestSchema.safeParse(raw ?? {});
     if (!parsed.success) {
@@ -1077,7 +1182,7 @@ export const registerIpcHandlers = (
     };
   });
 
-  api.handle(IPC.DORMANT_APPROVE, async (_evt, raw: unknown) => {
+  handle(IPC.DORMANT_APPROVE, async (_evt, raw: unknown) => {
     if (!agent.dormant) return DORMANT_NOT_ENABLED;
     const parsed = DormantProposalDecisionSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
@@ -1086,7 +1191,7 @@ export const registerIpcHandlers = (
     return { proposalId: out.proposalId, status: out.status, decidedAt: out.decidedAt };
   });
 
-  api.handle(IPC.DORMANT_REJECT, async (_evt, raw: unknown) => {
+  handle(IPC.DORMANT_REJECT, async (_evt, raw: unknown) => {
     if (!agent.dormant) return DORMANT_NOT_ENABLED;
     const parsed = DormantProposalDecisionSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
@@ -1095,7 +1200,7 @@ export const registerIpcHandlers = (
     return { proposalId: out.proposalId, status: out.status, decidedAt: out.decidedAt };
   });
 
-  api.handle(IPC.DORMANT_REVOKE, async (_evt, raw: unknown) => {
+  handle(IPC.DORMANT_REVOKE, async (_evt, raw: unknown) => {
     if (!agent.dormant) return DORMANT_NOT_ENABLED;
     const parsed = DormantProposalDecisionSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
@@ -1105,7 +1210,7 @@ export const registerIpcHandlers = (
     return { proposalId: out.proposalId, status: out.status, decidedAt: out.decidedAt };
   });
 
-  api.handle(IPC.DORMANT_PERSONA, async () => {
+  handle(IPC.DORMANT_PERSONA, async () => {
     if (!agent.dormant) return DORMANT_NOT_ENABLED;
     return agent.dormant.getPersona();
   });
@@ -1129,7 +1234,7 @@ export const registerIpcHandlers = (
     evidence: p.evidence,
   });
 
-  api.handle(IPC.SKILLS_FEEDBACK, async (_evt, raw: unknown) => {
+  handle(IPC.SKILLS_FEEDBACK, async (_evt, raw: unknown) => {
     const body = (typeof raw === "object" && raw !== null ? raw : {}) as {
       conversationId?: unknown;
       sentiment?: unknown;
@@ -1144,13 +1249,13 @@ export const registerIpcHandlers = (
     return agent.recordSkillFeedback(body.conversationId, body.sentiment);
   });
 
-  api.handle(IPC.SKILLS_DISTILL, async () => {
+  handle(IPC.SKILLS_DISTILL, async () => {
     if (!agent.skillLearning) return SKILLS_LEARNING_NOT_ENABLED;
     const produced = await agent.skillLearning.distill();
     return { produced: produced.length, proposals: produced.map(skillProposalView) };
   });
 
-  api.handle(IPC.SKILLS_LIST, async (_evt, raw: unknown) => {
+  handle(IPC.SKILLS_LIST, async (_evt, raw: unknown) => {
     if (!agent.skillLearning) return SKILLS_LEARNING_NOT_ENABLED;
     const parsed = SkillListRequestSchema.safeParse(raw ?? {});
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
@@ -1158,7 +1263,7 @@ export const registerIpcHandlers = (
     return { total: list.length, proposals: list.map(skillProposalView) };
   });
 
-  api.handle(IPC.SKILLS_APPROVE, async (_evt, raw: unknown) => {
+  handle(IPC.SKILLS_APPROVE, async (_evt, raw: unknown) => {
     if (!agent.skillLearning) return SKILLS_LEARNING_NOT_ENABLED;
     const parsed = SkillProposalDecisionSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
@@ -1167,7 +1272,7 @@ export const registerIpcHandlers = (
     return { proposalId: out.proposalId, status: out.status, decidedAt: out.decidedAt };
   });
 
-  api.handle(IPC.SKILLS_REJECT, async (_evt, raw: unknown) => {
+  handle(IPC.SKILLS_REJECT, async (_evt, raw: unknown) => {
     if (!agent.skillLearning) return SKILLS_LEARNING_NOT_ENABLED;
     const parsed = SkillProposalDecisionSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
@@ -1176,7 +1281,7 @@ export const registerIpcHandlers = (
     return { proposalId: out.proposalId, status: out.status, decidedAt: out.decidedAt };
   });
 
-  api.handle(IPC.SKILLS_REVOKE, async (_evt, raw: unknown) => {
+  handle(IPC.SKILLS_REVOKE, async (_evt, raw: unknown) => {
     if (!agent.skillLearning) return SKILLS_LEARNING_NOT_ENABLED;
     const parsed = SkillProposalDecisionSchema.safeParse(raw);
     if (!parsed.success) return { error: "invalid_request", issues: parsed.error.issues };
@@ -1185,7 +1290,7 @@ export const registerIpcHandlers = (
     return { proposalId: out.proposalId, status: out.status, decidedAt: out.decidedAt };
   });
 
-  api.handle(IPC.SKILLS_ACTIVE, async () => {
+  handle(IPC.SKILLS_ACTIVE, async () => {
     if (!agent.skillLearning) return SKILLS_LEARNING_NOT_ENABLED;
     const skills = agent.skillLearning.listApproved().map((s) => ({
       id: s.id,
@@ -1197,7 +1302,7 @@ export const registerIpcHandlers = (
     return { total: skills.length, skills };
   });
 
-  api.handle(IPC.SKILLS_CATALOG, async () => {
+  handle(IPC.SKILLS_CATALOG, async () => {
     const listed = agent.skillContext?.list() ?? [];
     const skills = listed.map((s) => ({
       id: s.id,
@@ -1295,76 +1400,8 @@ export const registerIpcHandlers = (
 
   return {
     unregister(): void {
-      api.removeHandler(IPC.PING);
-      api.removeHandler(IPC.STATUS);
-      api.removeHandler(IPC.APP_RESTART);
-      api.removeHandler(IPC.WINDOW_CHROME);
-      api.removeHandler(IPC.MODEL_PROFILES);
-      api.removeHandler(IPC.MODEL_CREDENTIAL_SET);
-      api.removeHandler(IPC.MODEL_CREDENTIAL_DELETE);
-      api.removeHandler(IPC.MODEL_TEST);
-      api.removeHandler(IPC.WORKBENCH_BOOTSTRAP);
-      api.removeHandler(IPC.WORKBENCH_WORKSPACE_CREATE);
-      api.removeHandler(IPC.WORKBENCH_WORKSPACE_CLOSE);
-      api.removeHandler(IPC.WORKBENCH_TASK_CREATE);
-      api.removeHandler(IPC.WORKBENCH_TASK_UPDATE);
-      api.removeHandler(IPC.WORKBENCH_CONVERSATION_CREATE);
-      api.removeHandler(IPC.WORKBENCH_CONVERSATION_UPDATE);
-      api.removeHandler(IPC.WORKBENCH_MESSAGES);
-      api.removeHandler(IPC.WORKBENCH_MESSAGES_CLEAR);
-      api.removeHandler(IPC.COMMANDS_INVOKE);
-      api.removeHandler(IPC.AGENT_STEER);
-      api.removeHandler(IPC.AGENT_INJECT);
-      api.removeHandler(IPC.AGENT_CANCEL);
-      api.removeHandler(IPC.APPROVAL_LIST);
-      api.removeHandler(IPC.APPROVAL_DECIDE);
-      api.removeHandler(IPC.GRANTS_LIST);
-      api.removeHandler(IPC.GRANTS_GRANT);
-      api.removeHandler(IPC.GRANTS_REVOKE);
-      api.removeHandler(IPC.PROFILE_LIST);
-      api.removeHandler(IPC.PROFILE_UPSERT);
-      api.removeHandler(IPC.PROFILE_REMOVE);
-      api.removeHandler(IPC.PROFILE_EXPORT);
-      api.removeHandler(IPC.SCHEDULE_LIST);
-      api.removeHandler(IPC.SCHEDULE_ADD);
-      api.removeHandler(IPC.SCHEDULE_UPDATE);
-      api.removeHandler(IPC.SCHEDULE_REMOVE);
-      api.removeHandler(IPC.IDENTITY_PERSONS);
-      api.removeHandler(IPC.IDENTITY_RESOLVE);
-      api.removeHandler(IPC.IDENTITY_CONFIRM);
-      api.removeHandler(IPC.IDENTITY_ASSERT);
-      api.removeHandler(IPC.IDENTITY_UNLINK);
-      api.removeHandler(IPC.CONNECTORS_LIST);
-      api.removeHandler(IPC.CHAT);
-      api.removeHandler(IPC.MEMORY_QUERY);
-      api.removeHandler(IPC.MEMORY_STATUS);
-      api.removeHandler(IPC.MEMORY_CANDIDATES);
-      api.removeHandler(IPC.MEMORY_CANDIDATE_APPROVE);
-      api.removeHandler(IPC.MEMORY_CANDIDATE_REJECT);
-      api.removeHandler(IPC.AUDIT_RECENT);
-      api.removeHandler(IPC.WORKSPACE_INFO);
-      api.removeHandler(IPC.WORKSPACE_READ);
-      api.removeHandler(IPC.WORKSPACE_WRITE);
-      api.removeHandler(IPC.WORKSPACE_PICK_DIR);
-      api.removeHandler(IPC.WORKSPACE_LIST);
-      api.removeHandler(IPC.WORKSPACE_READ_BYTES);
-      api.removeHandler(IPC.WORKSPACE_REVEAL);
-      api.removeHandler(IPC.CONFIG_GET);
-      api.removeHandler(IPC.CONFIG_UPDATE);
-      api.removeHandler(IPC.DORMANT_MINE);
-      api.removeHandler(IPC.DORMANT_LIST);
-      api.removeHandler(IPC.DORMANT_APPROVE);
-      api.removeHandler(IPC.DORMANT_REJECT);
-      api.removeHandler(IPC.DORMANT_REVOKE);
-      api.removeHandler(IPC.DORMANT_PERSONA);
-      api.removeHandler(IPC.SKILLS_DISTILL);
-      api.removeHandler(IPC.SKILLS_FEEDBACK);
-      api.removeHandler(IPC.SKILLS_LIST);
-      api.removeHandler(IPC.SKILLS_APPROVE);
-      api.removeHandler(IPC.SKILLS_REJECT);
-      api.removeHandler(IPC.SKILLS_REVOKE);
-      api.removeHandler(IPC.SKILLS_ACTIVE);
-      api.removeHandler(IPC.SKILLS_CATALOG);
+      // 按注册登记表逐个注销（与注册严格同源，不会再漏通道）。
+      for (const channel of registeredChannels) api.removeHandler(channel);
       for (const o of offs) o();
     },
   };

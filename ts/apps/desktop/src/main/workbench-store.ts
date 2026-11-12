@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import {
   type Journal,
   type JournalEvent,
@@ -18,7 +18,11 @@ import type {
   WorkbenchTask,
   WorkbenchWorkspace,
 } from "../shared/ipc-protocol.js";
-import { DEFAULT_DESKTOP_MODEL_PROFILE_ID, InputStructureSchema } from "../shared/ipc-protocol.js";
+import {
+  DEFAULT_DESKTOP_MODEL_PROFILE_ID,
+  DEFAULT_NEW_TASK_TITLE,
+  InputStructureSchema,
+} from "../shared/ipc-protocol.js";
 
 interface Statement {
   run(...params: unknown[]): { changes: number };
@@ -126,12 +130,16 @@ export interface WorkbenchStore {
     conversations: WorkbenchConversation[];
   };
   createWorkspace(input: { name: string; rootPath: string; dataDir?: string }): WorkbenchWorkspace;
+  /** 只改工作区显示名（路径与数据不动）。 */
+  updateWorkspace(id: string, patch: { name: string }): WorkbenchWorkspace;
   closeWorkspace(id: string): WorkbenchWorkspace;
   createTask(input: { workspaceId: string; title: string }): WorkbenchTask;
   updateTask(
     id: string,
     patch: Partial<Pick<WorkbenchTask, "title" | "status" | "taskPoolRunId">>,
   ): WorkbenchTask;
+  /** 删除任务及其全部会话/消息/日志（工作区磁盘文件夹不动）。 */
+  deleteTask(id: string): void;
   createConversation(input: {
     taskId: string;
     title: string;
@@ -141,6 +149,8 @@ export interface WorkbenchStore {
     id: string,
     patch: Partial<Pick<WorkbenchConversation, "title" | "modelProfileId">>,
   ): WorkbenchConversation;
+  /** 删除会话及其消息/日志。 */
+  deleteConversation(id: string): void;
   getConversation(id: string): {
     workspace: WorkbenchWorkspace;
     task: WorkbenchTask;
@@ -255,7 +265,7 @@ export const createWorkbenchStore = (opts: {
       "INSERT INTO workspaces(id,name,root_path,data_dir,created_at,updated_at) VALUES(?,?,?,?,?,?)",
     ).run(
       workspaceId,
-      "默认工作区",
+      basename(opts.defaultWorkspaceRoot) || "我的工作区",
       opts.defaultWorkspaceRoot,
       opts.defaultDataDir ?? null,
       timestamp,
@@ -263,12 +273,27 @@ export const createWorkbenchStore = (opts: {
     );
     db.prepare(
       "INSERT INTO tasks(id,workspace_id,title,status,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-    ).run(taskId, workspaceId, "Inbox", "active", timestamp, timestamp);
+    ).run(taskId, workspaceId, DEFAULT_NEW_TASK_TITLE, "active", timestamp, timestamp);
     db.prepare(
       "INSERT INTO conversations(id,task_id,title,model_profile_id,created_at,updated_at) VALUES(?,?,?,?,?,?)",
     ).run(conversationId, taskId, "新对话", DEFAULT_DESKTOP_MODEL_PROFILE_ID, timestamp, timestamp);
   });
   seed();
+
+  // 旧种子名「默认工作区」统一改成本地目录名（只改显示名，不动路径）。
+  const legacyNamed = db
+    .prepare("SELECT id, root_path FROM workspaces WHERE name='默认工作区'")
+    .all() as Array<{ id: string; root_path: string }>;
+  for (const row of legacyNamed) {
+    db.prepare("UPDATE workspaces SET name=? WHERE id=?").run(
+      basename(row.root_path) || "我的工作区",
+      row.id,
+    );
+  }
+
+  // 旧默认任务名「Inbox」统一改为更易理解的占位名；首句摘要自动
+  // 改名逻辑会继续识别这个占位名，用户已手动改过的任务不受影响。
+  db.prepare("UPDATE tasks SET title=? WHERE title='Inbox'").run(DEFAULT_NEW_TASK_TITLE);
 
   const getWorkspace = (workspaceId: string): WorkbenchWorkspace => {
     const row = db.prepare("SELECT * FROM workspaces WHERE id=?").get(workspaceId) as
@@ -512,6 +537,15 @@ export const createWorkbenchStore = (opts: {
       });
       return apply();
     },
+    updateWorkspace(workspaceId, patch) {
+      getWorkspace(workspaceId);
+      db.prepare("UPDATE workspaces SET name=?, updated_at=? WHERE id=?").run(
+        patch.name,
+        now(),
+        workspaceId,
+      );
+      return getWorkspace(workspaceId);
+    },
     closeWorkspace(workspaceId) {
       getWorkspace(workspaceId);
       const timestamp = now();
@@ -546,6 +580,21 @@ export const createWorkbenchStore = (opts: {
       );
       return getTask(taskId);
     },
+    deleteTask(taskId) {
+      getTask(taskId);
+      const apply = db.transaction(() => {
+        const conversations = db
+          .prepare("SELECT id FROM conversations WHERE task_id=?")
+          .all(taskId) as Array<{ id: string }>;
+        for (const conversation of conversations) {
+          db.prepare("DELETE FROM messages WHERE conversation_id=?").run(conversation.id);
+          db.prepare("DELETE FROM journal_events WHERE conversation_id=?").run(conversation.id);
+        }
+        db.prepare("DELETE FROM conversations WHERE task_id=?").run(taskId);
+        db.prepare("DELETE FROM tasks WHERE id=?").run(taskId);
+      });
+      apply();
+    },
     createConversation(input) {
       getTask(input.taskId);
       const timestamp = now();
@@ -564,6 +613,15 @@ export const createWorkbenchStore = (opts: {
         conversationId,
       );
       return getConversationRow(conversationId);
+    },
+    deleteConversation(conversationId) {
+      getConversationRow(conversationId);
+      const apply = db.transaction(() => {
+        db.prepare("DELETE FROM messages WHERE conversation_id=?").run(conversationId);
+        db.prepare("DELETE FROM journal_events WHERE conversation_id=?").run(conversationId);
+        db.prepare("DELETE FROM conversations WHERE id=?").run(conversationId);
+      });
+      apply();
     },
     getConversation(conversationId) {
       const selected = getConversationRow(conversationId);

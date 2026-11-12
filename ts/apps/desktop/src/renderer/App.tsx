@@ -4,8 +4,12 @@ import type {
   WorkbenchConversation,
   WorkbenchTask,
   WorkbenchWorkspace,
+  WorkspacePickResponse,
 } from "../shared/ipc-protocol.js";
-import { DEFAULT_DESKTOP_MODEL_PROFILE_ID } from "../shared/ipc-protocol.js";
+import {
+  DEFAULT_DESKTOP_MODEL_PROFILE_ID,
+  DEFAULT_NEW_TASK_TITLE,
+} from "../shared/ipc-protocol.js";
 import type { ApprovalRequestView } from "../shared/ipc-protocol.js";
 import {
   artifactsFromAnswer,
@@ -17,7 +21,10 @@ import { ApprovalBanner } from "./components/ApprovalBanner.js";
 import { type ChatMessage, ChatPanel } from "./components/ChatPanel.js";
 import { DormantPanel } from "./components/DormantPanel.js";
 import { IdentityPanel } from "./components/IdentityPanel.js";
+import { ConfirmDialog } from "./components/ConfirmDialog.js";
 import { MemoryPanel } from "./components/MemoryPanel.js";
+import { NameDialog } from "./components/NameDialog.js";
+import { OllamaBanner } from "./components/OllamaBanner.js";
 import { ProfilePanel } from "./components/ProfilePanel.js";
 import { SchedulePanel } from "./components/SchedulePanel.js";
 import { SettingsPanel } from "./components/SettingsPanel.js";
@@ -133,6 +140,8 @@ export const App = (): JSX.Element => {
   const [pending, setPending] = React.useState(false);
   const [approvals, setApprovals] = React.useState<ApprovalRequestView[]>([]);
   const [rightTab, setRightTab] = React.useState<RightTab>("tasks");
+  /** 已从页签行关闭的会话 id（仅隐藏页签，会话仍在任务列表里可重开/删除）。 */
+  const [closedTabIds, setClosedTabIds] = React.useState<string[]>([]);
   const [profiles, setProfiles] = React.useState<ModelProfile[]>([]);
   const [workspaces, setWorkspaces] = React.useState<WorkbenchWorkspace[]>([]);
   const [tasks, setTasks] = React.useState<WorkbenchTask[]>([]);
@@ -142,7 +151,67 @@ export const App = (): JSX.Element => {
   const [activeConversationId, setActiveConversationId] = React.useState<string>();
   const [selectedWorkspacePath, setSelectedWorkspacePath] = React.useState<string>();
   const [workspaceRoot, setWorkspaceRoot] = React.useState<string>();
+  /** 文件树刷新代数：agent 文件根变化（工作区切换/热重载）时递增，强制左栏重拉目录。 */
+  const [workspaceTreeKey, setWorkspaceTreeKey] = React.useState(0);
+  React.useEffect(() => {
+    if (workspaceRoot) setWorkspaceTreeKey((key) => key + 1);
+  }, [workspaceRoot]);
+  /** 首屏 bootstrap 是否完成（用于判断是否需要提示选择工作区）。 */
+  const [workbenchLoaded, setWorkbenchLoaded] = React.useState(false);
+  /* Ollama 降级提示：用户明确接受降级后持久化，不再每次启动打扰。 */
+  const [ollamaBusy, setOllamaBusy] = React.useState(false);
+  const [ollamaNote, setOllamaNote] = React.useState<string>();
+  const [degradedAccepted, setDegradedAccepted] = React.useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem("openintj.embed.degradedAccepted") === "1";
+    } catch {
+      return false;
+    }
+  });
   const workspaceClient = React.useMemo(() => desktopWorkspaceClient(), []);
+  /** 工作台切换（新建任务/对话）后，等新会话消息加载完再补一条系统提示。 */
+  const pendingNoticeRef = React.useRef<string | undefined>(undefined);
+
+  /* 应用内命名对话框（替代 Electron 不支持的 window.prompt）。 */
+  const [nameDialog, setNameDialog] = React.useState<{
+    title: string;
+    label?: string;
+    initialValue: string;
+    resolve: (value: string | null) => void;
+  } | null>(null);
+  const askName = (
+    title: string,
+    initialValue: string,
+    label?: string,
+  ): Promise<string | null> =>
+    new Promise((resolve) => {
+      setNameDialog({ title, initialValue, ...(label ? { label } : {}), resolve });
+    });
+  const closeNameDialog = (value: string | null): void => {
+    nameDialog?.resolve(value);
+    setNameDialog(null);
+  };
+
+  /* 应用内确认对话框（替代 window.confirm）。 */
+  const [confirmDialog, setConfirmDialog] = React.useState<{
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    danger?: boolean;
+    resolve: (value: boolean) => void;
+  } | null>(null);
+  const askConfirm = (
+    title: string,
+    message: string,
+    opts: { confirmLabel?: string; danger?: boolean } = {},
+  ): Promise<boolean> =>
+    new Promise((resolve) => {
+      setConfirmDialog({ title, message, ...opts, resolve });
+    });
+  const closeConfirmDialog = (value: boolean): void => {
+    confirmDialog?.resolve(value);
+    setConfirmDialog(null);
+  };
 
   /* ---- 可拖拽布局尺寸 ---- */
   const [leftWidth, setLeftWidth] = React.useState(() =>
@@ -234,6 +303,7 @@ export const App = (): JSX.Element => {
     setActiveWorkspaceId(workspaceId);
     setActiveTaskId(taskId);
     setActiveConversationId(conversationId);
+    setWorkbenchLoaded(true);
   }, []);
 
   React.useEffect(() => {
@@ -246,14 +316,20 @@ export const App = (): JSX.Element => {
       return;
     }
     void window.openintj.workbenchMessages(activeConversationId).then((entries) => {
-      setMessages(
-        entries.map(({ role, content, messageKind, inputStructure }) => ({
+      const loaded: ChatMessage[] = entries.map(
+        ({ role, content, messageKind, inputStructure }) => ({
           role,
           content,
           messageKind,
           ...(inputStructure ? { inputStructure } : {}),
-        })),
+        }),
       );
+      const notice = pendingNoticeRef.current;
+      if (notice) {
+        pendingNoticeRef.current = undefined;
+        loaded.push({ role: "system", content: notice });
+      }
+      setMessages(loaded);
       setTrajectory([]);
       const lastArtifact = preferredPreviewPath(
         entries.flatMap((entry) => extractWorkspaceArtifactPaths(entry.content)),
@@ -381,11 +457,196 @@ export const App = (): JSX.Element => {
       .catch(() => {});
   };
 
+  /* ---- Ollama 显式生命周期（自检 / 启动 / 接受降级） ---- */
+  const embedStatus = status?.modelRuntime.embed;
+  const embedDegraded = Boolean(
+    embedStatus &&
+      (embedStatus.fallbackFrom === "ollama" ||
+        (embedStatus.provider === "simple-sha256" && embedStatus.mode === "mock")),
+  );
+
+  const launchOllama = async (): Promise<void> => {
+    setOllamaBusy(true);
+    setOllamaNote(undefined);
+    try {
+      const res = await window.openintj.ollamaLaunch();
+      if (res.running && res.modelInstalled) {
+        setOllamaNote(
+          res.launched
+            ? `自检通过：Ollama 已启动，模型 ${res.embedModel} 就绪，embedding 已切回真实向量。`
+            : `自检通过：Ollama 在运行，模型 ${res.embedModel} 就绪，embedding 已重新绑定。`,
+        );
+        try {
+          setStatus(await window.openintj.status());
+        } catch {
+          // 状态轮询会随后刷新，失败不影响结论。
+        }
+      } else if (res.running) {
+        setOllamaNote(
+          `Ollama 已启动，但 embedding 模型 ${res.embedModel} 未安装：在终端执行 ollama pull ${res.embedModel} 后再自检；在此之前仍是降级向量。`,
+        );
+      } else {
+        setOllamaNote(
+          res.launchError ??
+            `自检未通过：${res.reason ?? "服务未响应"}（${res.endpoint}）。可手动启动 Ollama 后重新自检，或选择降级使用。`,
+        );
+      }
+    } catch (error) {
+      setOllamaNote(
+        `启动失败：${error instanceof Error ? error.message : String(error)}。可手动启动 Ollama 后重新自检，或选择降级使用。`,
+      );
+    } finally {
+      setOllamaBusy(false);
+    }
+  };
+
+  const recheckOllama = async (): Promise<void> => {
+    setOllamaBusy(true);
+    setOllamaNote(undefined);
+    try {
+      const res = await window.openintj.ollamaCheck();
+      setOllamaNote(
+        res.running
+          ? `服务已在运行（${res.endpoint}），模型 ${res.embedModel} 已安装。点「启动 Ollama 并自检」即可把 embedding 重新绑定为真实向量。`
+          : `仍未连上 Ollama：${res.reason ?? "服务未响应"}（${res.endpoint}）。`,
+      );
+    } catch (error) {
+      setOllamaNote(
+        `自检失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setOllamaBusy(false);
+    }
+  };
+
+  const acceptDegraded = (): void => {
+    try {
+      window.localStorage.setItem("openintj.embed.degradedAccepted", "1");
+    } catch {
+      // 存不下就只关本次会话的横幅。
+    }
+    setDegradedAccepted(true);
+  };
+
   const handleSend = async (text: string): Promise<void> => {
+    // 工作台意图拦截：「新任务/新对话/打开工作区」这类操作由客户端真的
+    // 执行并切换视图，不交给模型假装完成；「清空会话」转成 /clear 命令
+    // 走既有命令通道（服务端留痕、历史派生排除）。
+    const trimmed = text.trim();
+    if (/^(清空|清除)(当前)?(会话|对话)(记录)?[。.!！]?$/.test(trimmed)) {
+      return handleSend("/clear");
+    }
+    const newTaskMatch = trimmed.match(
+      /^(?:新建|创建|开启|开始|新开)(?:一个)?(?:新)?任务(?:[：:\s]+(.+?))?[。.!！]?$/,
+    );
+    if (newTaskMatch) {
+      if (!activeWorkspaceId) {
+        // 先让用户选工作区目录，选完在新工作区里建这个任务。
+        const activated = await createWorkspace();
+        if (!activated) return;
+        const title = newTaskMatch[1]?.trim() || defaultTaskTitle();
+        pendingNoticeRef.current = `已新建任务「${title}」并切换到新对话（工作区已建同名文件夹），可以直接描述这个任务的目标。`;
+        await createTask(title, activated.workspaceId);
+        return;
+      }
+      // 任务必须命名：话里没带名字就用默认名（日期时间戳+当日序号）。
+      const title = newTaskMatch[1]?.trim() || defaultTaskTitle();
+      pendingNoticeRef.current = `已新建任务「${title}」并切换到新对话（工作区已建同名文件夹），可以直接描述这个任务的目标。`;
+      await createTask(title);
+      return;
+    }
+    if (
+      /^(新建|创建|开启|开始|新开)(一个)?(新)?(对话|会话)[。.!！]?$/.test(trimmed) ||
+      /^新(对话|会话)[。.!！]?$/.test(trimmed)
+    ) {
+      if (!activeTaskId) {
+        // 没有活动任务：交给 createConversation 分流（无工作区先选
+        // 工作区，有工作区先建任务），不再回一句「请先新建任务」。
+        await createConversation();
+        return;
+      }
+      pendingNoticeRef.current = "已新建对话。";
+      await createConversation();
+      return;
+    }
+    if (/^(打开|切换|新建)(一个)?(新)?工作区[。.!！]?$/.test(trimmed)) {
+      await createWorkspace();
+      return;
+    }
+    // 无绑定会话（全新对话尚无任务/工作区）时，先请用户选工作区目录：
+    // 选完即绑定该工作区的任务与新对话，本次消息直接发进这个新对话；
+    // 取消选择则不发送，并说明原因——不再出现「聊了但无处落盘」。
+    let boundConversationId = activeConversationId;
+    let boundTask: WorkbenchTask | undefined = tasks.find((task) => task.id === activeTaskId);
+    if (!boundConversationId) {
+      let activated: Awaited<ReturnType<typeof createWorkspace>>;
+      try {
+        activated = await createWorkspace();
+      } catch (error) {
+        // 建区过程抛错（如 IPC 异常）时把原因摆到界面上，不再静默吞掉。
+        setMessages((current) => [
+          ...current,
+          { role: "user", content: text },
+          {
+            role: "system",
+            content: `工作区绑定失败，本次消息没有发送：${error instanceof Error ? error.message : String(error)}`,
+          },
+        ]);
+        return;
+      }
+      if (!activated) {
+        setMessages((current) => [
+          ...current,
+          { role: "user", content: text },
+          {
+            role: "system",
+            content:
+              "未选择工作区，本次消息没有发送。先选一个目录作为工作区，对话与制品才会保存进去（左栏「打开工作区」可随时选）。",
+          },
+        ]);
+        return;
+      }
+      boundConversationId = activated.conversationId;
+      boundTask = {
+        id: activated.taskId,
+        workspaceId: activated.workspaceId,
+        title: activated.taskTitle,
+        status: "active",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+    }
     setPending(true);
     const activeConversation = conversations.find(
-      (conversation) => conversation.id === activeConversationId,
+      (conversation) => conversation.id === boundConversationId,
     );
+    boundTask ??= tasks.find((task) => task.id === activeConversation?.taskId);
+    const isFirstUserMessage =
+      !text.trim().startsWith("/") && !messages.some((message) => message.role === "user");
+    // 首句命名：仍叫「新对话」且本会话尚无用户消息时，用这句话的摘要改名。
+    if (activeConversation && activeConversation.title === "新对话" && isFirstUserMessage) {
+      const title = summarizeConversationTitle(text);
+      if (title !== "新对话") {
+        void window.openintj
+          .updateWorkbenchConversation({ id: activeConversation.id, title })
+          .then((updated) =>
+            setConversations((current) =>
+              current.map((item) => (item.id === updated.id ? updated : item)),
+            ),
+          )
+          .catch(() => {});
+      }
+    }
+    // 默认任务首句命名：任务仍是自动创建时的占位名（用户未改名）时，
+    // 用同一摘要改任务名并同步文件夹。只要任务还停留在占位名，就说明
+    // 此前没有一次普通首句成功为它命名，因此新会话的首句仍可命名它；
+    // 用户已手动改过名时，标题不再等于占位名，绝不覆盖。
+    if (boundTask && boundTask.title === DEFAULT_NEW_TASK_TITLE && isFirstUserMessage) {
+      const title = summarizeConversationTitle(text);
+      if (title !== "新对话" && title !== boundTask.title) {
+        void updateTask(boundTask, { title }).catch(() => {});
+      }
+    }
     const skipOptimistic = text.trim().startsWith("/");
     if (!skipOptimistic) {
       setMessages((current) => [
@@ -397,7 +658,7 @@ export const App = (): JSX.Element => {
     try {
       const res = await window.openintj.chat({
         query: text,
-        ...(activeConversationId ? { conversationId: activeConversationId } : {}),
+        ...(boundConversationId ? { conversationId: boundConversationId } : {}),
         ...(activeConversation ? { modelProfileId: activeConversation.modelProfileId } : {}),
       });
       if (res.command) {
@@ -459,19 +720,38 @@ export const App = (): JSX.Element => {
 
   const selectConversation = (conversationId: string): void => {
     setActiveConversationId(conversationId);
+    setClosedTabIds((current) => current.filter((id) => id !== conversationId));
     void window.openintj.updateConfig({ activeConversationId: conversationId });
   };
 
-  const activateWorkspace = async (created: WorkbenchWorkspace): Promise<void> => {
+  /** 关闭会话页签：仅隐藏；若关的是当前会话则切到同任务下一个可见会话。 */
+  const closeConversationTab = (conversationId: string): void => {
+    setClosedTabIds((current) =>
+      current.includes(conversationId) ? current : [...current, conversationId],
+    );
+    if (conversationId !== activeConversationId) return;
+    const siblings = conversations.filter(
+      (item) => item.taskId === activeTaskId && item.id !== conversationId,
+    );
+    const next = siblings.find((item) => !closedTabIds.includes(item.id));
+    if (next) selectConversation(next.id);
+  };
+
+  const activateWorkspace = async (
+    created: WorkbenchWorkspace,
+  ): Promise<
+    { workspaceId: string; taskId: string; conversationId: string; taskTitle: string } | undefined
+  > => {
     const snapshot = await window.openintj.workbenchBootstrap();
     let taskId = snapshot.tasks.find(
       (task) => task.workspaceId === created.id && task.status !== "archived",
     )?.id;
     let conversationId = snapshot.conversations.find((item) => item.taskId === taskId)?.id;
+    let taskTitle = snapshot.tasks.find((task) => task.id === taskId)?.title;
     if (!taskId) {
       const createdTask = await window.openintj.createWorkbenchTask({
         parentId: created.id,
-        title: "Inbox",
+        title: DEFAULT_NEW_TASK_TITLE,
       });
       const createdConversation = await window.openintj.createWorkbenchConversation({
         parentId: createdTask.id,
@@ -480,45 +760,150 @@ export const App = (): JSX.Element => {
       });
       taskId = createdTask.id;
       conversationId = createdConversation.id;
+      taskTitle = createdTask.title;
     }
+    // 联动第一步：先把活动工作区/任务/会话写进渲染状态，三栏当场
+    // 对齐；随后再持久化配置（可能触发 agent 热重载，期间 IPC 短暂
+    // 不可用也不能让界面看起来毫无变化）。
+    setActiveWorkspaceId(created.id);
+    if (taskId) setActiveTaskId(taskId);
+    if (conversationId) setActiveConversationId(conversationId);
     await window.openintj.updateConfig({
       workspaceDir: created.rootPath,
       activeWorkspaceId: created.id,
       activeTaskId: taskId,
       activeConversationId: conversationId,
     });
+    try {
+      const info = await window.openintj.workspaceInfo();
+      setWorkspaceRoot(info.root);
+    } catch {
+      // agent 尚在热重载时取不到根，联动校验 effect 会随后对齐。
+    }
     await refreshWorkbench();
     setSelectedWorkspacePath(undefined);
+    if (!taskId || !conversationId) return undefined;
+    return {
+      workspaceId: created.id,
+      taskId,
+      conversationId,
+      taskTitle: taskTitle ?? DEFAULT_NEW_TASK_TITLE,
+    };
   };
 
-  const createWorkspace = async (): Promise<void> => {
+  /**
+   * 首次启动默认动作（显式版）：没有任何打开的工作区时，弹提示请
+   * 用户自己选/新建一个本地目录作为工作区，选中后绑定「新创建的任务」
+   * 与新对话，制品从第一句起落进该目录。不再拿 agent 文件根静默
+   * 顶替——那个根可能是历史遗留路径，用户根本不知道它从哪来。
+   * 用户取消则停留在无工作区状态，左栏「打开工作区」随时可再选。
+   */
+  const workspacePromptedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!workbenchLoaded || workspacePromptedRef.current) return;
+    workspacePromptedRef.current = true;
+    if (workspaces.length > 0) return;
+    void (async () => {
+      const proceed = await askConfirm(
+        "先选择一个工作区",
+        "当前没有打开的工作区。对话要先绑定工作区与任务，聊天产生的制品才会落盘到工作区目录。接下来请选一个本地目录（可在系统对话框里新建文件夹），选中后会立即建为工作区并绑定「新创建的任务」与新对话（工作区名默认取目录名，之后可改名）。",
+        { confirmLabel: "选择/新建目录" },
+      );
+      if (proceed) await createWorkspace();
+    })();
+  }, [workbenchLoaded, workspaces.length]);
+
+  const createWorkspace = async (): Promise<
+    | { workspaceId: string; taskId: string; conversationId: string; taskTitle: string }
+    | undefined
+  > => {
     if (activeWorkspaceId) {
-      const proceed = window.confirm(
+      const proceed = await askConfirm(
+        "打开新工作区",
         "同时只能打开一个工作区。打开新目录会关闭当前工作区（任务和对话会保留，磁盘文件不会删除）。继续？",
       );
-      if (!proceed) return;
+      if (!proceed) return undefined;
     }
-    const picked = await window.openintj.workspacePickDir();
-    if (picked.canceled || !picked.root) return;
+    let picked: WorkspacePickResponse;
+    try {
+      picked = await window.openintj.workspacePickDir();
+    } catch (error) {
+      // IPC 异常（通道未注册/主进程重载中等）必须显形，不能让用户
+      // 面对「点了没反应」：把原因写进聊天区并终止本次建区。
+      setMessages((current) => [
+        ...current,
+        {
+          role: "system",
+          content: `打开目录选择失败：${error instanceof Error ? error.message : String(error)}。工作区尚未创建，请稍后重试；若反复出现请重启应用。`,
+        },
+      ]);
+      return undefined;
+    }
+    if (picked.canceled || !picked.root) return undefined;
     const current = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
-    if (current && sameFsPath(current.rootPath, picked.root)) return;
-    const suggested = picked.root.split(/[\\/]/).filter(Boolean).at(-1) ?? "工作区";
-    const name = window.prompt("工作区名称", suggested)?.trim();
-    if (!name) return;
-    const created = await window.openintj.createWorkbenchWorkspace({
-      name,
-      rootPath: picked.root,
-    });
-    if (!created.id) return;
-    await activateWorkspace(created);
-    if (window.confirm("工作区已切换。现在重启并加载该目录？")) {
-      await window.openintj.restartApp();
+    if (current && sameFsPath(current.rootPath, picked.root)) {
+      // 选的就是当前工作区：直接重新激活并返回绑定信息，不静默退出。
+      return activateWorkspace(current);
     }
+    // 选目录即建工作区（原子化）：名称默认取目录名，之后可在右栏
+    // 改名。此前「选完目录还要再填名字，取消就静默断链」会让用户
+    // 以为已建好、实际工作台里根本没有这条工作区。
+    const name = picked.root.split(/[\\/]/).filter(Boolean).at(-1) ?? "工作区";
+    let created: WorkbenchWorkspace;
+    try {
+      created = await window.openintj.createWorkbenchWorkspace({
+        name,
+        rootPath: picked.root,
+      });
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        {
+          role: "system",
+          content: `工作区创建失败：${error instanceof Error ? error.message : String(error)}。目录虽已选定，但尚未绑定为工作区，请重试。`,
+        },
+      ]);
+      return undefined;
+    }
+    if (!created.id) {
+      setMessages((current) => [
+        ...current,
+        {
+          role: "system",
+          content:
+            "工作区创建未完成：目录虽已选定，但尚未绑定为工作区。请重新打开工作区再选一次。",
+        },
+      ]);
+      return undefined;
+    }
+    // activateWorkspace 写回 workspaceDir 会触发 agent 热重载，
+    // 文件树随即对齐新工作区，无需重启应用。
+    let activated: Awaited<ReturnType<typeof activateWorkspace>>;
+    try {
+      activated = await activateWorkspace(created);
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        {
+          role: "system",
+          content: `工作区「${created.name}」已创建但绑定失败：${error instanceof Error ? error.message : String(error)}。请稍后重试或重启应用。`,
+        },
+      ]);
+      return undefined;
+    }
+    if (activated) {
+      void ensureTaskFolder(activated.taskTitle);
+      // 联动确认：新会话消息加载后补一条系统提示，明确当前对话
+      // 绑定的工作区与任务，制品落盘位置不再靠猜。
+      pendingNoticeRef.current = `已打开工作区「${created.name}」（${created.rootPath}），当前对话已绑定任务「${activated.taskTitle}」，制品会保存到该工作区。`;
+    }
+    return activated;
   };
 
   const closeWorkspace = async (): Promise<void> => {
     if (!activeWorkspaceId) return;
-    const proceed = window.confirm(
+    const proceed = await askConfirm(
+      "关闭当前工作区",
       "关闭当前工作区？任务和对话会保留，磁盘文件不会删除。再次打开同一目录可恢复。",
     );
     if (!proceed) return;
@@ -534,12 +919,54 @@ export const App = (): JSX.Element => {
     await refreshWorkbench();
   };
 
-  const createTask = async (): Promise<void> => {
-    if (!activeWorkspaceId) return;
+  /** 任务名 → 文件工作区目录名：去掉 Windows 非法字符，避免空名/尾点。 */
+  const taskFolderName = (title: string): string =>
+    title
+      .replace(/[\\/:*?"<>|]/g, "-")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/[. ]+$/g, "")
+      .slice(0, 60);
+
+  /** 建任务同名文件夹（尽力而为，失败不阻断任务本身）。 */
+  const ensureTaskFolder = async (title: string): Promise<void> => {
+    const folder = taskFolderName(title);
+    if (!folder) return;
+    try {
+      await workspaceClient.mkdir(folder);
+    } catch {
+      // 文件工作区未就绪（如尚未重启加载新工作区）时静默跳过。
+    }
+  };
+
+  /** 改名同步文件夹：旧目录在则改名，不在则按新名新建。 */
+  const renameTaskFolder = async (oldTitle: string, newTitle: string): Promise<void> => {
+    const from = taskFolderName(oldTitle);
+    const to = taskFolderName(newTitle);
+    if (!to || from === to) return;
+    try {
+      if (from) {
+        const renamed = await workspaceClient.renameDir(from, to);
+        if (!("error" in renamed)) return;
+      }
+      await workspaceClient.mkdir(to);
+    } catch {
+      try {
+        await workspaceClient.mkdir(to);
+      } catch {
+        // 同上，尽力而为。
+      }
+    }
+  };
+
+  const createTask = async (title: string, workspaceId?: string): Promise<void> => {
+    const targetWorkspaceId = workspaceId ?? activeWorkspaceId;
+    if (!targetWorkspaceId) return;
     const created = await window.openintj.createWorkbenchTask({
-      parentId: activeWorkspaceId,
-      title: "新任务",
+      parentId: targetWorkspaceId,
+      title,
     });
+    void ensureTaskFolder(created.title);
     setTasks((current) => [created, ...current]);
     setActiveTaskId(created.id);
     const createdConversation = await window.openintj.createWorkbenchConversation({
@@ -549,10 +976,93 @@ export const App = (): JSX.Element => {
     });
     setConversations((current) => [createdConversation, ...current]);
     setActiveConversationId(createdConversation.id);
+    setTrajectory([]);
+    setSelectedWorkspacePath(undefined);
+    await window.openintj.updateConfig({
+      activeTaskId: created.id,
+      activeConversationId: createdConversation.id,
+    });
+  };
+
+  /** 默认任务名：新建任务-日期-时间-当日序号（如 新建任务-20261111-153012-01）。 */
+  const defaultTaskTitle = (): string => {
+    const nowDate = new Date();
+    const pad = (n: number): string => String(n).padStart(2, "0");
+    const date = `${nowDate.getFullYear()}${pad(nowDate.getMonth() + 1)}${pad(nowDate.getDate())}`;
+    const time = `${pad(nowDate.getHours())}${pad(nowDate.getMinutes())}${pad(nowDate.getSeconds())}`;
+    const sameDay = tasks.filter((task) => {
+      if (task.workspaceId !== activeWorkspaceId) return false;
+      const created = new Date(task.createdAt);
+      return (
+        created.getFullYear() === nowDate.getFullYear() &&
+        created.getMonth() === nowDate.getMonth() &&
+        created.getDate() === nowDate.getDate()
+      );
+    }).length;
+    return `新建任务-${date}-${time}-${pad(sameDay + 1)}`;
+  };
+
+  /** 会话自动命名：取第一句话的首个分句，截 24 字。 */
+  const summarizeConversationTitle = (text: string): string => {
+    const clean = text.replace(/\s+/g, " ").trim();
+    const first = clean.split(/[。！？.!?；;]/)[0]?.trim() || clean;
+    if (!first) return "新对话";
+    return first.length > 24 ? `${first.slice(0, 24)}…` : first;
+  };
+
+  /** 新建任务必须命名：对话框预填默认名（日期时间戳+当日序号），可改；无工作区时先走打开工作区。 */
+  const requestCreateTask = (): void => {
+    if (!activeWorkspaceId) {
+      void createWorkspace();
+      return;
+    }
+    void (async () => {
+      const title = (
+        await askName("新建任务", defaultTaskTitle(), "任务名称（将同时在工作区建同名文件夹）")
+      )?.trim();
+      if (title) await createTask(title);
+    })();
+  };
+
+  const renameTask = async (task: WorkbenchTask): Promise<void> => {
+    const title = (
+      await askName("重命名任务", task.title, "任务名称（工作区同名文件夹将同步改名）")
+    )?.trim();
+    if (title && title !== task.title) await updateTask(task, { title });
+  };
+
+  const renameWorkspace = async (): Promise<void> => {
+    const current = workspaces.find((item) => item.id === activeWorkspaceId);
+    if (!current) return;
+    const name = (
+      await askName("重命名工作区", current.name, "只改显示名，不影响目录路径与数据")
+    )?.trim();
+    if (!name || name === current.name) return;
+    const updated = await window.openintj.updateWorkbenchWorkspace({ id: current.id, name });
+    setWorkspaces((items) => items.map((item) => (item.id === updated.id ? updated : item)));
+  };
+
+  const renameConversation = async (conversation: WorkbenchConversation): Promise<void> => {
+    const title = (await askName("重命名会话", conversation.title))?.trim();
+    if (!title || title === conversation.title) return;
+    const updated = await window.openintj.updateWorkbenchConversation({
+      id: conversation.id,
+      title,
+    });
+    setConversations((items) => items.map((item) => (item.id === updated.id ? updated : item)));
   };
 
   const createConversation = async (): Promise<void> => {
-    if (!activeTaskId) return;
+    if (!activeTaskId) {
+      // 没有活动任务时不静默吞掉：无工作区先选工作区（自动绑定
+      // 「新创建的任务」与新对话）；有工作区则走新建任务（命名后建对话）。
+      if (!activeWorkspaceId) {
+        await createWorkspace();
+        return;
+      }
+      requestCreateTask();
+      return;
+    }
     const created = await window.openintj.createWorkbenchConversation({
       parentId: activeTaskId,
       title: "新对话",
@@ -560,6 +1070,9 @@ export const App = (): JSX.Element => {
     });
     setConversations((current) => [created, ...current]);
     setActiveConversationId(created.id);
+    setTrajectory([]);
+    setSelectedWorkspacePath(undefined);
+    await window.openintj.updateConfig({ activeConversationId: created.id });
   };
 
   const updateTask = async (
@@ -568,6 +1081,9 @@ export const App = (): JSX.Element => {
   ): Promise<void> => {
     const updated = await window.openintj.updateWorkbenchTask({ id: selected.id, ...patch });
     setTasks((current) => current.map((task) => (task.id === updated.id ? updated : task)));
+    if (patch.title && patch.title !== selected.title) {
+      void renameTaskFolder(selected.title, patch.title);
+    }
     if (updated.status === "archived") {
       const next = tasks.find(
         (task) =>
@@ -577,6 +1093,60 @@ export const App = (): JSX.Element => {
       );
       if (next) selectTask(next.id);
     }
+  };
+
+  /** 删除任务：会话记录一并删，工作区同名文件夹保留在硬盘（可再被加载）。 */
+  const deleteTask = async (selected: WorkbenchTask): Promise<void> => {
+    const proceed = await askConfirm(
+      `删除任务「${selected.title}」`,
+      "该任务的会话记录会一并删除；工作区文件夹会保留在本地硬盘，可再次加载。",
+      { confirmLabel: "删除", danger: true },
+    );
+    if (!proceed) return;
+    await window.openintj.deleteWorkbenchTask({ id: selected.id });
+    const remainingTasks = tasks.filter((task) => task.id !== selected.id);
+    const remainingConversations = conversations.filter(
+      (conversation) => conversation.taskId !== selected.id,
+    );
+    setTasks(remainingTasks);
+    setConversations(remainingConversations);
+    if (selected.id !== activeTaskId) return;
+    const next = remainingTasks.find(
+      (task) => task.workspaceId === selected.workspaceId && task.status !== "archived",
+    );
+    if (next) {
+      setActiveTaskId(next.id);
+      const nextConversation = remainingConversations.find((item) => item.taskId === next.id);
+      setActiveConversationId(nextConversation?.id);
+      await window.openintj.updateConfig({
+        activeTaskId: next.id,
+        activeConversationId: nextConversation?.id,
+      });
+    } else {
+      setActiveTaskId(undefined);
+      setActiveConversationId(undefined);
+      setMessages([]);
+      await window.openintj.updateConfig({ activeTaskId: undefined, activeConversationId: undefined });
+    }
+  };
+
+  /** 删除会话：消息/日志一并删；删的是当前会话则切到同任务下一个。 */
+  const deleteConversation = async (selected: WorkbenchConversation): Promise<void> => {
+    const proceed = await askConfirm(
+      `删除会话「${selected.title}」`,
+      "对话记录会一并删除。",
+      { confirmLabel: "删除", danger: true },
+    );
+    if (!proceed) return;
+    await window.openintj.deleteWorkbenchConversation({ id: selected.id });
+    const remaining = conversations.filter((item) => item.id !== selected.id);
+    setConversations(remaining);
+    setClosedTabIds((current) => current.filter((id) => id !== selected.id));
+    if (selected.id !== activeConversationId) return;
+    const next = remaining.find((item) => item.taskId === selected.taskId);
+    setActiveConversationId(next?.id);
+    if (!next) setMessages([]);
+    await window.openintj.updateConfig({ activeConversationId: next?.id });
   };
 
   const changeConversationModel = async (modelProfileId: string): Promise<void> => {
@@ -604,6 +1174,19 @@ export const App = (): JSX.Element => {
   const skillsPending = status?.skills?.pendingProposals ?? 0;
 
   const activeWorkspace = workspaces.find((item) => item.id === activeWorkspaceId);
+
+  // 工作区联动校验：任务会话栏的当前工作区与文件树根不一致时，
+  // 写回配置触发 agent 热重载（workspaceDir 是运行时配置键）。
+  React.useEffect(() => {
+    const rootPath = activeWorkspace?.rootPath;
+    if (!rootPath || !workspaceRoot) return;
+    if (sameFsPath(rootPath, workspaceRoot)) return;
+    void window.openintj
+      .updateConfig({ workspaceDir: rootPath })
+      .then(() => window.openintj.workspaceInfo())
+      .then((info) => setWorkspaceRoot(info.root))
+      .catch(() => {});
+  }, [activeWorkspaceId, activeWorkspace?.rootPath, workspaceRoot]);
   // 本任务产物（轻联动）：从当前对话消息中提取已生成的文件路径。
   const taskArtifacts = [
     ...new Set(messages.flatMap((message) => extractWorkspaceArtifactPaths(message.content))),
@@ -646,15 +1229,6 @@ export const App = (): JSX.Element => {
                 关闭工作区
               </button>
             </div>
-            {activeWorkspaceId ? (
-              <button
-                type="button"
-                className="mt-1.5 w-full px-2 py-1.5 rounded-lg border border-line bg-white hover:border-linedark text-ink"
-                onClick={() => void workspaceClient.reveal()}
-              >
-                打开工作区目录
-              </button>
-            ) : null}
           </div>
           <div className="flex-1 min-h-0">
             <WorkspaceWorkbench
@@ -663,6 +1237,7 @@ export const App = (): JSX.Element => {
               selectedPath={selectedWorkspacePath}
               onSelectPath={(path) => setSelectedWorkspacePath(path)}
               showPreview={false}
+              refreshKey={workspaceTreeKey}
               workspaceOpen={Boolean(activeWorkspaceId)}
             />
           </div>
@@ -692,7 +1267,21 @@ export const App = (): JSX.Element => {
             context={status?.context}
             previewPath={selectedWorkspacePath}
             onClosePreview={() => setSelectedWorkspacePath(undefined)}
+            onCreateConversation={() => void createConversation()}
+            onCreateTask={requestCreateTask}
+            closedTabIds={closedTabIds}
+            onCloseConversationTab={closeConversationTab}
           />
+          {embedDegraded && !degradedAccepted && embedStatus ? (
+            <OllamaBanner
+              embedLabel={`${embedStatus.provider} (${embedStatus.model}, ${embedStatus.dimension}d)`}
+              busy={ollamaBusy}
+              {...(ollamaNote ? { note: ollamaNote } : {})}
+              onLaunch={() => void launchOllama()}
+              onRecheck={() => void recheckOllama()}
+              onAcceptDegraded={acceptDegraded}
+            />
+          ) : null}
           {selectedWorkspacePath ? (
             <>
               <div
@@ -821,12 +1410,12 @@ export const App = (): JSX.Element => {
                 onCloseWorkspace={() => void closeWorkspace()}
                 onSelectTask={selectTask}
                 onSelectConversation={selectConversation}
-                onCreateTask={() => void createTask()}
                 onCreateConversation={() => void createConversation()}
-                onRenameTask={(task) => {
-                  const title = window.prompt("任务名称", task.title)?.trim();
-                  if (title) void updateTask(task, { title });
-                }}
+                onRenameTask={(task) => void renameTask(task)}
+                onDeleteTask={(task) => void deleteTask(task)}
+                onDeleteConversation={(conversation) => void deleteConversation(conversation)}
+                onRenameWorkspace={() => void renameWorkspace()}
+                onRenameConversation={(conversation) => void renameConversation(conversation)}
                 onArchiveTask={(task) => void updateTask(task, { status: "archived" })}
                 taskArtifacts={taskArtifacts}
                 onOpenArtifact={(path) => setSelectedWorkspacePath(path)}
@@ -859,6 +1448,25 @@ export const App = (): JSX.Element => {
         </div>
       </div>
       <StatusBar status={status} />
+      {nameDialog ? (
+        <NameDialog
+          title={nameDialog.title}
+          label={nameDialog.label}
+          initialValue={nameDialog.initialValue}
+          onSubmit={(value) => closeNameDialog(value)}
+          onCancel={() => closeNameDialog(null)}
+        />
+      ) : null}
+      {confirmDialog ? (
+        <ConfirmDialog
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          confirmLabel={confirmDialog.confirmLabel}
+          danger={confirmDialog.danger}
+          onConfirm={() => closeConfirmDialog(true)}
+          onCancel={() => closeConfirmDialog(false)}
+        />
+      ) : null}
     </div>
   );
 };

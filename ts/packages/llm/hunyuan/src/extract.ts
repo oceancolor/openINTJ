@@ -28,6 +28,34 @@ export const extractReasoningText = (message: unknown): string => {
   return typeof raw === "string" ? raw : "";
 };
 
+/**
+ * 原生 tool_calls 转 ReAct 文本协议：模型走原生函数调用返回
+ * message.tool_calls 时，content 往往为空；转成 Action/Action-Input
+ * 让上层文本 ReAct 循环能真正执行，而不是判「无最终 content」死掉。
+ */
+export const extractToolCallsText = (message: unknown): string => {
+  if (!message || typeof message !== "object") return "";
+  const calls = (message as { tool_calls?: unknown }).tool_calls;
+  if (!Array.isArray(calls)) return "";
+  const lines: string[] = [];
+  for (const call of calls) {
+    if (!call || typeof call !== "object") continue;
+    const fn = (call as { function?: { name?: unknown; arguments?: unknown }; name?: unknown; arguments?: unknown });
+    const name =
+      typeof fn.function?.name === "string"
+        ? fn.function.name
+        : typeof fn.name === "string"
+          ? fn.name
+          : undefined;
+    if (!name) continue;
+    const rawArgs = fn.function?.arguments ?? fn.arguments;
+    const args =
+      typeof rawArgs === "string" ? rawArgs : rawArgs ? JSON.stringify(rawArgs) : "{}";
+    lines.push(`Action: ${name}`, `Action-Input: ${args}`);
+  }
+  return lines.join("\n");
+};
+
 export const isTruncatedReasoning = (opts: {
   content: string;
   finishReason: string | undefined;
@@ -35,7 +63,11 @@ export const isTruncatedReasoning = (opts: {
 }): boolean =>
   !opts.content.trim() &&
   Boolean(opts.reasoningContent.trim()) &&
-  (opts.finishReason === "length" || opts.finishReason === "max_tokens");
+  (opts.finishReason === "length" ||
+    opts.finishReason === "max_tokens" ||
+    // 只回了 reasoning + tool_calls 意图却没给 content/tool_calls 明细时，
+    // 加大额度重试一次通常能拿到最终 content。
+    opts.finishReason === "tool_calls");
 
 const normalizeContent = (content: unknown): string => {
   if (typeof content === "string") return content;
