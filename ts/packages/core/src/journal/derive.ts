@@ -155,6 +155,7 @@ export const deriveTrajectory = (events: readonly JournalEvent[]): DerivedTrajec
   const out: DerivedTrajectoryEntry[] = [];
   for (const event of activeJournalEvents(events)) {
     if (
+      event.type !== "plan.created" &&
       event.type !== "react.thought" &&
       event.type !== "tool.call" &&
       event.type !== "tool.result" &&
@@ -169,11 +170,18 @@ export const deriveTrajectory = (events: readonly JournalEvent[]): DerivedTrajec
       type: event.type,
       createdAt: event.createdAt,
       content:
-        event.type === "react.thought" || event.type === "assistant"
-          ? event.content
-          : event.type === "tool.call"
-            ? event.tool
-            : event.observation,
+        event.type === "plan.created"
+          ? [
+              `目标：${event.goal}`,
+              ...event.steps.map(
+                (s, i) => `${i + 1}. ${s.title}（验收：${s.acceptance}）`,
+              ),
+            ].join("\n")
+          : event.type === "react.thought" || event.type === "assistant"
+            ? event.content
+            : event.type === "tool.call"
+              ? event.tool
+              : event.observation,
     };
     if (event.turnId) entry.turnId = event.turnId;
     if (event.step !== undefined) entry.step = event.step;

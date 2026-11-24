@@ -76,6 +76,37 @@ describe("Session Journal", () => {
     ]);
   });
 
+  it("plan.created round-trips the schema and lands in deriveTrajectory (R1)", () => {
+    const journal = createInMemoryJournal({ now: () => 2_000, idFactory: () => "pid" });
+    journal.append({
+      type: "plan.created",
+      conversationId: cid,
+      turnId: "t1",
+      goal: "做贵州7日自驾游计划",
+      taskType: "planning",
+      source: "llm",
+      steps: [
+        { id: "s1", title: "确定路线与里程", acceptance: "逐日路线表完整", dependencies: [] },
+        {
+          id: "s2",
+          title: "预订住宿",
+          acceptance: "每晚住宿已确认",
+          dependencies: ["s1"],
+        },
+      ],
+    });
+    const events = journal.list(cid);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe("plan.created");
+    const trajectory = deriveTrajectory(events);
+    expect(trajectory).toHaveLength(1);
+    expect(trajectory[0]?.content).toContain("目标：做贵州7日自驾游计划");
+    expect(trajectory[0]?.content).toContain("1. 确定路线与里程（验收：逐日路线表完整）");
+    // 计划不是聊天消息，不应污染 deriveChatMessages/deriveHistory
+    expect(deriveChatMessages(events)).toHaveLength(0);
+    expect(deriveHistory(events)).toHaveLength(0);
+  });
+
   it("session.compacted folds completed turns into one summary message (RFC-012)", () => {
     const journal = createInMemoryJournal();
     const turn = (turnId: string, user: string, assistant: string): void => {

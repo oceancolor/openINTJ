@@ -680,10 +680,21 @@ export const App = (): JSX.Element => {
         messageKind: res.inputStructure?.action === "clarify" ? "clarification" : "answer",
         ...(res.inputStructure ? { inputStructure: res.inputStructure } : {}),
       };
+      // R1 计划显性化：本轮生成了执行计划则先以系统消息呈现，再给答复。
+      const planMessage: ChatMessage | undefined = res.plan
+        ? {
+            role: "system",
+            content: [
+              `【执行计划】目标：${res.plan.goal}`,
+              ...res.plan.steps.map((s, i) => `${i + 1}. ${s.title}（验收：${s.acceptance}）`),
+            ].join("\n"),
+          }
+        : undefined;
       setMessages((current) => {
+        const insert: ChatMessage[] = planMessage ? [planMessage, assistant] : [assistant];
         const last = current[current.length - 1];
-        if (last?.streaming) return [...current.slice(0, -1), assistant];
-        return [...current, { role: "user", content: text }, assistant];
+        if (last?.streaming) return [...current.slice(0, -1), ...insert];
+        return [...current, { role: "user", content: text }, ...insert];
       });
       if (res.context) {
         setStatus((current) => (current ? { ...current, context: res.context } : current));
@@ -696,6 +707,8 @@ export const App = (): JSX.Element => {
       if (artifactPath) {
         setSelectedWorkspacePath(artifactPath);
       }
+      // 对话可能写了工作区文件：即使 fs.watch 漏事件也强制左栏重拉一次。
+      setWorkspaceTreeKey((key) => key + 1);
     } catch (e) {
       const errorLine: ChatMessage = { role: "system", content: `[错误] ${(e as Error).message}` };
       setMessages((current) => {

@@ -56,6 +56,7 @@ import {
 } from "../shared/workspace-view.js";
 import type { DesktopAgent } from "./agent.js";
 import { requestsFileArtifact, resolveMissingArtifact } from "./artifact-fallback.js";
+import { serializePlanForClient } from "./explicit-plan.js";
 import type { ConfigService } from "./config-store.js";
 import type { CredentialStore } from "./credential-store.js";
 import type { ModelRegistry } from "./model-registry.js";
@@ -869,6 +870,25 @@ export const registerIpcHandlers = (
       const modelStatus = selectedLlm?.getStatus();
       const context = agent.status().context;
       const artifacts = artifactsFromAnswer(finalAnswer);
+      // R1：回读本轮 plan.created 事件透传渲染层（单一事实源 = journal）。
+      let planPayload: ReturnType<typeof serializePlanForClient> | undefined;
+      const planTurnId = journalCtx?.turnId;
+      if (selected && deps.workbench && planTurnId) {
+        try {
+          const ev = deps.workbench
+            .listJournal(selected.conversation.id)
+            .find((e) => e.type === "plan.created" && e.turnId === planTurnId);
+          if (ev && ev.type === "plan.created") {
+            planPayload = serializePlanForClient({
+              goal: ev.goal,
+              source: ev.source,
+              steps: ev.steps,
+            });
+          }
+        } catch {
+          planPayload = undefined;
+        }
+      }
       return {
         finalAnswer,
         iterations: result.iterations,
@@ -878,6 +898,7 @@ export const registerIpcHandlers = (
         ...(result.inputStructure ? { inputStructure: result.inputStructure } : {}),
         ...(modelStatus ? { provider: modelStatus.provider, model: modelStatus.model } : {}),
         ...(artifacts.length > 0 ? { artifacts } : {}),
+        ...(planPayload ? { plan: planPayload } : {}),
       };
     } catch (error) {
       if (persistedConversationId && deps.workbench && journalCtx) {
@@ -1384,14 +1405,19 @@ export const registerIpcHandlers = (
     );
 
     // 工作区文件变更推送（onWorkspaceChange）。目录不可监听时静默跳过。
+    // recursive：任务子目录内写入也要通知左栏（Windows/macOS 支持）。
     let wsWatcher: FSWatcher | undefined;
     try {
-      wsWatcher = watch(agent.workspace.config.root, { persistent: false }, (event, filename) => {
-        send(IPC.EVT_WORKSPACE, {
-          event: event === "rename" ? "rename" : "change",
-          path: filename ? String(filename) : "",
-        });
-      });
+      wsWatcher = watch(
+        agent.workspace.config.root,
+        { persistent: false, recursive: true },
+        (event, filename) => {
+          send(IPC.EVT_WORKSPACE, {
+            event: event === "rename" ? "rename" : "change",
+            path: filename ? String(filename) : "",
+          });
+        },
+      );
     } catch {
       // 工作区目录不存在 / 平台不支持 watch → 不推送变更，但不影响其它能力。
     }

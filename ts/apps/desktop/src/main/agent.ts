@@ -197,6 +197,12 @@ import {
 } from "@openintj/telemetry-otel";
 import { type SpeechToTextProvider, sttFromEnv } from "@openintj/voice";
 import {
+  type ExplicitPlan,
+  buildExplicitPlan,
+  formatExplicitPlanBlock,
+  shouldBuildExplicitPlan,
+} from "./explicit-plan.js";
+import {
   fulfillImageGenerationTask,
   requestsImageGeneration,
   taskIdFromContextTags,
@@ -1411,7 +1417,6 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       const { preflight, inputStructure, executionQuery, cls, route, routedTaskType } = prelude;
       const structured = prelude.structured;
       const workQuery = prelude.workQuery;
-      const planAdviceBlock = prelude.planAdviceBlock;
       const journalCtx = buildJournalTurnContext({
         ...(runOpts.journal ? { provided: runOpts.journal } : {}),
         query,
@@ -1447,6 +1452,53 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
         : undefined;
       // 让 delegate_task 等工具执行链能拿到父 run 身份（子代理派生 child run 用）。
       if (effectiveRun) activeRunStorage.enterWith(effectiveRun);
+      // R1 计划显性化：规划/分析类与 TaskPool 任务先生成结构化计划
+      // （目标+步骤+验收），注入执行提示并落盘 journal plan.created；
+      // 生成失败/超时一律 fail-soft，不阻断执行。计划是调制不是枷锁。
+      const orchestrationMode = resolveOrchestrationMode(
+        Boolean(taskPool && cls && shouldUseTaskPool(taskPoolEnabled, cls.label)),
+        Boolean(selfConsistency),
+      );
+      let effectivePlanAdviceBlock = prelude.planAdviceBlock;
+      let explicitPlan: ExplicitPlan | null = null;
+      const isClarifyRun = structured?.action === "clarify";
+      if (
+        shouldBuildExplicitPlan({
+          ...(routedTaskType ? { routedTaskType: String(routedTaskType) } : {}),
+          orchestrationMode,
+          isPreflight: Boolean(preflight),
+          isClarify: isClarifyRun,
+          isArtifactRequest: artifactRequest,
+          queryLength: workQuery.length,
+        })
+      ) {
+        explicitPlan = await buildExplicitPlan({
+          llm: runOpts.llm ?? llm,
+          query: workQuery,
+          ...(runOpts.signal ? { signal: runOpts.signal } : {}),
+        });
+        if (explicitPlan) {
+          const block = formatExplicitPlanBlock(explicitPlan);
+          effectivePlanAdviceBlock = effectivePlanAdviceBlock
+            ? `${effectivePlanAdviceBlock}\n\n${block}`
+            : block;
+          if (journalCtx) {
+            try {
+              await journalCtx.sink.append({
+                type: "plan.created",
+                conversationId: journalCtx.conversationId,
+                turnId: journalCtx.turnId,
+                goal: explicitPlan.goal,
+                ...(routedTaskType ? { taskType: String(routedTaskType) } : {}),
+                source: "llm",
+                steps: explicitPlan.steps,
+              });
+            } catch (error) {
+              console.warn("[OpenINTJ desktop] plan.created journal append failed", error);
+            }
+          }
+        }
+      }
       const taoOpts = (
         traceId?: string,
         signal: AbortSignal | undefined = runOpts.signal,
@@ -1463,7 +1515,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
         ...(runOpts.llm ? { llm: runOpts.llm } : {}),
         ...(effectiveRun ? { run: effectiveRun } : {}),
         completionOwner: runOpts.completionOwner ?? "loop",
-        ...(planAdviceBlock ? { planAdviceBlock } : {}),
+        ...(effectivePlanAdviceBlock ? { planAdviceBlock: effectivePlanAdviceBlock } : {}),
         ...(attachJournal && journalCtx ? { journal: journalCtx } : {}),
       });
       // 先跑（contextProvider 会检索此前已落盘的记忆），再记录本轮 → 避免检索命中当前输入本身。
@@ -1492,10 +1544,6 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
           metrics: { productBehaviorPreflight: 1 },
         };
       } else {
-        const orchestrationMode = resolveOrchestrationMode(
-          Boolean(taskPool && cls && shouldUseTaskPool(taskPoolEnabled, cls.label)),
-          Boolean(selfConsistency),
-        );
         if (orchestrationMode === "taskpool" && taskPool && cls) {
           const { plan } = control.processInput(workQuery, cls.label);
           const graph = planGraphToTaskGraph(plan);
@@ -1561,6 +1609,10 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
         }
       }
       if (prelude.usedPlanAdvice) result.metrics.planAdvice = 1;
+      if (explicitPlan) {
+        result.metrics.explicitPlan = 1;
+        result.metrics.planSteps = explicitPlan.steps.length;
+      }
       if (didCompact) result.metrics.compacted = 1;
       if (overflowRecovered) result.metrics.overflowRecovered = 1;
       if (inputStructure?.action === "proceed") {

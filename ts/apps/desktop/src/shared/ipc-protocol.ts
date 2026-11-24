@@ -445,6 +445,16 @@ export const ChatResponseSchema = z.object({
   inputStructure: InputStructureSchema.optional(),
   context: ContextUsageSchema.optional(),
   artifacts: z.array(WorkspaceArtifactSchema).optional(),
+  // R1 计划显性化：本轮生成的执行计划（渲染层以系统消息展示）。
+  plan: z
+    .object({
+      goal: z.string(),
+      source: z.string(),
+      steps: z.array(
+        z.object({ id: z.string(), title: z.string(), acceptance: z.string() }),
+      ),
+    })
+    .optional(),
   command: z
     .object({
       name: z.string(),

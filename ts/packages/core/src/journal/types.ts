@@ -3,6 +3,7 @@ import { z } from "zod";
 export const JournalEventTypeSchema = z.enum([
   "turn.start",
   "user",
+  "plan.created",
   "react.thought",
   "tool.call",
   "tool.result",
@@ -49,6 +50,24 @@ export const JournalEventSchema = z.discriminatedUnion("type", [
     originalInput: z.string().optional(),
     inputStructure: z.unknown().optional(),
     source: z.enum(["user", "steer", "inject"]).optional(),
+  }),
+  // R1 计划显性化：T 阶段生成的结构化执行计划（artifact 落盘）。
+  // 步骤带验收标准，供后续评估/经验写回引用；source 区分 LLM 生成
+  // 与确定性模板，避免把模板步冒充任务特定规划。
+  JournalEventBaseSchema.extend({
+    type: z.literal("plan.created"),
+    turnId: z.string().min(1),
+    goal: z.string(),
+    taskType: z.string().optional(),
+    source: z.enum(["llm", "plan-graph"]),
+    steps: z.array(
+      z.object({
+        id: z.string(),
+        title: z.string(),
+        acceptance: z.string(),
+        dependencies: z.array(z.string()).default([]),
+      }),
+    ),
   }),
   JournalEventBaseSchema.extend({
     type: z.literal("react.thought"),
@@ -150,7 +169,10 @@ export interface DerivedTrajectoryEntry {
   seq: number;
   id: string;
   conversationId: string;
-  type: Extract<JournalEventType, "react.thought" | "tool.call" | "tool.result" | "assistant">;
+  type: Extract<
+    JournalEventType,
+    "plan.created" | "react.thought" | "tool.call" | "tool.result" | "assistant"
+  >;
   createdAt: number;
   turnId?: string;
   step?: number;
