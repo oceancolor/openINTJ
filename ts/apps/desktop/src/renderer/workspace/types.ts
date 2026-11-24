@@ -25,6 +25,11 @@ export interface WorkspaceClient {
   reveal(path?: string): Promise<WorkspaceRevealResponse | WorkspaceError>;
   mkdir(path: string): Promise<WorkspaceMkdirResponse | WorkspaceError>;
   renameDir(from: string, to: string): Promise<WorkspaceRenameDirResponse | WorkspaceError>;
+  /**
+   * 订阅工作区文件变更（桌面端来自主进程 fs.watch）。
+   * 可选：无订阅时调用方仍可通过 refreshKey / 对话结束强制重拉。
+   */
+  onChange?(cb: (payload: { event: string; path: string }) => void): () => void;
 }
 
 export const isWorkspaceError = (value: unknown): value is WorkspaceError =>
@@ -39,4 +44,9 @@ export const desktopWorkspaceClient = (): WorkspaceClient => ({
   reveal: (path) => window.openintj.workspaceReveal(path ? { path } : {}),
   mkdir: (path) => window.openintj.workspaceMkdir({ path }),
   renameDir: (from, to) => window.openintj.workspaceRenameDir({ from, to }),
+  onChange: (cb) =>
+    window.openintj.onWorkspaceEvent((raw) => {
+      const p = (raw ?? {}) as { event?: string; path?: string };
+      cb({ event: p.event ?? "change", path: p.path ?? "" });
+    }),
 });

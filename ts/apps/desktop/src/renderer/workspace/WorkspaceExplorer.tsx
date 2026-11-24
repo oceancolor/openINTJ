@@ -69,25 +69,50 @@ export const WorkspaceExplorer: React.FC<{
   const [nodes, setNodes] = React.useState<WorkspaceTreeNode[]>([]);
   const [error, setError] = React.useState<string>();
   const [query, setQuery] = React.useState("");
+  // 本地刷新代数：fs.watch 变更时递增（与父级 refreshKey 并列触发重拉）。
+  const [watchTick, setWatchTick] = React.useState(0);
 
   React.useEffect(() => {
     let cancelled = false;
-    void client.list().then((result) => {
-      if (cancelled) return;
-      if (isWorkspaceError(result)) {
-        setError(result.message);
+    void client
+      .list()
+      .then((result) => {
+        if (cancelled) return;
+        if (isWorkspaceError(result)) {
+          setError(result.message);
+          setEntries([]);
+          setNodes([]);
+          return;
+        }
+        setError(undefined);
+        setEntries(result.entries);
+        setNodes(buildWorkspaceTree(result.entries));
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : String(err));
         setEntries([]);
         setNodes([]);
-        return;
-      }
-      setError(undefined);
-      setEntries(result.entries);
-      setNodes(buildWorkspaceTree(result.entries));
-    });
+      });
     return () => {
       cancelled = true;
     };
-  }, [client, refreshKey]);
+  }, [client, refreshKey, watchTick]);
+
+  // 主进程 fs.watch → EVT_WORKSPACE：agent 写文件/建任务夹后左栏必须跟上。
+  // 防抖合并连发事件，避免一次写入触发多次 list。
+  React.useEffect(() => {
+    if (!client.onChange) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const off = client.onChange(() => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => setWatchTick((n) => n + 1), 350);
+    });
+    return () => {
+      if (timer) clearTimeout(timer);
+      off();
+    };
+  }, [client]);
 
   const matches = React.useMemo(() => filterWorkspaceFiles(entries, query), [entries, query]);
   const filtering = query.trim().length > 0;
