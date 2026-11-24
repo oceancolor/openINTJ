@@ -13,6 +13,18 @@ describe("canonicalToolName", () => {
     expect(canonicalToolName("read_file")).toBe("read_file");
     expect(canonicalToolName("custom_tool")).toBe("custom_tool");
   });
+
+  it("P0-7：原型键返回 string，不穿透 Object.prototype", () => {
+    expect(typeof canonicalToolName("__proto__")).toBe("string");
+    expect(canonicalToolName("__proto__")).toBe("__proto__");
+    expect(typeof canonicalToolName("constructor")).toBe("string");
+    expect(canonicalToolName("constructor")).toBe("constructor");
+    expect(canonicalToolNames(["__proto__", "constructor", "readFile"])).toEqual([
+      "__proto__",
+      "constructor",
+      "read_file",
+    ]);
+  });
 });
 
 describe("canonicalToolNames", () => {

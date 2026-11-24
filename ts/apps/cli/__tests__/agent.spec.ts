@@ -492,6 +492,31 @@ describe("assembleAgent E2E (mock LLM)", () => {
     expect(descriptor.permissions).toContain("filesystem.read");
   });
 
+  it("P0-6: initConnectors is callable before run (CLI entry wiring contract)", async () => {
+    const agent = assembleAgent({ llmProvider: "mock", maxTaoIterations: 1 });
+    await expect(agent.initConnectors()).resolves.toBeUndefined();
+    const result = await agent.run("你好");
+    expect(result.status).toBe("completed");
+  });
+
+  it("P0-2 F10: CLI skillLearning 未验证 completed 不升权", async () => {
+    const agent = assembleAgent({
+      llmProvider: "mock",
+      maxTaoIterations: 1,
+      enableSkillLearning: true,
+    });
+    const rt = agent.skillLearning!;
+    const selectionId = rt.beginSelection(["cli-skill"])!;
+    expect(
+      rt.recordOutcomeForSelection(selectionId, {
+        status: "completed",
+        verified: false,
+        query: "q",
+      }),
+    ).toBe(true);
+    expect(rt.weightFor("cli-skill")).toBe(0);
+  });
+
   it("RFC-015: a due scheduled job runs through the handle and is marked completed", async () => {
     const agent = assembleAgent({ llmProvider: "mock", maxTaoIterations: 1 });
     const events: string[] = [];

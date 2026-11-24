@@ -68,6 +68,24 @@ describe("path search", () => {
     expect(path.nextStepId).toBe(plan.steps[0]!.stepId);
     expect(path.annealingOrder[0]).toBe(path.dijkstraOrder[0]);
   });
+
+  it("P0-7：n>16 不走 Dijkstra 子集格，fail-closed 改退火", () => {
+    const goal = new GoalParser().parse("大图调度");
+    const steps = Array.from({ length: 17 }, (_, i) =>
+      buildPlanStep({
+        stepId: `s${i + 1}`,
+        action: "analyze",
+        description: `步骤 ${i + 1}`,
+        dependencies: i === 0 ? [] : [`s${i}`],
+      }),
+    );
+    const plan = new PlanGraph({ goal, steps });
+    const annotated = annotatePlanSteps(plan.steps, { query: "大图" });
+    const path = dijkstraSchedule(annotated);
+    expect(path.method).toBe("annealing");
+    expect(path.dijkstraOrder.length).toBeGreaterThan(0);
+    expect(evaluatePlanPath(annotated).method).toBe("annealing");
+  });
 });
 
 describe("advisePlan", () => {

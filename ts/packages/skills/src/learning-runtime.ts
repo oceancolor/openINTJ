@@ -4,15 +4,15 @@ import type { Skill, SkillProposal, SkillWeight } from "./types.js";
 
 /**
  * 从 run 结果推导技能强化信号（与 classifier 的 outcomeSignal 同映射；
- * 本地实现，避免 skills→classifier 反向依赖）：
+ * 本地实现，避免 skills→classifier 反向依赖；P0-2）：
  *  - completed → +1
  *  - failed/timeout → -0.5
- *  - 其它（max_iter 等）→ +0.2
+ *  - 其它 → 0（禁止弱正）
  */
 export const skillOutcomeSignal = (status: string): number => {
   if (status === "completed") return 1;
   if (status === "failed" || status === "timeout") return -0.5;
-  return 0.2;
+  return 0;
 };
 
 /**
@@ -244,8 +244,15 @@ export class SkillLearningRuntime {
     this.learnMode = resolveSkillsLearnMode(opts);
     if (opts.hooks) this.hooks = opts.hooks;
     this.clock = opts.clock ?? (() => Date.now());
-    this.wMin = opts.weightClamp?.min ?? -2;
-    this.wMax = opts.weightClamp?.max ?? 12;
+    // P0-7：NaN/Infinity 穿透 Math.max/min 会毒化权重，clamp 边界必须有限。
+    const minRaw = opts.weightClamp?.min;
+    const maxRaw = opts.weightClamp?.max;
+    this.wMin = typeof minRaw === "number" && Number.isFinite(minRaw) ? minRaw : -2;
+    this.wMax = typeof maxRaw === "number" && Number.isFinite(maxRaw) ? maxRaw : 12;
+    if (this.wMin > this.wMax) {
+      this.wMin = -2;
+      this.wMax = 12;
+    }
     if (opts.weightHalfLifeSec !== undefined && opts.weightHalfLifeSec > 0) {
       this.halfLifeSec = opts.weightHalfLifeSec;
     }
@@ -262,7 +269,12 @@ export class SkillLearningRuntime {
   async hydrate(): Promise<void> {
     const snap = await this.store.loadAll();
     this.weights.clear();
-    for (const w of snap.weights) this.weights.set(w.skillId, { ...w });
+    for (const w of snap.weights) {
+      // P0-7：丢弃非有限权重，避免 hydrate 把 NaN 带进强化环。
+      if (!Number.isFinite(w.weight)) continue;
+      const weight = Math.max(this.wMin, Math.min(this.wMax, w.weight));
+      this.weights.set(w.skillId, { ...w, weight });
+    }
     this.proposals.clear();
     for (const p of snap.proposals) this.proposals.set(p.proposalId, { ...p });
     this.approved.clear();
@@ -439,15 +451,19 @@ export class SkillLearningRuntime {
   weightFor(id: string): number {
     const w = this.weights.get(id);
     if (!w) return 0;
-    return this.decayed(w.weight, w.lastUsed, this.nowSec());
+    const d = this.decayed(w.weight, w.lastUsed, this.nowSec());
+    return Number.isFinite(d) ? d : 0;
   }
 
   private reinforce(id: string, signal: number): void {
+    if (!Number.isFinite(signal)) return;
     const now = this.nowSec();
     const prevRec = this.weights.get(id);
     // 累加前先把旧权重衰减到当下：陈旧的高权重不会永久累积。
-    const prev = prevRec ? this.decayed(prevRec.weight, prevRec.lastUsed, now) : 0;
-    const weight = Math.max(this.wMin, Math.min(this.wMax, prev + signal));
+    const prevRaw = prevRec ? this.decayed(prevRec.weight, prevRec.lastUsed, now) : 0;
+    const prev = Number.isFinite(prevRaw) ? prevRaw : 0;
+    const next = Number.isFinite(prev + signal) ? prev + signal : prev;
+    const weight = Math.max(this.wMin, Math.min(this.wMax, next));
     const w: SkillWeight = { skillId: id, weight, lastUsed: now };
     this.weights.set(id, w);
     try {

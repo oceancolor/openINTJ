@@ -63,7 +63,9 @@ describe("outcomeSignal", () => {
     expect(outcomeSignal("failed")).toBe(-0.5);
     expect(outcomeSignal("timeout")).toBe(-0.5);
   });
-  it("其它（max_iter 等）→ +0.2 弱正", () => {
-    expect(outcomeSignal("max_iterations")).toBe(0.2);
+  it("其它（max_iter / cancelled 等）→ 0 中性（P0-2）", () => {
+    expect(outcomeSignal("max_iterations")).toBe(0);
+    expect(outcomeSignal("cancelled")).toBe(0);
+    expect(outcomeSignal("blocked")).toBe(0);
   });
 });

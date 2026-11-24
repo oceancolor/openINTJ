@@ -66,6 +66,16 @@ program
       agentOpts.enableProductBehavior = opts.productBehavior;
     }
     const agent = await assembleAgentAsync(agentOpts);
+    // P0-6：装配后初始化连接器（MCP 等），与 server/desktop 对齐；失败不阻断对话。
+    try {
+      await agent.initConnectors();
+    } catch (error) {
+      process.stderr.write(
+        kleur.yellow(
+          `[connectors] init failed: ${error instanceof Error ? error.message : String(error)}\n`,
+        ),
+      );
+    }
 
     const modelRuntime = agent.refreshModelRuntime
       ? await agent.refreshModelRuntime()
@@ -170,6 +180,15 @@ program
     }
     if (opts.taskPool) agentOpts.enableTaskPool = true;
     const agent = await assembleAgentAsync(agentOpts);
+    try {
+      await agent.initConnectors();
+    } catch (error) {
+      process.stderr.write(
+        kleur.yellow(
+          `[connectors] init failed: ${error instanceof Error ? error.message : String(error)}\n`,
+        ),
+      );
+    }
     const modelRuntime = agent.refreshModelRuntime
       ? await agent.refreshModelRuntime()
       : agent.modelRuntime;

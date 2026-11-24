@@ -9,11 +9,11 @@ import {
 import { InMemorySkillStore } from "../src/store.js";
 
 describe("skillOutcomeSignal", () => {
-  it("与 classifier 同映射：completed +1 / failed|timeout -0.5 / 其它 +0.2", () => {
+  it("与 classifier 同映射：completed +1 / failed|timeout -0.5 / 其它 0（P0-2）", () => {
     expect(skillOutcomeSignal("completed")).toBe(1);
     expect(skillOutcomeSignal("failed")).toBe(-0.5);
     expect(skillOutcomeSignal("timeout")).toBe(-0.5);
-    expect(skillOutcomeSignal("max_iterations")).toBeCloseTo(0.2);
+    expect(skillOutcomeSignal("max_iterations")).toBe(0);
   });
 });
 
@@ -150,6 +150,23 @@ describe("SkillLearningRuntime · 加权", () => {
     const rt = new SkillLearningRuntime({ store });
     await rt.hydrate();
     expect(rt.weightFor("s")).toBe(3);
+  });
+
+  it("P0-7：NaN clamp / hydrate 不穿透", async () => {
+    const rt = new SkillLearningRuntime({
+      weightClamp: { min: Number.NaN, max: Number.POSITIVE_INFINITY },
+    });
+    rt.noteSelected("q", undefined, ["s"]);
+    rt.recordOutcome("q", undefined, "completed");
+    expect(Number.isFinite(rt.weightFor("s"))).toBe(true);
+
+    const store = new InMemorySkillStore();
+    store.saveWeight({ skillId: "bad", weight: Number.NaN, lastUsed: 1 });
+    store.saveWeight({ skillId: "ok", weight: 2, lastUsed: 1 });
+    const rt2 = new SkillLearningRuntime({ store });
+    await rt2.hydrate();
+    expect(rt2.weightFor("bad")).toBe(0);
+    expect(rt2.weightFor("ok")).toBe(2);
   });
 
   it("未 noteSelected 的 query 不影响任何权重", () => {

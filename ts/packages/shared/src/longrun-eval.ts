@@ -16,7 +16,10 @@ export interface LongRunTurn {
   query: string;
   /** 本轮答案判定（true = 完成）。不提供则不计入通过率。 */
   judge?: (answer: string) => boolean | Promise<boolean>;
-  /** 期望被「回忆」的金片段：出现在注入上下文或答案中即算命中（不区分大小写）。 */
+  /**
+   * 期望被「回忆」的金片段（P0-3）：必须出现在注入上下文 `injectedContext` 中才算命中。
+   * 不再用 finalAnswer 兜底——否则零记忆复读提问也能刷出 recallRate=1.0。
+   */
   expectRecall?: string;
 }
 
@@ -47,6 +50,8 @@ export interface LongRunTurnResult {
   /** 是否提供了 expectRecall。 */
   recallExpected: boolean;
   recallHit: boolean;
+  /** 金片段原文（有 expectRecall 时带上，供改进曲线按同一探测集对齐）。 */
+  expectRecallGold?: string;
   durationMs: number;
   error?: string;
 }
@@ -84,11 +89,14 @@ export const runLongRunSession = async (
     try {
       const out = await agent(turn.query);
       const passed = turn.judge ? await turn.judge(out.finalAnswer) : false;
-      const recallExpected = turn.expectRecall !== undefined;
+      const gold = turn.expectRecall?.trim();
+      const recallExpected = gold !== undefined && gold.length > 0;
       let recallHit = false;
-      if (recallExpected) {
-        const haystack = out.injectedContext ?? out.finalAnswer;
-        recallHit = containsCI(haystack, turn.expectRecall as string);
+      if (recallExpected && gold) {
+        // P0-3：只用注入上下文，并从 haystack 去掉当前 query，杜绝复读提问刷召回。
+        const injected = out.injectedContext ?? "";
+        const haystack = injected.split(turn.query).join(" ");
+        recallHit = containsCI(haystack, gold);
       }
       turns.push({
         index: i,
@@ -99,9 +107,11 @@ export const runLongRunSession = async (
         passed,
         recallExpected,
         recallHit,
+        ...(gold ? { expectRecallGold: gold } : {}),
         durationMs: Date.now() - t0,
       });
     } catch (e) {
+      const gold = turn.expectRecall?.trim();
       turns.push({
         index: i,
         query: turn.query,
@@ -109,8 +119,9 @@ export const runLongRunSession = async (
         tokensSpent: 0,
         judged: turn.judge !== undefined,
         passed: false,
-        recallExpected: turn.expectRecall !== undefined,
+        recallExpected: gold !== undefined && gold.length > 0,
         recallHit: false,
+        ...(gold ? { expectRecallGold: gold } : {}),
         durationMs: Date.now() - t0,
         error: e instanceof Error ? e.message : String(e),
       });
@@ -130,18 +141,22 @@ export const runLongRunSession = async (
     totalTokens: turns.reduce((s, t) => s + t.tokensSpent, 0),
     passRate,
     recallRate,
-    improvement: computeImprovement(recallTurns),
+    improvement: computeImprovement(turns),
   };
 };
 
-/** 把 expectRecall 轮按时序对半切，比较后半 vs 前半命中率（含中点向上取整给后半）。 */
-const computeImprovement = (recallTurns: readonly LongRunTurnResult[]): LongRunImprovement => {
+/**
+ * P0-3 改进曲线：按会话时间窗对半（用 turn.index），只统计 expectRecall 探测轮。
+ * 避免「先问后写」脚本顺序把 delta 刷到虚高；打乱种子/探测顺序时也不应单独因顺序得分。
+ */
+const computeImprovement = (allTurns: readonly LongRunTurnResult[]): LongRunImprovement => {
+  const recallTurns = allTurns.filter((t) => t.recallExpected);
   if (recallTurns.length < 2) {
     return { firstHalfRecall: 0, secondHalfRecall: 0, delta: 0 };
   }
-  const mid = Math.floor(recallTurns.length / 2);
-  const first = recallTurns.slice(0, mid);
-  const second = recallTurns.slice(mid);
+  const sessionMid = Math.floor(allTurns.length / 2);
+  const first = recallTurns.filter((t) => t.index < sessionMid);
+  const second = recallTurns.filter((t) => t.index >= sessionMid);
   const rate = (xs: readonly LongRunTurnResult[]): number =>
     xs.length > 0 ? xs.filter((t) => t.recallHit).length / xs.length : 0;
   const firstHalfRecall = rate(first);

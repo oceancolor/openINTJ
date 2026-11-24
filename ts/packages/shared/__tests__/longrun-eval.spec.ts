@@ -45,6 +45,16 @@ describe("runLongRunSession", () => {
     expect(res.recallRate).toBe(0);
   });
 
+  it("P0-3：零记忆复读 Agent 不能靠 finalAnswer 刷出高召回", async () => {
+    // 把提问原样塞进答案，且不提供 injectedContext——旧逻辑会误判命中。
+    const echo: LongRunAgent = (query) => ({
+      finalAnswer: `复读：${query} 以及历史金片段 Rust Falcon 杭州 openINTJ`,
+      tokensSpent: 10,
+    });
+    const res = await runLongRunSession(echo, SCENARIO_PREFERENCES);
+    expect(res.recallRate).toBeLessThan(0.2);
+  });
+
   it("改进曲线：前半未命中、后半命中 → delta>0", async () => {
     // 一个只在后半轮才「学会」回忆的 agent
     let turnCount = 0;

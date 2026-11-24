@@ -46,7 +46,7 @@ export const ToolHandlerSignature = Symbol.for("openintj.toolHandler");
 export type ToolHandler = (params: Record<string, unknown>) => Promise<unknown> | unknown;
 
 /** Skill frontmatter / LLM 草稿常用 camelCase，与 ToolHub 注册名对齐。 */
-const TOOL_NAME_ALIASES: Record<string, string> = {
+const TOOL_NAME_ALIASES: Record<string, string> = Object.assign(Object.create(null), {
   readFile: "read_file",
   read_file: "read_file",
   writeFile: "write_file",
@@ -54,12 +54,17 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
   executeCommand: "execute_command",
   execute_command: "execute_command",
   search: "search",
-};
+}) as Record<string, string>;
 
 export const canonicalToolName = (name: string): string => {
   const trimmed = name.trim();
   if (trimmed.length === 0) return trimmed;
-  return TOOL_NAME_ALIASES[trimmed] ?? trimmed;
+  // P0-7：拒绝原型链键（__proto__/constructor），保证返回值恒为 string。
+  if (!Object.prototype.hasOwnProperty.call(TOOL_NAME_ALIASES, trimmed)) {
+    return trimmed;
+  }
+  const mapped = TOOL_NAME_ALIASES[trimmed];
+  return typeof mapped === "string" ? mapped : trimmed;
 };
 
 export const canonicalToolNames = (names: readonly string[]): string[] => {

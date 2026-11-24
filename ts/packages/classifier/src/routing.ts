@@ -44,13 +44,13 @@ export const decideRoute = (r: ClassifyResult, policy: RoutingPolicy = {}): Rout
 };
 
 /**
- * 从 run 结果推导强化信号：
- *  - completed → +1（高效完成更值得正反馈）
- *  - failed/timeout → -0.5（标签可能不当）
- *  - 其它（max_iter 等）→ +0.2（弱正）
+ * 从 run 结果推导强化信号（P0-2）：
+ *  - completed → +1
+ *  - failed/timeout → -0.5
+ *  - 其它（cancelled / max_iter / blocked / 未知）→ 0（禁止弱正把失败当成功学）
  */
 export const outcomeSignal = (status: string): number => {
   if (status === "completed") return 1;
   if (status === "failed" || status === "timeout") return -0.5;
-  return 0.2;
+  return 0;
 };

@@ -77,6 +77,10 @@ export const dijkstraSchedule = (annotated: readonly AnnotatedPlanStep[]): PathS
       method: "dijkstra",
     };
   }
+  // P0-7：n>16 时 1<<n 子集格爆炸，fail-closed 改走退火（禁止静默分配）。
+  if (n > 16) {
+    return annealSchedule(annotated);
+  }
   const goal = (1 << n) - 1;
   const dist = new Array<number>(1 << n).fill(Number.POSITIVE_INFINITY);
   const prev = new Array<{ mask: number; stepIndex: number } | undefined>(1 << n);
@@ -202,7 +206,12 @@ export const annealSchedule = (
   const steps = opts.steps ?? 200;
   let current = topologicalPermutationsSeed(annotated, rng);
   if (!isValidTopo(annotated, current)) {
-    current = dijkstraSchedule(annotated).dijkstraOrder;
+    // P0-7：n>16 不得回落 Dijkstra（会 1<<n 爆炸）；用步骤 id 顺序作弱种子。
+    if (annotated.length > 16) {
+      current = annotated.map((item) => item.step.stepId);
+    } else {
+      current = dijkstraSchedule(annotated).dijkstraOrder;
+    }
   }
   let best = current;
   let currentE = scheduleEnergy(annotated, current);

@@ -37,6 +37,15 @@
 
 ### Fixed
 
+- **P0 可靠性下一批（P0-2 / P0-3 / P0-6 / P0-7）**：①`outcomeSignal` /
+  `skillOutcomeSignal` 非 completed/failed/timeout 一律 0，禁止弱正把失败当成功学；
+  ②长跑评测召回只认 `injectedContext`（去掉 finalAnswer 兜底与当前 query 复读），
+  改进曲线按会话时间窗对半；③CLI `run`/`status` 装配后调用 `initConnectors`；
+  ④`canonicalToolName` 防原型键、`dijkstraSchedule` n>16 fail-closed 改退火、
+  技能权重 NaN clamp/hydrate 消毒；⑤**P0-2 余量**：CLI/server 技能学习与
+  desktop 对齐 F10——`beginSelection` + `verifySkillOutcome` +
+  `recordOutcomeForSelection`（无工具证据的 completed 只观察不升权）。
+  「无搜索禁止长文假审查」已挂规划 **P1-10**，本轮不做。
 - **P0 可靠性切片（规划 P0-5 / P0-1 / P0-4）**：①无 Office 原生工具时兜底
   不再产出 `.docx/.pptx/.xlsx` 路径，强制降为 `.md` 并首行提示；幻灯片/
   PPT/表格纳入文件意图，「带封面的幻灯片」不再误判生图。②ReAct FINAL

@@ -112,6 +112,33 @@ describe("skills learning (enabled)", () => {
     const res = await app.request("/api/skills/proposals/nope/approve", { method: "POST" });
     expect(res.status).toBe(404);
   });
+
+  it("P0-2 F10: unverified completed 不经 selection 结算升权", () => {
+    const rt = agent.skillLearning!;
+    const selectionId = rt.beginSelection(["skill-wire"])!;
+    expect(
+      rt.recordOutcomeForSelection(selectionId, {
+        status: "completed",
+        verified: false,
+        query: "do something",
+      }),
+    ).toBe(true);
+    expect(rt.weightFor("skill-wire")).toBe(0);
+  });
+
+  it("P0-2 F10: verified completed 才升权", () => {
+    const rt = agent.skillLearning!;
+    const selectionId = rt.beginSelection(["skill-ok"])!;
+    expect(
+      rt.recordOutcomeForSelection(selectionId, {
+        status: "completed",
+        verified: true,
+        query: "do something",
+        toolsUsed: ["read_file"],
+      }),
+    ).toBe(true);
+    expect(rt.weightFor("skill-ok")).toBe(1);
+  });
 });
 
 describe("skills learning via OPENINTJ_SKILLS_LEARN env", () => {

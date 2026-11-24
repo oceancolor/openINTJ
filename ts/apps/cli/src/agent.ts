@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -125,6 +126,7 @@ import {
   assembleSkillContext,
   createLlmSkillDistiller,
   resolveSkillWeightHalfLifeSec,
+  verifySkillOutcome,
 } from "@openintj/skills";
 import {
   type SyncApplyReport,
@@ -302,6 +304,8 @@ const buildAgentCore = (
   selfConsistency: ReturnType<typeof resolveSelfConsistency>;
   classifier?: ReinforcingClassifier;
   skillLearning?: SkillLearningRuntime;
+  /** F10：本轮技能 selection 槽位（不暴露到 AssembledAgent 公有面）。 */
+  skillSelectionAls: AsyncLocalStorage<{ selectionId?: string }>;
   dormant?: DormantRuntime;
   ensureClassifier: () => Promise<void>;
   taskPool?: TaskPool;
@@ -439,13 +443,20 @@ const buildAgentCore = (
       })
     : undefined;
 
+  // P0-2 F10：按 selectionId 结算（与 desktop 对齐）；ALS 绑定本轮 run，避免 query 文本串奖。
+  const skillSelectionAls = new AsyncLocalStorage<{ selectionId?: string }>();
+
   const skillContextP: Promise<SkillContext | undefined> | undefined = enableSkills
     ? assembleSkillContext({
         embedder: memory.store.embedder,
         hooks,
-        onSelected: (query, taskType, ids, tools) => {
+        onSelected: (_query, _taskType, ids, tools) => {
           toolHub.setRunAllowlist(tools);
-          skillLearning?.noteSelected(query, taskType, ids);
+          if (skillLearning) {
+            const selectionId = skillLearning.beginSelection(ids);
+            const slot = skillSelectionAls.getStore();
+            if (selectionId && slot) slot.selectionId = selectionId;
+          }
         },
         ...(skillLearning
           ? {
@@ -606,6 +617,7 @@ const buildAgentCore = (
     hybridIndex,
     ...(classifier ? { classifier } : {}),
     ...(skillLearning ? { skillLearning } : {}),
+    skillSelectionAls,
     ...(dormant ? { dormant } : {}),
     tao,
     runTao,
@@ -722,6 +734,8 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => {
         if (invoked) return slashCommandResultToTao(invoked.result);
         return agent.handle.run(query, runOpts);
       }
+      // F10：为本轮 run 建立 selection 槽位（onSelected 写入，收尾按 id 结算）。
+      core.skillSelectionAls.enterWith({});
       await core.hooks.emit("event.PRODUCT_BEHAVIOR", {
         version: PRODUCT_BEHAVIOR_VERSION,
         enabled: core.productBehaviorEnabled,
@@ -921,10 +935,40 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => {
               .filter((n): n is string => Boolean(n)),
           ),
         ];
-        core.skillLearning.recordOutcome(query, cls?.label, result.status, {
-          finalAnswer: result.finalAnswer,
-          toolsUsed,
-        });
+        const toolOutcomes = result.trajectory
+          .map(
+            (e) =>
+              (
+                e as {
+                  state?: {
+                    toolResult?: {
+                      toolName?: string;
+                      businessStatus?: "success" | "failure" | "unknown";
+                      evidenceStatus?: "none" | "observed" | "verified";
+                    };
+                  };
+                }
+              ).state?.toolResult,
+          )
+          .filter((t): t is NonNullable<typeof t> => Boolean(t));
+        const verification = verifySkillOutcome({ status: result.status, toolOutcomes });
+        const selectionId = core.skillSelectionAls.getStore()?.selectionId;
+        if (selectionId) {
+          core.skillLearning.recordOutcomeForSelection(selectionId, {
+            status: result.status,
+            verified: verification.verified,
+            query,
+            ...(cls?.label ? { taskType: cls.label } : {}),
+            finalAnswer: result.finalAnswer,
+            toolsUsed,
+          });
+        } else {
+          // 无 selection（未命中技能）回退旧路径，仅观察/兼容。
+          core.skillLearning.recordOutcome(query, cls?.label, result.status, {
+            finalAnswer: result.finalAnswer,
+            toolsUsed,
+          });
+        }
       }
       finalizeJournalTurn(core.journal, journalCtx, {
         userContent: workQuery,
