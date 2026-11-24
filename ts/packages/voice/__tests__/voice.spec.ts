@@ -42,6 +42,39 @@ describe("voice providers", () => {
     expect(out.text).toBe("转写文本");
   });
 
+  it("P0-4: only sends the Uint8Array subview bytes, not the backing pool", async () => {
+    const pool = new Uint8Array([0xaa, 0xbb, 0x01, 0x02, 0xcc, 0xdd]);
+    const view = pool.subarray(2, 4); // [0x01, 0x02]
+    let captured = Buffer.alloc(0);
+    const local = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        captured = Buffer.concat(chunks);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ text: "ok" }));
+      });
+    });
+    await new Promise<void>((r) => local.listen(0, "127.0.0.1", r));
+    const addr = local.address();
+    const url = `http://127.0.0.1:${typeof addr === "object" && addr !== null ? addr.port : 0}/v1`;
+    try {
+      const p = createHttpSttProvider({ baseUrl: url, apiKey: "k" });
+      await p.transcribe({ audio: view, mimeType: "audio/wav" });
+      // multipart 体中应含子视图字节，不应含池前后哨兵 0xaa/0xbb/0xcc/0xdd 作为文件内容泄漏特征。
+      expect(captured.includes(Buffer.from([0x01, 0x02]))).toBe(true);
+      // 若误传整个 buffer，文件区会夹带 0xaa 0xbb …；slice 后文件区只有 0x01 0x02。
+      const filePart = captured.toString("latin1");
+      const filenameIdx = filePart.indexOf("audio.wav");
+      expect(filenameIdx).toBeGreaterThanOrEqual(0);
+      const afterHeader = captured.subarray(filenameIdx);
+      // 在文件头之后搜索：不应紧跟出现完整 pool 前缀
+      expect(afterHeader.includes(Buffer.from([0xaa, 0xbb, 0x01, 0x02, 0xcc, 0xdd]))).toBe(false);
+    } finally {
+      await new Promise<void>((r) => local.close(() => r()));
+    }
+  });
+
   it("env selection: url wins, mock opt-in, unset undefined", () => {
     expect(sttFromEnv({})).toBeUndefined();
     expect(sttFromEnv({ OPENINTJ_STT: "mock" })?.id).toBe("mock");

@@ -158,6 +158,15 @@ describe("ModelRuntime lifecycle and structured errors", () => {
     expect(message.length).toBeLessThanOrEqual(256);
   });
 
+  it("P0-4: bare sk- tokens are fully redacted (no residual secret)", () => {
+    const message = sanitizeModelRuntimeErrorMessage(
+      "upstream 401 for sk-abcdefghijklmnopqrstuvwxyz012345",
+    );
+    expect(message).toContain("sk- [REDACTED]");
+    expect(message).not.toContain("sk-abcdefghijklmnopqrstuvwxyz012345");
+    expect(message).not.toMatch(/sk-[A-Za-z0-9]{8,}/);
+  });
+
   it("refreshes selected provider health with throttling and emits hooks", async () => {
     const hooks = new HookBus();
     const probes: Array<{ ok: boolean; errorCode?: string }> = [];

@@ -96,16 +96,31 @@ export const createWorkspaceTools = (opts: WorkspaceToolsOpts): WorkspaceTools =
 
   const writeFile: ToolHandler = async (params) => {
     const path = typeof params["path"] === "string" ? params["path"] : "";
-    const content = typeof params["content"] === "string" ? params["content"] : "";
+    let content = typeof params["content"] === "string" ? params["content"] : "";
     if (!path) throw new Error("write_file 需要非空 path 参数");
+    // P0-1：utf8 通道无法产出合法 OOXML；Office 扩展名强制降级为 .md，避免假 .docx。
+    const officeExt = /\.(docx|pptx|xlsx)$/iu;
+    let effectivePath = path;
+    if (officeExt.test(path)) {
+      effectivePath = path.replace(officeExt, ".md");
+      const banner =
+        "> 当前无法生成原生 Office 二进制，已降级为 Markdown。\n\n";
+      if (!content.startsWith("> 当前无法生成原生 Office")) {
+        content = `${banner}${content}`;
+      }
+    }
     const bytes = Buffer.byteLength(content, "utf8");
     if (bytes > maxWriteBytes) {
       throw new Error(`写入内容过大：${bytes} 字节 > 上限 ${maxWriteBytes}`);
     }
-    const abs = resolveInRoot(root, path);
+    const abs = resolveInRoot(root, effectivePath);
     await fs.mkdir(dirname(abs), { recursive: true });
     await fs.writeFile(abs, content, "utf8");
-    return { path, bytesWritten: bytes };
+    return {
+      path: effectivePath,
+      bytesWritten: bytes,
+      ...(effectivePath !== path ? { downgradedFrom: path } : {}),
+    };
   };
 
   const executeCommand: ToolHandler = async (params) => {

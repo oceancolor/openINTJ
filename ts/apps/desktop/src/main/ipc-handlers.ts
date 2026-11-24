@@ -812,23 +812,32 @@ export const registerIpcHandlers = (
         { attributes: { "ipc.channel": IPC.CHAT } },
       );
       let finalAnswer = result.finalAnswer;
+      // P0-1 闸门会把「零 write_file 却声称落盘」打成非 completed；桌面宿主兜底仍应
+      // 经治理通道补写（origin=host_fallback），用轨迹中最后一条 thought 作正文，
+      // 避免把「[执行一致性]…」系统提示写进文件。
+      const draftForHostFallback = (): string => {
+        if (!result.finalAnswer.startsWith("[执行一致性]")) return result.finalAnswer;
+        for (let i = result.trajectory.length - 1; i >= 0; i--) {
+          const state = result.trajectory[i]?.state;
+          if (state && state.type === "thought" && state.content.trim()) {
+            return state.content.trim();
+          }
+        }
+        return result.finalAnswer;
+      };
       if (
         selected &&
-        result.status === "completed" &&
         result.inputStructure?.action !== "clarify" &&
+        result.status !== "timeout" &&
         requestsFileArtifact(parsed.data.query) &&
         !hasSuccessfulFileWrite(result.trajectory) &&
         !result.metrics?.imageGenerated &&
         !result.metrics?.imageGenerationFallback
       ) {
-        const artifact = resolveMissingArtifact(
-          parsed.data.query,
-          selected.task.id,
-          result.finalAnswer,
-        );
+        const draft = draftForHostFallback();
+        const artifact = resolveMissingArtifact(parsed.data.query, selected.task.id, draft);
         // RFC-021 F03 (T06): host fallback goes through the governed tool
-        // facade with an explicit origin ? never a silent direct write, and
-        // a failed/cancelled run never earns a "written" claim.
+        // facade with an explicit origin — never a silent direct write.
         const writeResult = await agent.toolHub.call(
           "write_file",
           { path: artifact.path, content: artifact.content },
@@ -842,8 +851,8 @@ export const registerIpcHandlers = (
         );
         finalAnswer =
           writeResult.businessStatus !== "failure" && writeResult.success
-            ? result.finalAnswer + "\n\n已写入工作区：`" + artifact.path + "`"
-            : result.finalAnswer + "（自动补写文件失败：" + (writeResult.error ?? writeResult.businessStatus ?? "unknown") + "）";
+            ? `${draft}\n\n已写入工作区：\`${artifact.path}\``
+            : `${draft}（自动补写文件失败：${writeResult.error ?? writeResult.businessStatus ?? "unknown"}）`;
       }
       if (selected && deps.workbench && journalCtx) {
         turnCoordinator.commitTurn(deps.workbench.journal(), journalCtx, {

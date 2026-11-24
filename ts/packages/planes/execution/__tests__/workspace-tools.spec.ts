@@ -73,6 +73,21 @@ describe("createWorkspaceTools - fs", () => {
     const tools = createWorkspaceTools({ root: makeRoot(), maxWriteBytes: 4 });
     await expect(tools.writeFile({ path: "x.txt", content: "0123456789" })).rejects.toThrow(/过大/);
   });
+
+  it("P0-1: Office 扩展名强制降级为 .md，不落假 OOXML", async () => {
+    const root = makeRoot();
+    const tools = createWorkspaceTools({ root });
+    const w = (await tools.writeFile({
+      path: "quarterly.docx",
+      content: "# 季度报告\n正文",
+    })) as { path: string; bytesWritten: number; downgradedFrom?: string };
+    expect(w.path).toBe("quarterly.md");
+    expect(w.downgradedFrom).toBe("quarterly.docx");
+    const onDisk = await fsReadFile(join(root, "quarterly.md"), "utf8");
+    expect(onDisk.startsWith("> 当前无法生成原生 Office")).toBe(true);
+    expect(onDisk).toContain("# 季度报告");
+    await expect(fsReadFile(join(root, "quarterly.docx"), "utf8")).rejects.toThrow();
+  });
 });
 
 describe("createWorkspaceTools - executeCommand", () => {

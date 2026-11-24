@@ -351,6 +351,58 @@ describe("TaoLoop.run (single iteration)", () => {
     expect(capturedSystem).toContain("FALLBACK_PROMPT");
   });
 
+  it("P0-4: hook rewrites on afterAct / afterObserve / beforeAct are consumed", async () => {
+    const hooks = new HookBus({ logger: silent });
+    hooks.on("tao.beforeAct", (ctx) => {
+      ctx.replace({
+        ...ctx.payload,
+        availableTools: [],
+      });
+    });
+    hooks.on("tao.afterAct", (ctx) => {
+      ctx.replace({
+        ...ctx.payload,
+        reactOutput: { ...ctx.payload.reactOutput, finalAnswer: "HOOK_REWRITTEN_ANSWER" },
+      });
+    });
+    hooks.on("tao.afterObserve", (ctx) => {
+      ctx.replace({ ...ctx.payload, needsContinue: false });
+    });
+    let reactSawTools = -1;
+    const tao = new TaoLoop({
+      config: { ...DEFAULT_TAO_CONFIG, maxTaoIterations: 3 },
+      hooks,
+      react: {
+        run: async (input) => {
+          reactSawTools = input.availableTools.length;
+          return {
+            finalAnswer: "from-react",
+            trajectory: [],
+            iterations: 1,
+            status: "ok" as const,
+            totalTokensSpent: 0,
+          };
+        },
+        runSingle: async (input) => {
+          reactSawTools = input.availableTools.length;
+          return {
+            finalAnswer: "from-react",
+            trajectory: [],
+            iterations: 1,
+            status: "ok" as const,
+            totalTokensSpent: 0,
+          };
+        },
+      } as unknown as ReactStateMachine,
+      availableTools: () => tools,
+      needsContinue: () => true,
+    });
+    const r = await tao.run("rewrite me");
+    expect(reactSawTools).toBe(0);
+    expect(r.finalAnswer).toBe("HOOK_REWRITTEN_ANSWER");
+    expect(r.iterations).toBe(1);
+  });
+
   it("emits all 6 tao.* hooks in order", async () => {
     const hooks = new HookBus({ logger: silent });
     const events: string[] = [];

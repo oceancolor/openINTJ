@@ -678,6 +678,75 @@ describe("RFC-012 overflow recovery", () => {
     expect(always.calls.length).toBe(2); // original + exactly one retry
   });
 
+  it("P0-1: blocks FINAL when file write was claimed but write_file never ran (7-1 shape)", async () => {
+    const writeTools: ToolDescriptor[] = [
+      {
+        name: "write_file",
+        description: "write",
+        inputSchema: { path: "string", content: "string" },
+        outputSchema: {},
+        permissions: ["filesystem.write"],
+        timeoutS: 30,
+        idempotent: false,
+        errorSemantics: "fail_fast",
+      },
+    ];
+    const llm = makeLlm([
+      "Thought: 已分别写入\nFINAL: 已分别写入 a.md 和 b.md",
+      "Thought: 已分别写入\nFINAL: 已分别写入 a.md 和 b.md",
+      "Thought: 已分别写入\nFINAL: 已分别写入 a.md 和 b.md",
+    ]);
+    const sm = new ReactStateMachine({
+      config: { ...baseConfig, maxIterations: 3 },
+      hooks: new HookBus({ logger: silentLogger }),
+      llm,
+      toolRunner: makeToolRunner({}),
+    });
+    const out = await sm.run({
+      messages: [{ role: "user", content: "请分别写入 a.md 和 b.md" }],
+      availableTools: writeTools,
+      taoIteration: 1,
+      systemPrompt: "",
+    });
+    expect(out.status).not.toBe("ok");
+    expect(out.finalAnswer).toContain("执行一致性");
+    expect(out.trajectory.every((e) => e.state.type !== "final")).toBe(true);
+  });
+
+  it("P0-1: allows FINAL after a successful write_file", async () => {
+    const writeTools: ToolDescriptor[] = [
+      {
+        name: "write_file",
+        description: "write",
+        inputSchema: { path: "string", content: "string" },
+        outputSchema: {},
+        permissions: ["filesystem.write"],
+        timeoutS: 30,
+        idempotent: false,
+        errorSemantics: "fail_fast",
+      },
+    ];
+    const sm = new ReactStateMachine({
+      config: { ...baseConfig, maxIterations: 4 },
+      hooks: new HookBus({ logger: silentLogger }),
+      llm: makeLlm([
+        `Thought: write\nAction: write_file\nAction-Input: {"path":"a.md","content":"hi"}`,
+        "Thought: done\nFINAL: 已写入 a.md",
+      ]),
+      toolRunner: makeToolRunner({
+        write_file: () => ({ path: "a.md", bytesWritten: 2 }),
+      }),
+    });
+    const out = await sm.run({
+      messages: [{ role: "user", content: "请写入 a.md" }],
+      availableTools: writeTools,
+      taoIteration: 1,
+      systemPrompt: "",
+    });
+    expect(out.status).toBe("ok");
+    expect(out.finalAnswer).toContain("a.md");
+  });
+
   it("does not invoke the callback for non-overflow errors", async () => {
     const llm: LlmClient = {
       async chat() {

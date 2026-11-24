@@ -19,17 +19,31 @@ export interface ModelRuntimeErrorInit {
   status?: ModelRuntimeStatus;
 }
 
-const SECRET_PATTERNS = [
-  /\bBearer\s+[^\s,;]+/gi,
-  /\b(?:api[_-]?key|authorization|token)\s*[:=]\s*[^\s,;]+/gi,
-  /\b(?:ghp_|github_pat_|sk-)[A-Za-z0-9_-]+\b/g,
+const SECRET_PATTERNS: Array<{ pattern: RegExp; replace: (match: string) => string }> = [
+  {
+    pattern: /\bBearer\s+[^\s,;]+/gi,
+    replace: () => "Bearer [REDACTED]",
+  },
+  {
+    pattern: /\b(?:api[_-]?key|authorization|token)\s*[:=]\s*[^\s,;]+/gi,
+    replace: (match) => `${match.split(/[:=\s]/, 1)[0] ?? "token"} [REDACTED]`,
+  },
+  {
+    // bare sk-/ghp_ 必须整段抹掉，不能用 split 保留原文（此前 sk-xxx [REDACTED] 仍泄漏密钥）。
+    pattern: /\b(?:ghp_|github_pat_|sk-)[A-Za-z0-9_-]+\b/g,
+    replace: (match) => {
+      if (match.startsWith("github_pat_")) return "github_pat_ [REDACTED]";
+      if (match.startsWith("ghp_")) return "ghp_ [REDACTED]";
+      return "sk- [REDACTED]";
+    },
+  },
 ];
 
 /** Error text safe for status, hooks, logs, and telemetry attributes. */
 export const sanitizeModelRuntimeErrorMessage = (value: unknown, maxLength = 256): string => {
   let message = value instanceof Error ? value.message : String(value);
-  for (const pattern of SECRET_PATTERNS) {
-    message = message.replace(pattern, (match) => `${match.split(/[:=\s]/, 1)[0]} [REDACTED]`);
+  for (const { pattern, replace } of SECRET_PATTERNS) {
+    message = message.replace(pattern, replace);
   }
   return message.length > maxLength ? `${message.slice(0, maxLength - 1)}…` : message;
 };

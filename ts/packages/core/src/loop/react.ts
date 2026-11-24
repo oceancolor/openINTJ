@@ -142,6 +142,49 @@ const extractPseudoToolCall = (
   return undefined;
 };
 
+/** P0-1：用户话是否要求落盘文件（与 desktop artifact-fallback 同口径，core 自洽无反向依赖）。 */
+export const queryRequestsFileWrite = (query: string): boolean => {
+  const q = query.trim();
+  if (!q) return false;
+  if (
+    /封面|海报|配图|插图|\.svg\b|\.png\b|\.jpe?g\b|\.webp\b|幻灯片|演示文稿|PPT|pptx|表格|\.xlsx\b|excel/iu.test(
+      q,
+    )
+  ) {
+    return true;
+  }
+  if (
+    /(?:创建|生成|写入|保存|输出|落盘|分别写入|写到|create|generate|write|save).{0,48}(?:文件|文档|代码|脚本|file|document|script|[A-Za-z0-9_.-]+\.[A-Za-z0-9]+)/iu.test(
+      q,
+    )
+  ) {
+    return true;
+  }
+  return /\.(?:md|txt|docx|pptx|xlsx|csv|json|html|ts|js|py)\b/iu.test(q);
+};
+
+/** 轨迹中是否已有成功的 write_file。 */
+export const trajectoryHasSuccessfulWrite = (trajectory: readonly TrajectoryEntry[]): boolean =>
+  trajectory.some(
+    (entry) =>
+      entry.state.type === "observation" &&
+      entry.state.toolResult.toolName === "write_file" &&
+      entry.state.toolResult.success,
+  );
+
+const lastUserQuery = (messages: readonly ChatMessage[]): string => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m?.role === "user" && typeof m.content === "string") return m.content;
+  }
+  return "";
+};
+
+const EXECUTION_CONSISTENCY_CHECK =
+  "[SystemCheck] 本任务需要落盘文件，但本轮尚未成功调用 write_file。" +
+  "请先用 Action/Action-Input 调用 write_file 实际写入；" +
+  "若无法写入，FINAL 中必须明确说明未落盘、不要声称文件已生成。";
+
 const parseLlmThought = (text: string): ParsedThought => {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -423,9 +466,22 @@ export class ReactStateMachine {
       conversation.push({ role: "assistant", content: llmText });
 
       // ============================================================
-      // 终止判定（explicitFinal）
+      // 终止判定（explicitFinal）+ P0-1 执行一致性闸门
       // ============================================================
       if (parsed.isFinal) {
+        const query = lastUserQuery(input.messages);
+        if (
+          queryRequestsFileWrite(query) &&
+          !trajectoryHasSuccessfulWrite(trajectory)
+        ) {
+          // 需落盘却 0 次成功 write_file：禁止 ok，回灌 SystemCheck 要求重跑。
+          conversation.push({
+            role: "tool",
+            name: "system_check",
+            content: EXECUTION_CONSISTENCY_CHECK,
+          });
+          continue;
+        }
         finalAnswer = parsed.finalAnswer ?? parsed.thought;
         trajectory.push({
           timestamp: Date.now() / 1000,
@@ -627,15 +683,24 @@ export class ReactStateMachine {
 
     if (iter >= this._config.maxIterations && !finalAnswer) {
       status = "max_iter";
-      const bestThought = trajectory
-        .filter(
-          (entry): entry is TrajectoryEntry & { state: Extract<ReactState, { type: "thought" }> } =>
-            entry.state.type === "thought",
-        )
-        .map((entry) => entry.state.content.trim())
-        .filter(Boolean)
-        .sort((a, b) => b.length - a.length)[0];
-      finalAnswer = bestThought ?? "[达到最大 ReAct 迭代次数，未能收敛]";
+      const query = lastUserQuery(input.messages);
+      if (queryRequestsFileWrite(query) && !trajectoryHasSuccessfulWrite(trajectory)) {
+        // P0-1：一致性闸门耗尽迭代时，勿把「已写入」幻觉当答案交付。
+        finalAnswer =
+          "[执行一致性] 任务需要落盘文件，但本轮未成功调用 write_file，已中止。请重试并确保实际写入。";
+      } else {
+        const bestThought = trajectory
+          .filter(
+            (
+              entry,
+            ): entry is TrajectoryEntry & { state: Extract<ReactState, { type: "thought" }> } =>
+              entry.state.type === "thought",
+          )
+          .map((entry) => entry.state.content.trim())
+          .filter(Boolean)
+          .sort((a, b) => b.length - a.length)[0];
+        finalAnswer = bestThought ?? "[达到最大 ReAct 迭代次数，未能收敛]";
+      }
     }
 
     const output: ReactOutput = {

@@ -28,9 +28,10 @@ export function createHttpSttProvider(opts: HttpSttOptions): SpeechToTextProvide
     async transcribe(input: SttTranscribeInput) {
       const ext = EXT_BY_MIME[input.mimeType] ?? "bin";
       const form = new FormData();
+      // 只用 Uint8Array 子视图自身的字节，勿传 backing ArrayBuffer（会夹带池外内存）。
       form.append(
         "file",
-        new Blob([input.audio.buffer as ArrayBuffer], { type: input.mimeType }),
+        new Blob([input.audio.slice()], { type: input.mimeType }),
         `audio.${ext}`,
       );
       form.append("model", opts.model ?? "whisper-1");

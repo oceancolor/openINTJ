@@ -302,11 +302,13 @@ export class TaoLoop {
           planId: randomUUID(),
           totalSteps: 0,
         };
-        await this._hooks.emit(
+        // P0-4：消费 emitOutcome 返回值，让钩子改写真正进入后续阶段（RFC-002）。
+        const afterThink = await this._hooks.emitOutcome(
           "tao.afterThink",
           { plan: planLike, iteration: ctx.iteration },
           taoOpts,
         );
+        const effectivePlan = afterThink.payload.plan ?? planLike;
 
         // ----- Act -----
         // 先跑 contextProvider（技能选择 / 记忆注入），再 list 工具，
@@ -330,16 +332,17 @@ export class TaoLoop {
             baseSystem = this.systemPrompt;
           }
         }
-        const tools = this.availableTools();
-        await this._hooks.emit(
+        const listedTools = this.availableTools();
+        const beforeAct = await this._hooks.emitOutcome(
           "tao.beforeAct",
           {
-            plan: planLike,
-            availableTools: tools,
+            plan: effectivePlan,
+            availableTools: listedTools,
             iteration: ctx.iteration,
           },
           taoOpts,
         );
+        const tools = beforeAct.payload.availableTools ?? listedTools;
         const finalSystemPrompt =
           baseSystem.length > 0 ? `${baseSystem}\n\n${built.systemPrompt}` : built.systemPrompt;
 
@@ -373,7 +376,7 @@ export class TaoLoop {
         totalReactSteps += react.iterations;
         totalTokensSpent += react.totalTokensSpent;
 
-        await this._hooks.emit(
+        const afterAct = await this._hooks.emitOutcome(
           "tao.afterAct",
           {
             reactOutput: {
@@ -385,6 +388,11 @@ export class TaoLoop {
           },
           taoOpts,
         );
+        const reactOutput = afterAct.payload.reactOutput ?? {
+          finalAnswer: react.finalAnswer,
+          status: react.status,
+          iterations: react.iterations,
+        };
 
         // ----- Observe -----
         await this._hooks.emit(
@@ -396,27 +404,28 @@ export class TaoLoop {
           taoOpts,
         );
 
-        // ReAct 失败模式直接传播；正常模式以 reactOutput.finalAnswer 作为本轮答案
-        if (react.status === "fail_fast") {
+        // ReAct 失败模式直接传播；钩子可改写 finalAnswer / status。
+        if (reactOutput.status === "fail_fast") {
           status = "failed";
           failureReason = react.failedTool
             ? `tool ${react.failedTool.tool} failed: ${react.failedTool.error}`
             : "react fail_fast";
-          ctx.finalAnswer = react.finalAnswer;
+          ctx.finalAnswer = reactOutput.finalAnswer;
         } else {
-          ctx.finalAnswer = react.finalAnswer;
+          ctx.finalAnswer = reactOutput.finalAnswer;
         }
 
         // 把本轮 user 与 assistant 入会话历史，供下一轮使用
         history.push({ role: "user", content: query });
-        history.push({ role: "assistant", content: react.finalAnswer });
+        history.push({ role: "assistant", content: reactOutput.finalAnswer });
 
-        const continues = this.needsContinueFn(ctx);
-        await this._hooks.emit(
+        const continuesDefault = this.needsContinueFn(ctx);
+        const afterObserve = await this._hooks.emitOutcome(
           "tao.afterObserve",
-          { needsContinue: continues, iteration: ctx.iteration },
+          { needsContinue: continuesDefault, iteration: ctx.iteration },
           taoOpts,
         );
+        const continues = afterObserve.payload.needsContinue ?? continuesDefault;
 
         if (status === "failed") break;
         if (!continues) break;
