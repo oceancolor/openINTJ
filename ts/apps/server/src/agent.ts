@@ -72,9 +72,14 @@ import { ControlPlane } from "@openintj/plane-control";
 import {
   Executor,
   ToolHub,
+  createDevTools,
+  createOfficeTools,
   createWebSearchTool,
   createWorkspaceTools,
+  fulfillImageGenerationTask,
+  requestsImageGeneration,
   resolveWebSearchConfig,
+  taskIdFromContextTags,
 } from "@openintj/plane-execution";
 import {
   type ApprovalBroker,
@@ -94,10 +99,18 @@ import {
   MemoryPlane,
   type PersistenceMode,
   type PersistentMemoryStore,
+  ShadowWriterPipeline,
+  buildCanonicalValidationContext,
+  buildScopedRecordSnapshots,
+  createFixtureWriter,
+  createLlmWriter,
   createPersistentMemoryStore,
   fragmentsToRanked,
+  hashEvidenceText,
   isFragmentVisibleToScope,
   type MemoryScope,
+  type WriterInput,
+  scopeFromContextTags,
 } from "@openintj/plane-memory";
 import { InMemoryProfileStore, JsonProfileStore, ProfileService } from "@openintj/profile";
 import {
@@ -427,6 +440,8 @@ export interface ServerRunOptions {
   llm?: LlmClient;
   journal?: JournalTurnContext;
   skipSlashCommand?: boolean;
+  /** 可选上下文标签（如 task:xxx），供生图落盘路径等使用。 */
+  contextTags?: readonly string[];
 }
 
 const parseServerLlmProvider = (opts: ServerAgentOpts): LlmProviderId => {
@@ -661,10 +676,80 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
     embedder: runtime.embed.embedder,
     storeConfig: { embeddingDim },
     hooks,
+    // P1-8：与 desktop 对齐，real 模式启用 canonical 权威源。
+    ...(persistence.mode === "real" ? { useCanonical: true } : {}),
+    embeddingSpaceInfo: {
+      provider: runtime.embeddingFingerprint.provider,
+      model: runtime.embeddingFingerprint.model,
+    },
   });
 
   // G2/F07：构造注入同一 store 实例，取代旧的 defineProperty 反射替换。
   const memory = new MemoryPlane({ hooks, store: persistentStore });
+
+  // P1-8：影子 writer（opt-in via OPENINTJ_MEMORY_WRITER，默认 fixture）。
+  const shadowWriterMode = process.env["OPENINTJ_MEMORY_WRITER"] ?? "fixture";
+  const shadowPolicyVersion = `g5-${shadowWriterMode}-v1`;
+  const shadowPipeline =
+    persistentStore.canonical && shadowWriterMode !== "off"
+      ? new ShadowWriterPipeline({
+          repository: persistentStore.canonical,
+          writer:
+            shadowWriterMode === "llm"
+              ? createLlmWriter({
+                  writerId: "llm:server",
+                  generate: (prompt) => llm.chat([{ role: "user", content: prompt }]),
+                })
+              : createFixtureWriter(),
+          buildContext: (input, job) =>
+            buildCanonicalValidationContext(persistentStore.canonical!, input, job.scope ?? {}),
+        })
+      : undefined;
+  const enqueueShadowTurn = (userText: string, tags: readonly string[]): void => {
+    if (!shadowPipeline || !persistentStore.canonical) return;
+    void (async () => {
+      try {
+        const commitId = `turn:${hashEvidenceText(`${userText}\n${tags.join(",")}`).slice(0, 24)}`;
+        const scope = scopeFromContextTags(tags);
+        const scopedCurrentRecords = await buildScopedRecordSnapshots(
+          persistentStore.canonical!,
+          scope,
+        );
+        const input: WriterInput = {
+          committedTurnRef: commitId,
+          evidence: [
+            {
+              evidenceId: `ev:${commitId}`,
+              journalId: "server",
+              commitId,
+              turnId: commitId,
+              contentHash: hashEvidenceText(userText),
+              text: userText,
+            },
+          ],
+          scopedCurrentRecords,
+          allowedKinds: ["fact", "preference"],
+          policyVersion: shadowPolicyVersion,
+          inputHash: hashEvidenceText(userText),
+          memoryEpoch: await persistentStore.canonical!.memoryEpoch(),
+          extractionRevision: 1,
+        };
+        await shadowPipeline.enqueue({
+          key: {
+            sourceJournalId: "server",
+            sourceCommitId: commitId,
+            consumer: "memory-writer",
+            policyVersion: shadowPolicyVersion,
+            extractionRevision: 1,
+          },
+          input,
+          scope,
+        });
+      } catch (error) {
+        console.warn("[OpenINTJ server] shadow writer enqueue failed; continuing", error);
+      }
+    })();
+  };
 
   // session 级共享 HybridRetriever：开局 seed 现有片段，之后订阅 change-feed 增量维护。
   const hybridIndex = new MemoryHybridIndex();
@@ -720,6 +805,8 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
     executeCommand: wsTools.executeCommand,
     search: searchHandler,
   });
+  toolHub.registerOfficeTools(createOfficeTools({ root: wsConfig.root }));
+  toolHub.registerDevTools(createDevTools({ root: wsConfig.root }));
   if (!isCommandExecutionAvailable(wsConfig)) {
     toolHub.unregister("execute_command");
   }
@@ -1059,6 +1146,7 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
     },
     ...(otel ? { otel } : {}),
     async run(query: string, runOpts: ServerRunOptions = {}) {
+      governance.beginRun();
       if (!runOpts.skipSlashCommand) {
         const invoked = await invokeSlashCommand(commands, query, {
           journal,
@@ -1086,6 +1174,35 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
         enabled: productBehaviorEnabled,
       });
       if (dormant) dormant.record(query, "user", { stage: "run.input" });
+      // P1-8：平台无关生图短路（与 desktop 对齐）。
+      if (requestsImageGeneration(query)) {
+        const image = await fulfillImageGenerationTask({
+          query,
+          workspaceRoot: wsConfig.root,
+          taskId: taskIdFromContextTags(runOpts.contextTags),
+          llm: runOpts.llm ?? llm,
+          ...(runOpts.signal ? { signal: runOpts.signal } : {}),
+        });
+        const imageResult = {
+          traceId: randomUUID(),
+          status: "completed" as const,
+          finalAnswer: image.finalAnswer,
+          iterations: 0,
+          reactTotalSteps: 0,
+          totalTokensSpent: 0,
+          durationMs: 0,
+          trajectory: [
+            {
+              timestamp: Date.now() / 1000,
+              state: { type: "final" as const, answer: image.finalAnswer },
+              durationMs: 0,
+            },
+          ],
+          metrics: image.fallback ? { imageGenerationFallback: 1 } : { imageGenerated: 1 },
+        };
+        enqueueShadowTurn(query, [...(runOpts.contextTags ?? [])]);
+        return imageResult as never;
+      }
       const prelude = await prepareRunPrelude(
         {
           hooks,
@@ -1261,6 +1378,7 @@ export const assembleServerAgent = async (opts: ServerAgentOpts = {}): Promise<S
       const labelTags = cls ? [cls.label] : [];
       await memory.recordUserInputAsync(query, labelTags);
       await memory.recordAssistantOutputAsync(result.finalAnswer, labelTags);
+      enqueueShadowTurn(query, labelTags);
       if (classifier && cls) {
         await classifier.reinforce(executionQuery, cls.label, {
           signal: outcomeSignal(result.status),

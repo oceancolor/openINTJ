@@ -817,7 +817,13 @@ export class ReactStateMachine {
       const out = typeof r.output === "string" ? r.output : JSON.stringify(r.output, null, 2);
       return `[Observation] ${r.toolName} 成功:\n${out}`;
     }
-    return `[Observation] ${r.toolName} 失败: ${r.error ?? "unknown"}`;
+    // P1-5：业务失败（如 exitCode≠0）仍要回灌 stdout/stderr，否则写→跑→错→改闭环断裂。
+    const err = r.error ?? "unknown";
+    if (r.output !== undefined && r.output !== null) {
+      const out = typeof r.output === "string" ? r.output : JSON.stringify(r.output, null, 2);
+      return `[Observation] ${r.toolName} 失败: ${err}\n${out}`;
+    }
+    return `[Observation] ${r.toolName} 失败: ${err}`;
   }
 
   private truncateObservation(text: string): string {

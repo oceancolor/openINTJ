@@ -6,6 +6,8 @@ export interface TaskGraphNode {
   deps: readonly string[];
   action: string;
   description: string;
+  /** P1-4：透传 PlanStep.params，供 ToolHub.call(action, params)。 */
+  params?: Record<string, unknown>;
   /** Overrides the pool watchdog for this node. */
   timeoutMs?: number;
 }
@@ -31,5 +33,6 @@ export const planGraphToTaskGraph = (plan: PlanGraph): TaskGraph => ({
     deps: [...s.dependencies],
     action: s.action,
     description: s.description,
+    ...(s.params && Object.keys(s.params).length > 0 ? { params: { ...s.params } } : {}),
   })),
 });

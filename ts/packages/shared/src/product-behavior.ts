@@ -377,6 +377,28 @@ const buildRepairInstruction = (query: string, answer: string, issues: string[])
 };
 
 /**
+ * P1-10：识别「审查/评测某站/线上页面」类意图（非本地代码 review）。
+ */
+export const isSiteAuditQuery = (query: string): boolean => {
+  if (
+    /(?:审查|评测|审计|体检|巡检).{0,24}(?:网站|站点|页面|线上|官网|webpage|website|site|url|http)/iu.test(
+      query,
+    )
+  ) {
+    return true;
+  }
+  if (
+    /(?:网站|站点|页面|线上|官网|webpage|website).{0,24}(?:审查|评测|审计|体检|巡检)/iu.test(query)
+  ) {
+    return true;
+  }
+  return (
+    /(?:https?:\/\/|www\.)\S+/iu.test(query) &&
+    /(?:审查|评测|审计|查证|核实|inspect|audit|review)/iu.test(query)
+  );
+};
+
+/**
  * RFC-006 is an executable contract, not prompt-only branding. Deterministic,
  * unambiguous operations are completed locally; open-ended draft defects get
  * one bounded model revision.
@@ -399,6 +421,20 @@ export const enforceProductBehaviorAnswer = async (
         "当前未获得带可核验来源的真实搜索结果，因此无法可靠确认该时效性事实；请配置真实搜索提供方后重试。",
       revised: false,
       guards: [`search-evidence:${opts.searchEvidence}`],
+    };
+  }
+
+  // P1-10：站点/线上页面审查类任务，无可靠搜索证据时禁止交付长文假完成品。
+  if (
+    opts.searchEvidence !== undefined &&
+    opts.searchEvidence !== "reliable" &&
+    isSiteAuditQuery(opts.query)
+  ) {
+    return {
+      answer:
+        "当前未配置可用搜索或本轮无成功检索证据，无法对线上页面做可核验审查。请配置搜索提供方后重试，或明确改为仅基于通用标准的离线清单（不会生成假装已查证的长报告）。",
+      revised: false,
+      guards: [`site-audit-no-search:${opts.searchEvidence}`],
     };
   }
 

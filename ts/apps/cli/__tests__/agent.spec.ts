@@ -612,6 +612,13 @@ describe("assembleAgent E2E (mock LLM)", () => {
     expect(enabled.execution.toolHub.list().map((t) => t.name)).toContain("execute_command");
   });
 
+  it("P1-3: CLI registers create_docx/pptx/xlsx", () => {
+    const agent = assembleAgent({ llmProvider: "mock" });
+    expect(agent.execution.toolHub.has("create_docx")).toBe(true);
+    expect(agent.execution.toolHub.has("create_pptx")).toBe(true);
+    expect(agent.execution.toolHub.has("create_xlsx")).toBe(true);
+  });
+
   it("governance + memory + execution wired into hooks", async () => {
     const agent = assembleAgent({ llmProvider: "mock" });
     let memHits = 0;

@@ -408,7 +408,8 @@ export class ToolHub {
     this.register(
       ToolDescriptorSchema.parse({
         name: "read_file",
-        description: "读取文件内容",
+        description:
+          "读取文件内容。文本返回 content；ZIP/OOXML 等二进制返回 contentBase64（encoding=base64）。",
         inputSchema: { path: "string" },
         permissions: ["filesystem.read"],
         idempotent: true,
@@ -420,8 +421,8 @@ export class ToolHub {
       ToolDescriptorSchema.parse({
         name: "write_file",
         description:
-          "写入工作区文件。Markdown、代码、SVG 封面/海报都用这个工具落盘；不要调用 python/PIL 生成图片。",
-        inputSchema: { path: "string", content: "string" },
+          "写入工作区文件。content（utf8 文本）与 contentBase64（二进制）二选一；Markdown、代码、SVG 用 content；原生二进制用 contentBase64。不要调用 python/PIL 生成图片。",
+        inputSchema: { path: "string", content: "string", contentBase64: "string" },
         permissions: ["filesystem.write"],
         idempotent: false,
         errorSemantics: "fail_fast",
@@ -451,6 +452,108 @@ export class ToolHub {
         errorSemantics: "retry",
       }),
       handlers?.search,
+    );
+  }
+
+  /** P1-5：注册写→跑→错→改闭环工具（可选 handler）。 */
+  registerDevTools(handlers?: {
+    runTests?: ToolHandler;
+    typecheck?: ToolHandler;
+    httpRequest?: ToolHandler;
+    startServer?: ToolHandler;
+  }): void {
+    this.register(
+      ToolDescriptorSchema.parse({
+        name: "run_tests",
+        description: "在工作区运行 vitest（无 shell 链式）。可选 filter 路径/文件名。",
+        inputSchema: { filter: "string" },
+        permissions: ["system.execute"],
+        idempotent: false,
+        timeoutS: 180,
+        errorSemantics: "fail_fast",
+      }),
+      handlers?.runTests,
+    );
+    this.register(
+      ToolDescriptorSchema.parse({
+        name: "typecheck",
+        description: "在工作区运行 tsc --noEmit（无 shell 链式）。可选 project 路径。",
+        inputSchema: { project: "string" },
+        permissions: ["system.execute"],
+        idempotent: true,
+        timeoutS: 180,
+        errorSemantics: "fail_fast",
+      }),
+      handlers?.typecheck,
+    );
+    this.register(
+      ToolDescriptorSchema.parse({
+        name: "http_request",
+        description: "发起 http/https 请求（探活/读响应）。参数：url、method?、headers?、body?。",
+        inputSchema: { url: "string", method: "string", body: "string" },
+        permissions: ["network.read"],
+        idempotent: true,
+        timeoutS: 60,
+        errorSemantics: "retry",
+      }),
+      handlers?.httpRequest,
+    );
+    this.register(
+      ToolDescriptorSchema.parse({
+        name: "start_server",
+        description:
+          "后台启动本地开发进程（argv，无 shell）。command 首 token 限 node/npx/npm/pnpm/yarn/python。",
+        inputSchema: { command: "string" },
+        permissions: ["system.execute"],
+        idempotent: false,
+        timeoutS: 30,
+        errorSemantics: "fail_fast",
+      }),
+      handlers?.startServer,
+    );
+  }
+
+  /** P1-2/P1-3：注册原生 Office 生成工具（可选 handler，缺省仅登记描述）。 */
+  registerOfficeTools(handlers?: {
+    createDocx?: ToolHandler;
+    createPptx?: ToolHandler;
+    createXlsx?: ToolHandler;
+  }): void {
+    this.register(
+      ToolDescriptorSchema.parse({
+        name: "create_docx",
+        description:
+          "生成原生 Word（.docx OOXML）。参数：path、title?、body（字符串或段落数组）。不要用 write_file 写假 .docx。",
+        inputSchema: { path: "string", title: "string", body: "string" },
+        permissions: ["filesystem.write"],
+        idempotent: false,
+        errorSemantics: "fail_fast",
+      }),
+      handlers?.createDocx,
+    );
+    this.register(
+      ToolDescriptorSchema.parse({
+        name: "create_pptx",
+        description:
+          "生成原生 PowerPoint（.pptx OOXML）。参数：path、slides:[{title,bullets?}]。不要用 write_file 写假 .pptx。",
+        inputSchema: { path: "string", slides: "string" },
+        permissions: ["filesystem.write"],
+        idempotent: false,
+        errorSemantics: "fail_fast",
+      }),
+      handlers?.createPptx,
+    );
+    this.register(
+      ToolDescriptorSchema.parse({
+        name: "create_xlsx",
+        description:
+          "生成原生 Excel（.xlsx OOXML）。参数：path、sheets:[{name,rows}]。单元格可为值或 {formula,result}。不要用 write_file 写假 .xlsx。",
+        inputSchema: { path: "string", sheets: "string" },
+        permissions: ["filesystem.write"],
+        idempotent: false,
+        errorSemantics: "fail_fast",
+      }),
+      handlers?.createXlsx,
     );
   }
 }

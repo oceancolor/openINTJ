@@ -4,4 +4,7 @@ export * from "./state-machine.js";
 export * from "./tool-hub.js";
 export * from "./executor.js";
 export * from "./workspace-tools.js";
+export * from "./office-tools.js";
+export * from "./dev-tools.js";
+export * from "./image-generation.js";
 export * from "./web-search-tool.js";

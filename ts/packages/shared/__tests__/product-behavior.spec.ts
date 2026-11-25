@@ -150,6 +150,33 @@ describe("Product Behavior contract", () => {
     });
   });
 
+  it("P1-10: 无搜索时禁止站点审查长文假完成", async () => {
+    const longFake =
+      "# tcamp.qq.com 审查报告\n\n".repeat(40) +
+      "查证状态：联网检索工具未配置……【待核验】\n通用基线如下……";
+    await expect(
+      enforceProductBehaviorAnswer({
+        query: "请审查评测 https://tcamp.qq.com 线上页面并给出完整报告",
+        draft: longFake,
+        searchEvidence: "unavailable",
+      }),
+    ).resolves.toMatchObject({
+      answer: expect.stringContaining("无法对线上页面做可核验审查"),
+      guards: ["site-audit-no-search:unavailable"],
+    });
+
+    await expect(
+      enforceProductBehaviorAnswer({
+        query: "请审查评测 https://tcamp.qq.com 线上页面并给出完整报告",
+        draft: longFake,
+        searchEvidence: "reliable",
+      }),
+    ).resolves.toMatchObject({
+      answer: longFake.trim(),
+      revised: false,
+    });
+  });
+
   it("answers direct recall questions only from prior user memories", () => {
     const memories = [
       {

@@ -61,4 +61,25 @@ export class ControlPlane {
       payload: params,
     });
   }
+
+  /**
+   * P1-4：把 PlanStep 接到 ToolHub（经 makeExecuteCommand / makeToolCommand）。
+   * 抽象 action（无 hub 工具）返回 null，由调用方回退到 prompt 路径。
+   */
+  async dispatchPlanStep(
+    step: PlanStep,
+    callTool: (name: string, params: Record<string, unknown>) => Promise<unknown>,
+  ): Promise<{ command: Command; result: unknown } | null> {
+    const executeCmd = this.makeExecuteCommand(step);
+    void executeCmd; // 保留 EXECUTE 命令构造，供审计/编排层消费
+    if (!step.action || step.action === "respond" || step.action === "think" || step.action === "act") {
+      return null;
+    }
+    // 仅当 action 看起来像工具名（含下划线或常见内置）时派发
+    const toolish = /^(?:[a-z][a-z0-9_]*)$/i.test(step.action);
+    if (!toolish) return null;
+    const toolCmd = this.makeToolCommand(step.action, step.params ?? {});
+    const result = await callTool(step.action, step.params ?? {});
+    return { command: toolCmd, result };
+  }
 }

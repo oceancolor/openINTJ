@@ -76,6 +76,8 @@ import {
   Executor,
   ToolHub,
   type WorkspaceTools,
+  createDevTools,
+  createOfficeTools,
   createWebSearchTool,
   createWorkspaceTools,
   resolveWebSearchConfig,
@@ -919,6 +921,8 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
     executeCommand: wsTools.executeCommand,
     search: searchHandler,
   });
+  toolHub.registerOfficeTools(createOfficeTools({ root: wsConfig.root }));
+  toolHub.registerDevTools(createDevTools({ root: wsConfig.root }));
   if (!isCommandExecutionAvailable(wsConfig)) {
     toolHub.unregister("execute_command");
   }
@@ -1323,6 +1327,7 @@ export const assembleDesktopAgent = async (opts: DesktopAgentOpts = {}): Promise
       return { applied: skillLearning.recordFeedbackForSelection(selectionId, sentiment) };
     },
     async run(query: string, runOpts: DesktopRunOptions = {}) {
+      governance.beginRun();
       const conversationId = runOpts.journal?.conversationId ?? "desktop";
       const sink = runOpts.journal?.sink;
       const journal =

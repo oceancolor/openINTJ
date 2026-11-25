@@ -112,13 +112,23 @@ describe("QuotaGuard", () => {
     expect(q.getStats().tokensLastHour).toBe(110);
   });
 
-  it("tool quota uses minute window", () => {
-    let now = 1000;
-    const q = new QuotaGuard({ maxToolCallsPerMinute: 2 }, { clock: () => now });
+  it("P1-6: tool quota is per-run and resets on beginRun", () => {
+    const q = new QuotaGuard({ maxToolCallsPerRun: 2 });
     q.recordToolCall();
     q.recordToolCall();
     expect(q.checkToolQuota()).toBe(false);
-    now += 61;
+    q.beginRun();
+    expect(q.checkToolQuota()).toBe(true);
+    expect(q.getStats().toolCallsThisRun).toBe(0);
+  });
+
+  it("P1-6: >20 writes in one run are not blocked by old minute cap", () => {
+    const q = new QuotaGuard(); // default maxToolCallsPerRun=200
+    for (let i = 0; i < 25; i++) {
+      expect(q.checkToolQuota()).toBe(true);
+      q.recordToolCall();
+    }
+    expect(q.getStats().toolCallsThisRun).toBe(25);
     expect(q.checkToolQuota()).toBe(true);
   });
 });
@@ -232,13 +242,25 @@ describe("GovernancePlane.checkToolCall", () => {
   });
 
   it("工具配额耗尽抛 POLICY_BLOCKED(retriable=true)", async () => {
-    const now = 1000;
-    const quota = new QuotaGuard({ maxToolCallsPerMinute: 1 }, { clock: () => now });
+    const quota = new QuotaGuard({ maxToolCallsPerRun: 1 });
     const plane = new GovernancePlane({ quotaGuard: quota });
     await plane.checkToolCall(mkCommand("read_file"));
     await expect(plane.checkToolCall(mkCommand("read_file"))).rejects.toMatchObject({
       code: ErrorCode.POLICY_BLOCKED,
       retriable: true,
+    });
+  });
+
+  it("P1-6: beginRun 后配额恢复", async () => {
+    const quota = new QuotaGuard({ maxToolCallsPerRun: 1 });
+    const plane = new GovernancePlane({ quotaGuard: quota });
+    await plane.checkToolCall(mkCommand("read_file"));
+    await expect(plane.checkToolCall(mkCommand("read_file"))).rejects.toMatchObject({
+      code: ErrorCode.POLICY_BLOCKED,
+    });
+    plane.beginRun();
+    await expect(plane.checkToolCall(mkCommand("read_file"))).resolves.toMatchObject({
+      result: "allowed",
     });
   });
 });

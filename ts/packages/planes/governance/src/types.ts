@@ -47,6 +47,10 @@ export type PolicyEngineConfig = z.infer<typeof PolicyEngineConfigSchema>;
 export const QuotaConfigSchema = z.object({
   maxApiCallsPerHour: z.number().int().positive().default(100),
   maxTokensPerHour: z.number().int().positive().default(500_000),
-  maxToolCallsPerMinute: z.number().int().positive().default(20),
+  /**
+   * P1-6：单次 agent run 内工具调用上限（默认 200）。
+   * 取代原先「每分钟 20 次」滑动窗口，避免 13 文件建站被拦。
+   */
+  maxToolCallsPerRun: z.number().int().positive().default(200),
 });
 export type QuotaConfig = z.infer<typeof QuotaConfigSchema>;

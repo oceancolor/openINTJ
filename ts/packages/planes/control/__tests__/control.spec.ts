@@ -86,6 +86,28 @@ describe("PlanGraph", () => {
     expect(plan.getReadySteps().map((s) => s.stepId)).toEqual(["s2"]);
   });
 
+  it("P1-4: query 扇出 — 初始 ready 峰值 ≥2 且带工具级 params", () => {
+    const planner = new Planner();
+    const parser = new GoalParser();
+    const plan = planner.createPlan(parser.parse("查询数据库状态"));
+    const ready = plan.getReadySteps();
+    expect(ready.length).toBeGreaterThanOrEqual(2);
+    expect(ready.map((s) => s.action).sort()).toEqual(["read_file", "search"]);
+    expect(ready.find((s) => s.action === "search")?.params).toMatchObject({
+      query: expect.any(String),
+    });
+  });
+
+  it("P1-4: 多文件 create 并行 write_file", () => {
+    const planner = new Planner();
+    const parser = new GoalParser();
+    const plan = planner.createPlan(parser.parse('请创建 "a.ts" 和 "b.ts"'));
+    const ready = plan.getReadySteps();
+    expect(ready.length).toBeGreaterThanOrEqual(2);
+    expect(ready.every((s) => s.action === "write_file")).toBe(true);
+    expect(ready[0]!.params?.["path"]).toBeTruthy();
+  });
+
   it("topoOrder respects DAG and detects cycles", () => {
     const goal = new GoalParser().parse("plan x");
     const steps = [
@@ -110,6 +132,26 @@ describe("ControlPlane", () => {
     const { goal, plan } = cp.processInput("创建文件", TaskType.CODE_GENERATION);
     expect(goal.intent).toBe("create");
     expect(plan.totalSteps).toBe(4);
+  });
+
+  it("P1-4: dispatchPlanStep 调用 ToolHub 级 callTool", async () => {
+    const cp = new ControlPlane();
+    const step = buildPlanStep({
+      stepId: "s1",
+      action: "search",
+      description: "检索",
+      params: { query: "x" },
+    });
+    const calls: Array<{ name: string; params: Record<string, unknown> }> = [];
+    const out = await cp.dispatchPlanStep(step, async (name, params) => {
+      calls.push({ name, params });
+      return { hits: [] };
+    });
+    expect(out).toMatchObject({
+      command: expect.objectContaining({ target: "search" }),
+      result: { hits: [] },
+    });
+    expect(calls).toEqual([{ name: "search", params: { query: "x" } }]);
   });
 
   it("makeXCommand validates with zod", () => {

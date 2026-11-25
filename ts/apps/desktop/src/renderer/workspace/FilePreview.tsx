@@ -20,6 +20,8 @@ export const FilePreview: React.FC<{
     | { status: "loading" }
     | { status: "image"; src: string }
     | { status: "text"; content: string }
+    | { status: "html"; content: string; run: boolean }
+    | { status: "office"; mime: string; bytes?: number }
     | { status: "file"; bytes?: number }
     | { status: "error"; message: string }
   >({ status: "loading" });
@@ -81,6 +83,16 @@ export const FilePreview: React.FC<{
           });
           return;
         }
+        if (kind === "html") {
+          const text = await client.read(path);
+          if (cancelled) return;
+          if (isWorkspaceError(text)) {
+            setState({ status: "error", message: text.message });
+            return;
+          }
+          setState({ status: "html", content: text.content, run: false });
+          return;
+        }
         if (kind === "text") {
           const text = await client.read(path);
           if (cancelled) return;
@@ -89,6 +101,10 @@ export const FilePreview: React.FC<{
             return;
           }
           setState({ status: "text", content: text.content });
+          return;
+        }
+        if (kind === "office") {
+          setState({ status: "office", mime: mimeForPath(path) });
           return;
         }
         setState({ status: "file" });
@@ -149,6 +165,17 @@ export const FilePreview: React.FC<{
                 {zoom === "fit" ? "1:1" : "适应"}
               </button>
             ) : null}
+            {state.status === "html" ? (
+              <button
+                type="button"
+                className="text-muted hover:text-ink"
+                onClick={() =>
+                  setState((s) => (s.status === "html" ? { ...s, run: !s.run } : s))
+                }
+              >
+                {state.run ? "源码" : "运行"}
+              </button>
+            ) : null}
             {onReveal ? (
               <button
                 type="button"
@@ -185,6 +212,19 @@ export const FilePreview: React.FC<{
               zoom === "fit" ? "max-w-full max-h-full w-auto h-auto object-contain" : "max-w-none"
             }
           />
+        ) : state.status === "html" ? (
+          state.run ? (
+            <iframe
+              title={path}
+              sandbox="allow-scripts"
+              srcDoc={state.content}
+              className="w-full h-full min-h-[240px] border border-line bg-white"
+            />
+          ) : (
+            <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-5 text-ink">
+              {state.content}
+            </pre>
+          )
         ) : state.status === "text" ? (
           isMarkdownPath(path) && mdMode === "rendered" ? (
             <MarkdownView text={state.content} />
@@ -193,6 +233,10 @@ export const FilePreview: React.FC<{
               {state.content}
             </pre>
           )
+        ) : state.status === "office" ? (
+          <div className="text-xs text-muted">
+            Office 文档（MIME：{state.mime}）。当前预览器不内嵌渲染 OOXML，请用「打开所在目录」用本机应用查看。
+          </div>
         ) : (
           <div className="text-xs text-muted">此类型暂不预览，请用「打开所在目录」查看。</div>
         )}

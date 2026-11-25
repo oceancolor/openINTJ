@@ -65,7 +65,12 @@ export const createMcpConnector = (opts: McpConnectorOpts): Connector => {
           handler: async (params) => {
             const result = await mcp.callTool(tool.name, params);
             if (result.isError) throw new Error(result.text || `MCP tool failed: ${tool.name}`);
-            return { text: result.text };
+            // P1-7：透传 content/raw，避免 Blender 截图等 image/data 丢失。
+            return {
+              text: result.text,
+              content: result.content,
+              raw: result.raw,
+            };
           },
         }));
         failure = undefined;

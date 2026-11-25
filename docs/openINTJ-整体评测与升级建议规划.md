@@ -574,6 +574,84 @@ grep -rn "FINDING:" . --include='audit-*.spec.ts'
 |---|---|---|---|
 | 2026-11-24 | 任务产物 `E:\forINTJwork\report.html` 能落盘，但正文大量「查证状态：联网检索工具未配置，未对 tcamp.qq.com 线上页面实时查证…【待核验】」 | 诚实降级尚可，但**交付物仍像完成品**：无搜索时仍生成长篇「通用标准基线 + 常识假设」报告，用户感知为假完成 | **已挂 P1-10**（无搜索禁止长文假审查）；并关联 P1-5 执行面 / 搜索配置 UX |
 
+### 12.5 P0 契约验收（2026-11-24）
+
+> **口径**：本仓无 `audit-*.spec.ts`，无法按 §11.2 跑历史 FINDING 转绿；亦未做 hy4 在线复测与 200 轮 A/B。下列为 **P0-1～P0-7 代码契约单测验收**。
+
+**总判：代码侧 P0 契约 ✅ 通过；§9.1「P0 完成标志」（FINDING 全绿 + 第七轮真实模型复测）❌ 未关。**
+
+| # | 契约项 | 证据（vitest） | 判定 |
+|---|---|---|---|
+| P0-1 | 执行闸门 + Office→`.md` | `core/react`（含 7-1 shape）、`execution/workspace-tools` | ✅ |
+| P0-2 | `outcomeSignal` + F10 三端 | `classifier/routing`、`skills/learning-runtime`+`verifier`；CLI/server `-t P0-` | ✅ |
+| P0-3 | 评测器零记忆召回 | `shared/longrun-eval`（`recallRate < 0.2`） | ✅ |
+| P0-4 | STT slice / `sk-` 脱敏 / tao emit | `voice`、`llm/runtime`、`core/tao` | ✅ |
+| P0-5 | 假文件兜底 | `apps/desktop/artifact-fallback`（9） | ✅ |
+| P0-6 | CLI `initConnectors` | `apps/cli` `-t P0-`；`index.ts` 在 `run()` 前调用 | ✅ |
+| P0-7 | 原型键 / n>16 / NaN | `core/tool-names`、`control/plan-advisor`、`skills/learning-runtime` | ✅ |
+
+**本轮跑通合计（相关用例）**：core 55、classifier 10、skills 35、shared 8、control 9、execution 13、llm/runtime 29、voice 4、desktop 9、cli P0 2、server P0 2 — **全部 exit 0**。
+
+| §11.1 正式门 | 状态 |
+|---|---|
+| audit FINDING 转绿 | ⛔ 本仓 0 个 `audit-*.spec.ts` |
+| 第七轮 7-1/7-2 真实 hy4 复测 | ⛔ 未跑 |
+| 200 轮 A/B 错判率 <0.1 | ⛔ 未跑（仅有信号映射单测） |
+| build/typecheck 全库基线 | 未作为本轮门禁重跑 |
+
+### 12.6 P1 第一波备忘（2026-11-24）
+
+> **范围**：仅 P1-1 → P1-2 → P1-3。不改写上文评分；P1-4～P1-10 未做。
+
+**总判：P1 第一波代码契约 ✅ 通过。**
+
+| # | 契约项 | 证据 | 判定 |
+|---|---|---|---|
+| P1-1 | `contentBase64` 二选一；默认 20 MiB；ZIP 读回 base64；utf8 写 Office 仍降级 / base64 不降级 | `plane-execution` `workspace-tools.spec` | ✅ |
+| P1-2 | `create_docx/pptx/xlsx`；魔数 `PK\x03\x04`；jszip 含 `[Content_Types].xml`；xlsx 公式读回 | `office-tools.spec` + deps `docx`/`pptxgenjs`/`exceljs` | ✅ |
+| P1-3 | 三端 `has("create_docx")` | CLI `-t P1-3`；server/desktop `office-wiring.spec`；`ToolHub.registerOfficeTools` | ✅ |
+
+**未纳入本波**：P1-4～P1-9；P1-10（假审查闸门，仍挂单）；真实 LLM 办公端到端；桌面 `artifact-fallback` 自动调 Office 工具。
+
+### 12.7 P1-4～P1-10 契约验收（2026-11-25）
+
+> **口径**：代码契约 + 相关单测；未做真实 hy4 / Blender / 建站端到端。
+
+**总判：P1-4～P1-10 代码契约 ✅ 通过（正式端到端门未关）。**
+
+| # | 契约项 | 证据 | 判定 |
+|---|---|---|---|
+| P1-4 | query 扇出 ready≥2；多文件 create 并行 write_file；`dispatchPlanStep`；TaskGraph 透传 params | `control.spec` | ✅ |
+| P1-5 | 链式命令拒绝；失败 Observation 回灌 output；`run_tests/typecheck/http_request/start_server` | `workspace-tools` / `dev-tools` / `react.formatObservation` | ✅ |
+| P1-6 | `maxToolCallsPerRun=200`；`beginRun` 重置；>20 写不拦 | `governance.spec`；三端 `run()` 调 `beginRun` | ✅ |
+| P1-7 | MCP image/data → dataUrl + content[] 透传 | `connectors.spec` P1-7 | ✅ |
+| P1-8 | capability×host 矩阵；生图抽到 plane-execution；server canonical+shadow；CLI/server 生图短路 | `capability-matrix` + `docs/capability-host-matrix.md` | ✅ |
+| P1-9 | OOXML MIME；`office`/`html` kind；HTML iframe 运行 | `workspace-view.spec` + `FilePreview` | ✅ |
+| P1-10 | 站点审查无搜索 → 短拒；有 reliable 证据放行 | `product-behavior.spec` | ✅ |
+
+**仍开放**：真实模型复测、Blender MCP 实机、建站 13 文件端到端、CLI 影子记忆（矩阵为 absent）。
+
+### 12.8 P1 case 实测（2026-11-25）
+
+> 入口：`ts/apps/cli/__tests__/p1-case-verify.harness.spec.ts`（mock LLM + 本地工具；不接 hy4）。
+
+**结果：8/8 通过（exit 0）。**
+
+| Case | 场景 | 结果 |
+|---|---|---|
+| P1-1 | `contentBase64` 写 ZIP → 读回 base64，磁盘字节全等 | ✅ |
+| P1-2/3 | CLI `create_docx/pptx/xlsx` 魔数 PK；`has()`；utf8 `.docx` 仍降级 | ✅ |
+| P1-4 | query ready≥2；`dispatchPlanStep`→`search`；并行写 `alpha.ts`/`beta.ts` | ✅ |
+| P1-5 | `npm && curl` 拒；`http_request` 200；写 fail.js→exit 3→改→ok | ✅ |
+| P1-6 | 单 run 连续 25 次 `write_file` 全成功 | ✅ |
+| P1-8 | 「大厂病」封面图短路 → `artifacts/case-img/cover.svg` | ✅ |
+| P1-9 | OOXML MIME ≠ octet-stream；html/office kind | ✅ |
+| P1-10 | tcamp 无搜索短拒；reliable 放行长文 | ✅ |
+
+顺带修复：CLI 生图短路误用 `process.cwd()`，已改为 `core.workspaceRoot`。
+
+**未覆盖本轮**：真实 hy4、Blender MCP 实机截图、server/desktop 同套 case 全跑、建站 13 文件端到端。
+
 ---
 
 *α — 量化精英阿尔法　|　结论先行，依据随后，风险不藏。*

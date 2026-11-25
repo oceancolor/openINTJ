@@ -20,6 +20,7 @@ export * from "./task-eval.js";
 export * from "./longrun-eval.js";
 export * from "./longrun-scenarios.js";
 export * from "./product-behavior.js";
+export * from "./capability-matrix.js";
 export * from "./trait-scenarios.js";
 export * from "./trait-eval.js";
 

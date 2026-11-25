@@ -309,6 +309,65 @@ describe("MCP connector", () => {
     expect(out.text).toBe("echo:hi");
   });
 
+  it("P1-7: MCP image/data content is preserved (not text-only)", async () => {
+    const [clientSide, serverSide] = createInMemoryTransportPair();
+    serverSide.onMessage((message) => {
+      if (message.id === undefined) return;
+      if (message.method === "initialize") {
+        serverSide.send({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            protocolVersion: "2024-11-05",
+            capabilities: {},
+            serverInfo: { name: "img", version: "0" },
+          },
+        });
+      } else if (message.method === "tools/list") {
+        serverSide.send({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            tools: [{ name: "screenshot", description: "shot", inputSchema: {} }],
+          },
+        });
+      } else if (message.method === "tools/call") {
+        serverSide.send({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            content: [
+              { type: "text", text: "Blender viewport" },
+              {
+                type: "image",
+                data: Buffer.from("fake-png").toString("base64"),
+                mimeType: "image/png",
+              },
+            ],
+          },
+        });
+      }
+    });
+
+    const connector = createMcpConnector({ id: "blender", transport: clientSide });
+    const registry = new ConnectorRegistry();
+    registry.register(connector);
+    registry.attachHub({ register: () => {} });
+    await registry.initAll();
+    const tool = connector.tools()[0]!;
+    const out = (await tool.handler({})) as {
+      text: string;
+      content: Array<{ type: string; dataUrl?: string; text?: string }>;
+      raw: unknown;
+    };
+    expect(out.content.length).toBeGreaterThanOrEqual(2);
+    expect(out.content.some((p) => p.type === "image" && typeof p.dataUrl === "string")).toBe(
+      true,
+    );
+    expect(out.text).toContain("Blender viewport");
+    expect(out.raw).toBeTruthy();
+  });
+
   it("a failing MCP server reports ok:false and registers nothing", async () => {
     const [clientSide, serverSide] = createInMemoryTransportPair();
     serverSide.onMessage((message) => {

@@ -126,9 +126,14 @@ export class GovernancePlane {
     return auditEvent;
   }
 
+  /** P1-6：每个 agent run 开始时重置工具调用配额。 */
+  beginRun(): void {
+    this.quotaGuard.beginRun();
+  }
+
   /**
    * 工具调用前的治理检查（RFC-004 §8：策略边界接进工具执行）。
-   * 与 {@link checkAndRecord} 同构，但走**工具调用配额**（每分钟）而非 API 配额：
+   * 与 {@link checkAndRecord} 同构，但走**工具调用配额**（按 run）而非 API 配额：
    * - 工具配额超限 → blocked + 抛 POLICY_BLOCKED(retriable=true)
    * - 策略黑名单 → 抛 POLICY_BLOCKED(retriable=false)
    * - 通过后记审计 + `recordToolCall()`。
@@ -146,7 +151,7 @@ export class GovernancePlane {
         target: command.target,
         result: "blocked",
         riskLevel: "high",
-        details: { reason: "工具调用配额已用尽（每分钟）" },
+        details: { reason: "工具调用配额已用尽（本轮 run）" },
       });
       this.auditTrail.record(event);
       if (this.hooks) {

@@ -1,6 +1,6 @@
 /** Shared workspace-view helpers for the desktop workbench (tree, preview, quick-open filter). */
 
-export type WorkspacePreviewKind = "image" | "text" | "file";
+export type WorkspacePreviewKind = "image" | "text" | "file" | "office" | "html";
 
 export interface WorkspaceArtifact {
   path: string;
@@ -26,6 +26,8 @@ const WORKSPACE_PATH_RE = /`((?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9]{
 
 const RASTER_EXT = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
 const IMAGE_EXT = new Set([...RASTER_EXT, "svg"]);
+const OFFICE_EXT = new Set(["docx", "pptx", "xlsx"]);
+const HTML_EXT = new Set(["html", "htm"]);
 const TEXT_EXT = new Set([
   "md",
   "txt",
@@ -35,7 +37,6 @@ const TEXT_EXT = new Set([
   "js",
   "jsx",
   "css",
-  "html",
   "yml",
   "yaml",
   "xml",
@@ -110,6 +111,8 @@ export const filterWorkspaceFiles = (
 export const previewKindForPath = (path: string): WorkspacePreviewKind => {
   const ext = extensionOf(path);
   if (IMAGE_EXT.has(ext)) return "image";
+  if (HTML_EXT.has(ext)) return "html";
+  if (OFFICE_EXT.has(ext)) return "office";
   if (TEXT_EXT.has(ext)) return "text";
   return "file";
 };
@@ -121,6 +124,16 @@ export const mimeForPath = (path: string): string => {
   if (ext === "webp") return "image/webp";
   if (ext === "gif") return "image/gif";
   if (ext === "svg") return "image/svg+xml";
+  if (ext === "html" || ext === "htm") return "text/html";
+  if (ext === "docx") {
+    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+  if (ext === "pptx") {
+    return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  }
+  if (ext === "xlsx") {
+    return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  }
   return "application/octet-stream";
 };
 

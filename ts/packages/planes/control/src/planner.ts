@@ -4,27 +4,51 @@ import type { Intent, ParsedGoal, PlanStep } from "./types.js";
 type IntentTemplate = (goal: ParsedGoal) => PlanStep[];
 
 const DEFAULT_TEMPLATES: Record<Intent, IntentTemplate> = {
-  create: () => [
-    buildPlanStep({ stepId: "s1", action: "analyze", description: "分析需求" }),
-    buildPlanStep({
-      stepId: "s2",
-      action: "design",
-      description: "设计方案",
-      dependencies: ["s1"],
-    }),
-    buildPlanStep({
-      stepId: "s3",
-      action: "implement",
-      description: "实现功能",
-      dependencies: ["s2"],
-    }),
-    buildPlanStep({
-      stepId: "s4",
-      action: "verify",
-      description: "验证结果",
-      dependencies: ["s3"],
-    }),
-  ],
+  // P1-4：有明确文件实体时并行 write_file；否则保留线性抽象链。
+  create: (goal) => {
+    const files = goal.entities.filter((e) => /\.[a-z0-9]+$/i.test(e)).slice(0, 4);
+    if (files.length >= 2) {
+      const writes = files.map((path, i) =>
+        buildPlanStep({
+          stepId: `w${i + 1}`,
+          action: "write_file",
+          description: `写入 ${path}`,
+          params: { path, content: `# ${path}\n` },
+        }),
+      );
+      return [
+        ...writes,
+        buildPlanStep({
+          stepId: "verify",
+          action: "read_file",
+          description: `回读校验 ${files[0]}`,
+          dependencies: writes.map((w) => w.stepId),
+          params: { path: files[0]! },
+        }),
+      ];
+    }
+    return [
+      buildPlanStep({ stepId: "s1", action: "analyze", description: "分析需求" }),
+      buildPlanStep({
+        stepId: "s2",
+        action: "design",
+        description: "设计方案",
+        dependencies: ["s1"],
+      }),
+      buildPlanStep({
+        stepId: "s3",
+        action: "implement",
+        description: "实现功能",
+        dependencies: ["s2"],
+      }),
+      buildPlanStep({
+        stepId: "s4",
+        action: "verify",
+        description: "验证结果",
+        dependencies: ["s3"],
+      }),
+    ];
+  },
   modify: () => [
     buildPlanStep({ stepId: "s1", action: "read", description: "读取现有内容" }),
     buildPlanStep({
@@ -65,23 +89,25 @@ const DEFAULT_TEMPLATES: Record<Intent, IntentTemplate> = {
       dependencies: ["s2"],
     }),
   ],
-  query: () => [
+  // P1-4：query 扇出 — 两路并行工具级步骤（search + read_file），再汇总。
+  query: (goal) => [
     buildPlanStep({
       stepId: "s1",
-      action: "retrieve",
-      description: "检索信息",
+      action: "search",
+      description: "检索外部信息",
+      params: { query: goal.rawInput },
     }),
     buildPlanStep({
       stepId: "s2",
-      action: "analyze",
-      description: "分析结果",
-      dependencies: ["s1"],
+      action: "read_file",
+      description: "读取本地 README 作上下文",
+      params: { path: "README.md" },
     }),
     buildPlanStep({
       stepId: "s3",
       action: "respond",
-      description: "生成响应",
-      dependencies: ["s2"],
+      description: "综合检索与本地上下文生成响应",
+      dependencies: ["s1", "s2"],
     }),
   ],
   execute: () => [

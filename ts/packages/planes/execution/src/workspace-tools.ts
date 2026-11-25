@@ -17,9 +17,9 @@ const execAsync = promisify(exec);
 export interface WorkspaceToolsOpts {
   /** 工作区根目录；所有 fs 操作被限制在此目录内。 */
   root: string;
-  /** 单文件读取最大字节（默认 1 MiB）。 */
+  /** 单文件读取最大字节（默认 20 MiB）。 */
   maxReadBytes?: number;
-  /** 单文件写入最大字节（默认 1 MiB）。 */
+  /** 单文件写入最大字节（默认 20 MiB）。 */
   maxWriteBytes?: number;
   /**
    * 是否允许 executeCommand（默认 false）。
@@ -43,9 +43,13 @@ export interface WorkspaceTools {
   executeCommand: ToolHandler;
 }
 
-const DEFAULT_MAX_BYTES = 1024 * 1024;
+/** P1-1：默认单文件读/写上限 20 MiB。 */
+const DEFAULT_MAX_BYTES = 20 * 1024 * 1024;
 const DEFAULT_CMD_TIMEOUT = 30_000;
 const DEFAULT_CMD_OUTPUT_MAX = 10_000;
+
+const OFFICE_EXT = /\.(docx|pptx|xlsx)$/iu;
+const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 
 /**
  * 把相对路径解析到 root 内，越界则抛错。
@@ -69,6 +73,24 @@ const truncate = (s: string, max: number): string =>
 
 const firstToken = (command: string): string => command.trim().split(/\s+/)[0] ?? "";
 
+/** P1-5：拒绝 shell 链式/元字符，避免白名单首 token 绕过。 */
+const SHELL_CHAIN_RE = /(?:&&|\|\||[;|`]|\$\(|\$\{|\n|\r)/;
+
+export const assertNoShellChain = (command: string): void => {
+  if (SHELL_CHAIN_RE.test(command)) {
+    throw new Error(
+      "execute_command 拒绝链式/元字符命令（&& || ; | ` $() 等）；请拆成单条白名单命令",
+    );
+  }
+};
+
+const looksLikeBinary = (buf: Buffer): boolean => {
+  if (buf.length >= 4 && buf.subarray(0, 4).equals(ZIP_MAGIC)) return true;
+  // NUL in the first 8 KiB → not text
+  const sample = buf.subarray(0, Math.min(buf.length, 8192));
+  return sample.includes(0);
+};
+
 /**
  * 构造一组被沙箱约束的工作区工具，供 `ToolHub.registerBuiltinTools` 使用。
  */
@@ -90,19 +112,54 @@ export const createWorkspaceTools = (opts: WorkspaceToolsOpts): WorkspaceTools =
     if (stat.size > maxReadBytes) {
       throw new Error(`文件过大：${stat.size} 字节 > 上限 ${maxReadBytes}`);
     }
-    const content = await fs.readFile(abs, "utf8");
-    return { path, content, bytes: stat.size };
+    const buf = await fs.readFile(abs);
+    if (looksLikeBinary(buf)) {
+      return {
+        path,
+        contentBase64: buf.toString("base64"),
+        encoding: "base64",
+        bytes: stat.size,
+      };
+    }
+    return { path, content: buf.toString("utf8"), bytes: stat.size };
   };
 
   const writeFile: ToolHandler = async (params) => {
     const path = typeof params["path"] === "string" ? params["path"] : "";
-    let content = typeof params["content"] === "string" ? params["content"] : "";
     if (!path) throw new Error("write_file 需要非空 path 参数");
-    // P0-1：utf8 通道无法产出合法 OOXML；Office 扩展名强制降级为 .md，避免假 .docx。
-    const officeExt = /\.(docx|pptx|xlsx)$/iu;
+
+    const hasContent = typeof params["content"] === "string";
+    const hasBase64 = typeof params["contentBase64"] === "string";
+    if (hasContent && hasBase64) {
+      throw new Error("write_file：content 与 contentBase64 只能二选一");
+    }
+    if (!hasContent && !hasBase64) {
+      throw new Error("write_file 需要 content 或 contentBase64");
+    }
+
+    // P1-1 二进制通道：contentBase64 整文件落盘，Office 扩展名不降级。
+    if (hasBase64) {
+      const b64 = params["contentBase64"] as string;
+      let buf: Buffer;
+      try {
+        buf = Buffer.from(b64, "base64");
+      } catch {
+        throw new Error("write_file：contentBase64 解码失败");
+      }
+      if (buf.length > maxWriteBytes) {
+        throw new Error(`写入内容过大：${buf.length} 字节 > 上限 ${maxWriteBytes}`);
+      }
+      const abs = resolveInRoot(root, path);
+      await fs.mkdir(dirname(abs), { recursive: true });
+      await fs.writeFile(abs, buf);
+      return { path, bytesWritten: buf.length, encoding: "base64" };
+    }
+
+    let content = params["content"] as string;
+    // P0-1：utf8 通道无法产出合法 OOXML；Office 扩展名强制降级为 .md。
     let effectivePath = path;
-    if (officeExt.test(path)) {
-      effectivePath = path.replace(officeExt, ".md");
+    if (OFFICE_EXT.test(path)) {
+      effectivePath = path.replace(OFFICE_EXT, ".md");
       const banner =
         "> 当前无法生成原生 Office 二进制，已降级为 Markdown。\n\n";
       if (!content.startsWith("> 当前无法生成原生 Office")) {
@@ -129,6 +186,7 @@ export const createWorkspaceTools = (opts: WorkspaceToolsOpts): WorkspaceTools =
     }
     const command = typeof params["command"] === "string" ? params["command"] : "";
     if (!command) throw new Error("execute_command 需要非空 command 参数");
+    assertNoShellChain(command);
     const exe = firstToken(command);
     if (allowedCommands.length === 0 || !allowedCommands.includes(exe)) {
       throw new Error(

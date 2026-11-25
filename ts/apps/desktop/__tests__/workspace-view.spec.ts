@@ -4,6 +4,8 @@ import {
   buildWorkspaceTree,
   filterWorkspaceFiles,
   isMarkdownPath,
+  mimeForPath,
+  previewKindForPath,
 } from "../src/shared/workspace-view.js";
 
 const ENTRIES: WorkspaceEntry[] = [
@@ -60,5 +62,22 @@ describe("workspace-view basics", () => {
     const tree = buildWorkspaceTree(ENTRIES);
     const src = tree.find((n) => n.path === "src");
     expect(src?.children?.map((c) => c.name).sort()).toEqual(["identity.ts", "index.ts"]);
+  });
+
+  it("P1-9: OOXML MIME + office/html preview kinds", () => {
+    expect(previewKindForPath("a/report.docx")).toBe("office");
+    expect(previewKindForPath("deck.pptx")).toBe("office");
+    expect(previewKindForPath("sheet.xlsx")).toBe("office");
+    expect(previewKindForPath("out/index.html")).toBe("html");
+    expect(mimeForPath("a.docx")).toBe(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    );
+    expect(mimeForPath("a.pptx")).toBe(
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    );
+    expect(mimeForPath("a.xlsx")).toBe(
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    expect(mimeForPath("a.html")).toBe("text/html");
   });
 });

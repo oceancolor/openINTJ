@@ -72,9 +72,14 @@ import { ControlPlane } from "@openintj/plane-control";
 import {
   Executor,
   ToolHub,
+  createDevTools,
+  createOfficeTools,
   createWebSearchTool,
   createWorkspaceTools,
+  fulfillImageGenerationTask,
+  requestsImageGeneration,
   resolveWebSearchConfig,
+  taskIdFromContextTags,
 } from "@openintj/plane-execution";
 import {
   type ApprovalBroker,
@@ -159,6 +164,9 @@ export interface AgentOptions {
     writeFile?: (params: Record<string, unknown>) => unknown;
     executeCommand?: (params: Record<string, unknown>) => unknown;
     search?: (params: Record<string, unknown>) => unknown;
+    createDocx?: (params: Record<string, unknown>) => unknown;
+    createPptx?: (params: Record<string, unknown>) => unknown;
+    createXlsx?: (params: Record<string, unknown>) => unknown;
   };
   /** TAO 多轮上限（默认 1 = 单轮兼容 v2.0）。 */
   maxTaoIterations?: number;
@@ -278,6 +286,8 @@ export interface AgentRunOptions {
   journal?: JournalTurnContext;
   /** Internal: skip slash-command intercept when the handle opens a turn. */
   skipSlashCommand?: boolean;
+  /** 可选上下文标签（如 task:xxx），供生图落盘路径等使用。 */
+  contextTags?: readonly string[];
 }
 
 const buildAgentCore = (
@@ -318,6 +328,7 @@ const buildAgentCore = (
   toolHub: ToolHub;
   subagentsEnabled: boolean;
   subagentMaxRisk: ToolRisk;
+  workspaceRoot: string;
 } => {
   const hooks = hooksInput ?? new HookBus();
   attachProductTraitSignals(hooks);
@@ -379,6 +390,13 @@ const buildAgentCore = (
     executeCommand: handlers.executeCommand ?? wsTools.executeCommand,
     search: handlers.search ?? defaultSearchHandler,
   });
+  const officeTools = createOfficeTools({ root: wsConfig.root });
+  toolHub.registerOfficeTools({
+    createDocx: handlers.createDocx ?? officeTools.createDocx,
+    createPptx: handlers.createPptx ?? officeTools.createPptx,
+    createXlsx: handlers.createXlsx ?? officeTools.createXlsx,
+  });
+  toolHub.registerDevTools(createDevTools({ root: wsConfig.root }));
   if (!handlers.executeCommand && !isCommandExecutionAvailable(wsConfig)) {
     toolHub.unregister("execute_command");
   }
@@ -613,6 +631,7 @@ const buildAgentCore = (
     execution,
     memory,
     governance,
+    workspaceRoot: wsConfig.root,
     contextEngine,
     hybridIndex,
     ...(classifier ? { classifier } : {}),
@@ -714,6 +733,7 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => {
     ...(core.approvals ? { approvals: core.approvals } : {}),
     handle: undefined as unknown as AgentHandle,
     async run(query: string, runOpts: AgentRunOptions = {}) {
+      core.governance.beginRun();
       if (!runOpts.skipSlashCommand) {
         const invoked = await invokeSlashCommand(commands, query, {
           journal: core.journal,
@@ -741,6 +761,33 @@ const attachRun = (core: ReturnType<typeof buildAgentCore>): AssembledAgent => {
         enabled: core.productBehaviorEnabled,
       });
       if (core.dormant) core.dormant.record(query, "user", { stage: "run.input" });
+      // P1-8：平台无关生图短路。
+      if (requestsImageGeneration(query)) {
+        const image = await fulfillImageGenerationTask({
+          query,
+          workspaceRoot: core.workspaceRoot,
+          taskId: taskIdFromContextTags(runOpts.contextTags),
+          llm: runOpts.llm ?? core.llm,
+          ...(runOpts.signal ? { signal: runOpts.signal } : {}),
+        });
+        return {
+          traceId: randomUUID(),
+          status: "completed",
+          finalAnswer: image.finalAnswer,
+          iterations: 0,
+          reactTotalSteps: 0,
+          totalTokensSpent: 0,
+          durationMs: 0,
+          trajectory: [
+            {
+              timestamp: Date.now() / 1000,
+              state: { type: "final", answer: image.finalAnswer },
+              durationMs: 0,
+            },
+          ],
+          metrics: image.fallback ? { imageGenerationFallback: 1 } : { imageGenerated: 1 },
+        } as never;
+      }
       if (core.classifier) await core.ensureClassifier();
       const prelude = await prepareRunPrelude(
         {
